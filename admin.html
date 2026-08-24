@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ניהול שעות פעילות ומוצרים | Bake & Party</title>
+    <style>
+        :root {
+            --cream: #FFF9F5; --pink-light: #FFD1DC; --pink-main: #FF85A2;
+            --pink-dark: #E05276; --text-color: #4A2E35; --muted: #9B7B82; --ok: #3B9E6A;
+        }
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--cream); color: var(--text-color); margin: 0; }
+        header { background-color: var(--pink-light); padding: 16px 20px; display: flex;
+            align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+        header h1 { color: var(--pink-dark); margin: 0; font-size: 1.3em; }
+        .header-actions { display: flex; gap: 10px; }
+        
+        .container { max-width: 900px; margin: 30px auto; padding: 0 20px; }
+
+        input, select, textarea { padding: 9px 11px; border: 2px solid var(--pink-light); border-radius: 10px;
+            font-size: 0.95em; font-family: inherit; width: 100%; background: #fff; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--pink-main); }
+        label { font-weight: 600; display: block; margin-bottom: 5px; }
+
+        .btn { background-color: var(--pink-main); color: white; border: none; padding: 10px 18px;
+            border-radius: 18px; cursor: pointer; font-weight: bold; font-size: 0.95em; font-family: inherit; }
+        .btn:hover { background-color: var(--pink-dark); }
+        .btn.ghost { background: var(--cream); color: var(--pink-dark); border: 2px solid var(--pink-main); text-decoration: none; }
+        .btn.ghost:hover { background: var(--pink-main); color: #fff; }
+        .btn.danger { background: #d9534f; padding: 6px 12px; font-size: 0.85em; width: auto; }
+
+        .login-card { max-width: 360px; margin: 60px auto; background: white; border: 2px solid var(--pink-light);
+            border-radius: 20px; padding: 30px; box-shadow: 0 8px 20px rgba(255,133,162,0.15); }
+        .login-card h2 { color: var(--pink-dark); text-align: center; margin-top: 0; }
+        .login-card input { margin-bottom: 12px; }
+        .login-card .btn { width: 100%; margin-top: 10px; }
+        .error-msg { color: var(--pink-dark); text-align: center; margin-top: 12px; min-height: 20px; }
+
+        .card { background: white; border: 2px solid var(--pink-light); border-radius: 16px;
+            padding: 24px; margin-bottom: 24px; box-shadow: 0 4px 10px rgba(0,0,0,0.02); }
+        .card h2 { color: var(--pink-dark); margin-top: 0; font-size: 1.25em; border-bottom: 2px solid var(--pink-light); padding-bottom: 10px; }
+
+        .week-grid { display: grid; gap: 12px; }
+        .day-row { display: grid; grid-template-columns: 110px 1fr 1fr 90px; gap: 12px; align-items: center;
+            background: #fffafa; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--pink-light); }
+        .day-row.closed { opacity: 0.6; background: #eee; }
+        .time-group { display: flex; align-items: center; gap: 6px; }
+
+        .special-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+        .special-form textarea { grid-column: 1 / -1; height: 60px; resize: none; }
+        .special-item { display: flex; justify-content: space-between; align-items: center; background: #fffafa;
+            border: 1px solid var(--pink-light); padding: 12px 16px; border-radius: 10px; margin-bottom: 8px; }
+        .special-details { display: flex; flex-direction: column; gap: 4px; }
+
+        .product-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; }
+        .form-group { display: flex; flex-direction: column; }
+
+        .radio-group { display: flex; gap: 20px; margin-top: 10px; flex-wrap: wrap; }
+        .radio-group label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: normal; }
+        .msg { color: var(--ok); font-weight: bold; margin-top: 10px; display: inline-block; }
+    </style>
+</head>
+<body>
+
+    <div id="login-view">
+        <div class="login-card">
+            <h2>כניסת מנהל</h2>
+            <label>אימייל</label>
+            <input id="email" type="email">
+            <label>סיסמה</label>
+            <input id="password" type="password">
+            <button class="btn" type="button" id="login-btn">התחבר</button>
+            <p class="error-msg" id="login-error"></p>
+        </div>
+    </div>
+
+    <div id="admin-view" style="display:none;">
+        <header>
+            <h1>פאנל ניהול חנות</h1>
+            <div class="header-actions">
+                <a href="index.html" class="btn ghost">← חזור לאתר הראשי</a>
+                <button class="btn ghost" type="button" id="logout-btn">התנתק</button>
+            </div>
+        </header>
+
+        <div class="container">
+            
+            <!-- הוספת מוצר חדש לחנות -->
+            <div class="card">
+                <h2>הוספת מוצר חדש לחנות</h2>
+                <form id="add-product-form" onsubmit="handleCreateProduct(event)">
+                    <div class="product-form-grid">
+                        <div class="form-group">
+                            <label>שם המוצר *</label>
+                            <input type="text" id="p-name" required placeholder="למשל: תבנית סיליקון לבבות">
+                        </div>
+                        <div class="form-group">
+                            <label>מחיר (₪) *</label>
+                            <input type="number" step="0.1" id="p-price" required placeholder="49.90">
+                        </div>
+                        <div class="form-group">
+                            <label>תת-קטגוריה ראשונה</label>
+                            <select id="p-cat-1"><option value="">ללא קטגוריה</option></select>
+                        </div>
+                        <div class="form-group">
+                            <label>תת-קטגוריה שנייה (אופציונלי)</label>
+                            <select id="p-cat-2"><option value="">ללא קטגוריה נוספת</option></select>
+                        </div>
+                        <div class="form-group">
+                            <label>תמונה (העלאת קובץ)</label>
+                            <input type="file" id="p-image-file" accept="image/*">
+                        </div>
+                        <div class="form-group">
+                            <label>משקל (גרם)</label>
+                            <input type="number" id="p-weight" placeholder="250">
+                        </div>
+                        <div class="form-group">
+                            <label>יחידות באריזה</label>
+                            <input type="number" id="p-units" placeholder="10">
+                        </div>
+                    </div>
+                    <button class="btn" type="submit" style="margin-top: 18px;">+ הוסף מוצר לחנות</button>
+                    <span class="msg" id="product-msg"></span>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>מצב משלוחים מהיר</h2>
+                <div class="radio-group">
+                    <label><input type="radio" name="override" value="auto"> לפי שעות הפעילות (אוטומטי)</label>
+                    <label><input type="radio" name="override" value="on"> פתוח למשלוחים תמיד</label>
+                    <label><input type="radio" name="override" value="off"> סגור למשלוחים כרגע</label>
+                </div>
+                <button class="btn" type="button" id="save-override-btn" style="margin-top:15px;">שמור מצב משלוחים</button>
+                <span class="msg" id="override-msg"></span>
+            </div>
+
+            <div class="card">
+                <h2>שעות פתיחה לפי ימי השבוע</h2>
+                <div id="week-list" class="week-grid"></div>
+                <button class="btn" type="button" id="save-weekly-btn" style="margin-top:18px;">שמור שעות שבועיות</button>
+                <span class="msg" id="weekly-msg"></span>
+            </div>
+
+            <div class="card">
+                <h2>ימים מיוחדים, חגים והודעות ללקוחות</h2>
+                <div class="special-form">
+                    <div>
+                        <label>תאריך</label>
+                        <input type="date" id="sp-date" style="width:100%;">
+                    </div>
+                    <div>
+                        <label>שם האירוע / חג</label>
+                        <input type="text" id="sp-title" placeholder="למשל: ערב ראש השנה" style="width:100%;">
+                    </div>
+                    <div>
+                        <label>שעת פתיחה</label>
+                        <input type="time" id="sp-open" value="09:00" style="width:100%;">
+                    </div>
+                    <div>
+                        <label>שעת סגירה</label>
+                        <input type="time" id="sp-close" value="13:00" style="width:100%;">
+                    </div>
+                    <div style="grid-column: 1 / -1;">
+                        <label><input type="checkbox" id="sp-closed"> סגור כל היום</label>
+                    </div>
+                    <textarea id="sp-note" placeholder="הערה/הודעה מיוחדת שתוצג ללקוחות באתר (למשל: משלוחים עד השעה 12:00 בלבד)"></textarea>
+                    <button class="btn" type="button" id="add-special-btn" style="grid-column: 1 / -1;">+ הוסף יום מיוחד</button>
+                </div>
+                <div id="special-list"></div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const API = 'http://localhost:8000';
+        const TOKEN_KEY = 'bp_token';
+
+        function token(){ return localStorage.getItem(TOKEN_KEY); }
+        function setToken(t){ localStorage.setItem(TOKEN_KEY, t); }
+        function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+        function authHeaders(){ return { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' }; }
+
+        const loginView = document.getElementById('login-view');
+        const adminView = document.getElementById('admin-view');
+
+        document.getElementById('login-btn').onclick = () => {
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value;
+            fetch(`${API}/api/login`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ email, password }) })
+                .then(res => res.json().then(d => ({ ok: res.ok, d })))
+                .then(({ ok, d }) => {
+                    if (!ok) throw new Error(d.detail || 'שגיאה');
+                    if (d.user.role !== 'admin') throw new Error('אינך מנהל');
+                    setToken(d.token); showAdmin();
+                })
+                .catch(err => { document.getElementById('login-error').textContent = err.message; });
+        };
+
+        document.getElementById('logout-btn').onclick = () => {
+            fetch(`${API}/api/logout`, { method: 'POST', headers: authHeaders() }).finally(() => { clearToken(); showLogin(); });
+        };
+
+        function showLogin(){ adminView.style.display='none'; loginView.style.display='block'; }
+        function showAdmin(){ loginView.style.display='none'; adminView.style.display='block'; loadAdminData(); }
+
+        async function loadAdminData() {
+            try {
+                const res = await fetch(`${API}/api/admin/schedule`, { headers: authHeaders() });
+                if (res.status === 401) throw 0;
+                const data = await res.json();
+                renderWeekly(data.weekly);
+                renderSpecial(data.special);
+                const r = document.querySelector(`input[name="override"][value="${data.delivery_override}"]`);
+                if (r) r.checked = true;
+
+                const catRes = await fetch(`${API}/api/admin/subcategories-flat`, { headers: authHeaders() });
+                const subs = await catRes.json();
+                const sel1 = document.getElementById('p-cat-1');
+                const sel2 = document.getElementById('p-cat-2');
+                sel1.innerHTML = '<option value="">ללא קטגוריה</option>';
+                sel2.innerHTML = '<option value="">ללא קטגוריה נוספת</option>';
+                subs.forEach(c => {
+                    sel1.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+                    sel2.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+                });
+            } catch { clearToken(); showLogin(); }
+        }
+
+        window.handleCreateProduct = async function(e) {
+            e.preventDefault();
+            const btn = e.target.querySelector('button[type="submit"]');
+            const originalText = btn.textContent;
+            btn.textContent = 'מעלה...';
+            btn.disabled = true;
+
+            try {
+                const fileInput = document.getElementById('p-image-file');
+                let imageUrl = null;
+                
+                // העלאת התמונה לשרת אם נבחר קובץ
+                if (fileInput.files.length > 0) {
+                    const formData = new FormData();
+                    formData.append('file', fileInput.files[0]);
+                    const uploadRes = await fetch(`${API}/api/admin/upload-image`, {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token() },
+                        body: formData
+                    });
+                    if (!uploadRes.ok) throw new Error('שגיאה בהעלאת התמונה');
+                    const uploadData = await uploadRes.json();
+                    imageUrl = uploadData.url;
+                }
+
+                const cat1 = document.getElementById('p-cat-1').value;
+                const cat2 = document.getElementById('p-cat-2').value;
+                const category_ids = [];
+                if (cat1) category_ids.push(parseInt(cat1));
+                if (cat2 && cat2 !== cat1) category_ids.push(parseInt(cat2));
+
+                const body = {
+                    name: document.getElementById('p-name').value.trim(),
+                    price: parseFloat(document.getElementById('p-price').value),
+                    category_ids: category_ids,
+                    image_url: imageUrl,
+                    weight_grams: document.getElementById('p-weight').value ? parseInt(document.getElementById('p-weight').value) : null,
+                    units_per_package: document.getElementById('p-units').value ? parseInt(document.getElementById('p-units').value) : null,
+                };
+
+                const res = await fetch(`${API}/api/admin/products`, {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: JSON.stringify(body)
+                });
+                
+                if(!res.ok) throw new Error('שגיאה בהוספת המוצר');
+                
+                const msg = document.getElementById('product-msg');
+                msg.textContent = 'המוצר נוסף בהצלחה לקטגוריות שנבחרו! ✓';
+                document.getElementById('add-product-form').reset();
+                setTimeout(() => msg.textContent = '', 4000);
+            } catch (err) {
+                alert(err.message);
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        };
+
+        function renderWeekly(days) {
+            const list = document.getElementById('week-list');
+            list.innerHTML = '';
+            days.forEach((d, idx) => {
+                const row = document.createElement('div');
+                row.className = `day-row ${d.is_closed ? 'closed' : ''}`;
+                row.innerHTML = `
+                    <strong>${d.day_name}</strong>
+                    <div class="time-group">
+                        <span>פתיחה:</span>
+                        <input type="time" class="w-open" value="${d.opening_time}" ${d.is_closed ? 'disabled' : ''}>
+                    </div>
+                    <div class="time-group">
+                        <span>סגירה:</span>
+                        <input type="time" class="w-close" value="${d.closing_time}" ${d.is_closed ? 'disabled' : ''}>
+                    </div>
+                    <label><input type="checkbox" class="w-closed" ${d.is_closed ? 'checked' : ''}> סגור</label>
+                `;
+                const chk = row.querySelector('.w-closed');
+                const inpOpen = row.querySelector('.w-open');
+                const inpClose = row.querySelector('.w-close');
+                chk.onchange = () => {
+                    inpOpen.disabled = chk.checked;
+                    inpClose.disabled = chk.checked;
+                    row.classList.toggle('closed', chk.checked);
+                };
+                list.appendChild(row);
+            });
+        }
+
+        document.getElementById('save-weekly-btn').onclick = () => {
+            const rows = document.querySelectorAll('.day-row');
+            const payload = [];
+            rows.forEach((r, idx) => {
+                payload.push({
+                    day_of_week: idx,
+                    is_closed: r.querySelector('.w-closed').checked,
+                    opening_time: r.querySelector('.w-open').value || '09:00',
+                    closing_time: r.querySelector('.w-close').value || '18:00'
+                });
+            });
+            fetch(`${API}/api/admin/schedule/weekly`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify(payload) })
+                .then(res => res.json())
+                .then(() => {
+                    const msg = document.getElementById('weekly-msg');
+                    msg.textContent = 'השעות השבועיות נשמרו בהצלחה! ✓';
+                    setTimeout(() => msg.textContent = '', 3000);
+                });
+        };
+
+        document.getElementById('save-override-btn').onclick = () => {
+            const val = document.querySelector('input[name="override"]:checked').value;
+            fetch(`${API}/api/admin/schedule/override`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ override: val }) })
+                .then(res => res.json())
+                .then(() => {
+                    const msg = document.getElementById('override-msg');
+                    msg.textContent = 'מצב המשלוחים עודכן! ✓';
+                    setTimeout(() => msg.textContent = '', 3000);
+                });
+        };
+
+        function renderSpecial(list) {
+            const container = document.getElementById('special-list');
+            container.innerHTML = '';
+            if (!list.length) { container.innerHTML = '<p style="color:var(--muted);">אין תאריכים מיוחדים מוגדרים.</p>'; return; }
+            list.forEach(sp => {
+                const item = document.createElement('div');
+                item.className = 'special-item';
+                const status = sp.is_closed ? 'סגור כל היום' : `${sp.opening_time} - ${sp.closing_time}`;
+                item.innerHTML = `
+                    <div class="special-details">
+                        <strong>${sp.title} (${sp.holiday_date})</strong>
+                        <span>שעות: ${status}</span>
+                        ${sp.note ? `<span style="color:var(--pink-dark); font-size:0.9em;">הערה: ${sp.note}</span>` : ''}
+                    </div>
+                    <button class="btn danger" onclick="deleteSpecial(${sp.id})">מחק</button>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        document.getElementById('add-special-btn').onclick = () => {
+            const date = document.getElementById('sp-date').value;
+            const title = document.getElementById('sp-title').value.trim();
+            const is_closed = document.getElementById('sp-closed').checked;
+            const open = document.getElementById('sp-open').value || '09:00';
+            const close = document.getElementById('sp-close').value || '18:00';
+            const note = document.getElementById('sp-note').value.trim();
+
+            if (!date || !title) { alert('יש להזין תאריך ושם לאירוע'); return; }
+
+            fetch(`${API}/api/admin/schedule/special`, {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ holiday_date: date, title, is_closed, opening_time: open, closing_time: close, note })
+            }).then(() => {
+                document.getElementById('sp-date').value = '';
+                document.getElementById('sp-title').value = '';
+                document.getElementById('sp-note').value = '';
+                loadAdminData();
+            });
+        };
+
+        window.deleteSpecial = function(id) {
+            if (!confirm('למחוק יום מיוחד זה?')) return;
+            fetch(`${API}/api/admin/schedule/special/${id}`, { method: 'DELETE', headers: authHeaders() })
+                .then(() => loadAdminData());
+        };
+
+        if (token()) showAdmin(); else showLogin();
+    </script>
+</body>
+</html>

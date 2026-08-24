@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bake & Party - אפייה ומסיבות</title>
+    <style>
+        :root {
+            --cream: #FFF9F5; --pink-light: #FFD1DC; --pink-main: #FF85A2;
+            --pink-dark: #E05276; --text-color: #4A2E35; --muted: #9B7B82;
+            --shadow: rgba(255,133,162,0.2); --ok: #3B9E6A;
+        }
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--cream); color: var(--text-color); margin: 0; overflow-x: hidden; transition: background-color 0.3s; }
+
+        #a11y-btn { position: fixed; bottom: 20px; left: 20px; background: #005eb8; color: white; border: none; 
+            border-radius: 50%; width: 55px; height: 55px; font-size: 28px; cursor: pointer; z-index: 9999; 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; transition: 0.3s; }
+        #a11y-btn:hover { background: #004494; transform: translateY(-3px); }
+        
+        body.high-contrast { background: #121212 !important; color: #fff !important; }
+        body.high-contrast header, body.high-contrast .cat-menu-bar, body.high-contrast .sidebar, 
+        body.high-contrast .modal, body.high-contrast .product-card, body.high-contrast .detail-img-wrap { background: #1e1e1e !important; border-color: #555 !important; }
+        body.high-contrast * { color: #fff !important; }
+        body.high-contrast .btn { background: #fff !important; color: #000 !important; }
+
+        #back-to-top { position: fixed; bottom: 20px; right: 20px; background: var(--pink-main); color: white; border: none; 
+            border-radius: 50%; width: 55px; height: 55px; font-size: 24px; cursor: pointer; z-index: 9999; 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: none; align-items: center; justify-content: center; transition: 0.3s; }
+        #back-to-top:hover { background: var(--pink-dark); transform: translateY(-3px); }
+
+        .sticky-wrapper { position: sticky; top: 0; z-index: 800; box-shadow: 0 4px 12px rgba(0,0,0,0.08); background: #fff; }
+
+        header { background-color: var(--pink-light); padding: 8px 15px; position: relative; }
+        .header-inner { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; padding-right: 45px; height: 65px; }
+        
+        .logo { width: 170px; height: 65px; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); object-fit: cover; object-position: center 20%; background: #fff; }
+        
+        .header-text { text-align: left; line-height: 1.1; }
+        h1 { color: var(--pink-dark); margin: 0; font-size: 1.5em; }
+        .tag { margin: 4px 0 0; font-size: 0.9em; font-weight: 600; color: var(--text-color); }
+
+        .menu-btn { position: absolute; top: 50%; right: 15px; transform: translateY(-50%); background: none; border: none;
+            font-size: 2.2em; color: var(--pink-dark); cursor: pointer; transition: transform 0.2s; padding: 0; }
+        .menu-btn:hover { transform: translateY(-50%) scale(1.1); }
+
+        #status-bar { background-color: var(--pink-main); color: white; text-align: center; padding: 6px 10px; font-weight: bold; font-size: 0.95em; }
+
+        .cat-menu-bar { background: #fff; display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
+            gap: 4px; padding: 6px 12px; position: relative; z-index: 40; border-bottom: 2px solid var(--pink-light); }
+        .cat-menu-home { background: var(--pink-main); color: #fff; border: none; border-radius: 16px;
+            padding: 6px 14px; font-weight: bold; font-size: 0.9em; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 6px; }
+        .cat-menu-home:hover { background: var(--pink-dark); }
+        .cat-menu-item { position: relative; }
+        .cat-menu-trigger { background: none; border: none; color: var(--text-color); font-family: inherit; font-weight: 600; font-size: 0.9em; padding: 6px 12px; border-radius: 16px; cursor: pointer; display: flex; align-items: center; gap: 5px; white-space: nowrap; transition: 0.15s; }
+        .cat-menu-trigger:hover, .cat-menu-item.open .cat-menu-trigger { background: var(--pink-light); color: var(--pink-dark); }
+        .cat-menu-trigger .arrow { font-size: 0.75em; transition: transform 0.2s; color: var(--pink-main); }
+        .cat-menu-item.open .cat-menu-trigger .arrow { transform: rotate(180deg); }
+        .cat-dropdown { position: absolute; top: 100%; right: 0; margin-top: 6px; min-width: 210px; background: #fff; border: 2px solid var(--pink-light); border-radius: 14px; box-shadow: 0 8px 20px rgba(224,82,118,0.18); padding: 6px; display: none; z-index: 60; }
+        .cat-menu-item:hover .cat-dropdown, .cat-menu-item.open .cat-dropdown { display: block; }
+        .cat-dropdown button { display: block; width: 100%; text-align: right; background: none; border: none; font-family: inherit; font-size: 0.9em; color: var(--text-color); padding: 8px 12px; border-radius: 10px; cursor: pointer; white-space: nowrap; }
+        .cat-dropdown button:hover { background: var(--pink-light); color: var(--pink-dark); }
+        .cat-dropdown .dd-all { font-weight: bold; color: var(--pink-dark); border-bottom: 1px solid var(--pink-light); border-radius: 0; margin-bottom: 4px; }
+        @media (max-width: 640px) { .cat-menu-bar { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; } }
+
+        .sidebar-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; z-index: 999; }
+        .sidebar-overlay.open { display: block; }
+        .sidebar { position: fixed; top: 0; right: -350px; width: 320px; max-width: 90vw; height: 100%; background: var(--cream); box-shadow: -4px 0 15px rgba(0,0,0,0.1); transition: right 0.3s ease; z-index: 1000; padding: 20px; display: flex; flex-direction: column; gap: 15px; overflow-y: auto; }
+        .sidebar.open { right: 0; }
+        .sidebar-close { align-self: flex-end; background: none; border: none; font-size: 2em; color: var(--pink-dark); cursor: pointer; line-height: 1; }
+        .sidebar-item { background: white; border: 2px solid var(--pink-light); border-radius: 12px; padding: 12px; font-weight: bold; color: var(--pink-dark); cursor: pointer; text-align: center; transition: 0.2s; }
+        .sidebar-item:hover { border-color: var(--pink-main); background: var(--pink-light); }
+        .sidebar-item.ai-btn { background: linear-gradient(45deg, #FF85A2, #E05276); color: white; border: none; }
+        .sidebar-item.ai-btn:hover { opacity: 0.9; }
+        .sidebar-search { display: flex; gap: 8px; }
+        .sidebar-search input { flex: 1; padding: 10px; border: 2px solid var(--pink-light); border-radius: 12px; font-family: inherit; font-size: 1em; }
+        .sidebar-content { background: white; border: 2px solid var(--pink-light); border-radius: 12px; padding: 12px; font-size: 0.95em; display: none; line-height: 1.6; }
+        .sidebar-content.active { display: block; }
+
+        .container { max-width: 1200px; margin: 30px auto; padding: 0 20px; }
+        .breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 18px; font-size: 1em; color: var(--muted); }
+        .breadcrumb .crumb { background: none; border: none; font-family: inherit; font-size: 1em; color: var(--pink-main); cursor: pointer; padding: 2px 4px; border-radius: 6px; }
+        .breadcrumb .crumb:hover { text-decoration: underline; color: var(--pink-dark); }
+        .breadcrumb .crumb.current { color: var(--text-color); font-weight: bold; cursor: default; }
+        .breadcrumb .crumb.current:hover { text-decoration: none; }
+        .breadcrumb .sep { color: var(--pink-light); font-weight: bold; }
+
+        .toolbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+        #main-title { color: var(--pink-dark); margin: 0; font-size: 1.7em; flex: 1; text-align: center; }
+
+        .btn { background-color: var(--pink-main); color: white; border: none; padding: 10px; border-radius: 20px; cursor: pointer; font-weight: bold; width: 100%; font-size: 1em; font-family: inherit; text-decoration: none;}
+        .btn:hover { background-color: var(--pink-dark); }
+        .btn-ghost { background: var(--cream); color: var(--pink-dark); border: 2px solid var(--pink-main); }
+        .btn-ghost:hover { background: var(--pink-main); color: #fff; }
+        .back-btn { background-color: var(--pink-light); color: var(--pink-dark); border: 2px solid var(--pink-main); padding: 8px 18px; border-radius: 20px; cursor: pointer; font-weight: bold; font-size: 1em; display: none; width: auto; }
+        .back-btn:hover { background-color: var(--pink-main); color: white; }
+
+        .categories-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 32px; justify-items: center; align-items: start; margin-bottom: 40px; }
+        .category-circle { background: none; border: none; padding: 0; font: inherit; color: inherit; text-align: center; cursor: pointer; transition: transform 0.25s ease; width: 100%; }
+        .category-circle:hover { transform: translateY(-6px); }
+        .circle-img { width: 150px; height: 150px; border-radius: 50%; background: linear-gradient(145deg, #fff, var(--pink-light)); padding: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: var(--pink-dark); font-size: 2.4em; box-shadow: 0 10px 22px var(--shadow); overflow: hidden; margin: 0 auto; border: 4px solid var(--pink-main); transition: box-shadow 0.25s, border-color 0.25s; }
+        .category-circle:hover .circle-img { box-shadow: 0 14px 30px rgba(224,82,118,0.35); border-color: var(--pink-dark); }
+        .circle-img img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+        .cat-name { display: block; margin-top: 14px; font-weight: 700; font-size: 1.08em; color: var(--text-color); }
+
+        #about-section { text-align: center; max-width: 800px; margin: 40px auto; padding: 0 20px; display: none; }
+        #about-section h3 { color: var(--pink-dark); font-size: 1.6em; margin-bottom: 10px; }
+        #about-section p { font-size: 1.15em; line-height: 1.6; color: var(--text-color); }
+
+        .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 25px; }
+        .product-card { background: white; border: 2px solid var(--pink-light); border-radius: 20px; padding: 15px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); display: flex; flex-direction: column; justify-content: space-between; transition: box-shadow 0.2s; cursor: pointer; }
+        .product-card:hover { box-shadow: 0 8px 18px var(--shadow); transform: translateY(-3px); }
+        .product-img { width: 100%; height: 160px; object-fit: contain; margin-bottom: 10px; }
+        .product-card h3 { font-size: 1.1em; margin: 10px 0; min-height: 40px; }
+        .price { font-size: 1.4em; color: var(--pink-dark); font-weight: bold; margin: 10px 0; }
+        .state-msg { text-align: center; color: var(--muted); padding: 40px 0; font-size: 1.1em; grid-column: 1 / -1; }
+
+        .modal-overlay { position: fixed; inset: 0; background: rgba(74,46,53,0.45); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 20px; }
+        .modal-overlay.open { display: flex; }
+        
+        .modal { background: #fff; border-radius: 20px; padding: 28px; width: 100%; max-width: 420px; box-shadow: 0 12px 30px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto; }
+        .detail-modal { max-width: 650px; padding: 0; }
+        
+        .modal h2 { color: var(--pink-dark); text-align: center; margin: 0 0 8px; }
+        .modal label { display: block; font-weight: 600; margin: 12px 0 5px; font-size: 0.9em; }
+        .modal input, .modal select, .modal textarea { width: 100%; padding: 10px 12px; border: 2px solid var(--pink-light); border-radius: 12px; font-size: 1em; font-family: inherit; background: #fff; }
+        .modal input:focus, .modal select:focus, .modal textarea:focus { outline: none; border-color: var(--pink-main); }
+        .modal .btn { margin-top: 18px; }
+        .modal .close-x { float: left; cursor: pointer; color: var(--muted); font-size: 1.4em; background: none; border: none; }
+
+        .detail-grid { display: grid; grid-template-columns: 1fr 1fr; }
+        @media (max-width: 560px) { .detail-grid { grid-template-columns: 1fr; } }
+        .detail-img-wrap { background: var(--cream); display: flex; align-items: center; justify-content: center; padding: 24px; }
+        .detail-img-wrap img { width: 100%; max-height: 260px; object-fit: contain; }
+        
+        .detail-info { padding: 26px; padding-bottom: 40px; position: relative; }
+        .detail-info .close-x { position: absolute; top: 14px; left: 16px; background: none; border: none; font-size: 1.6em; color: var(--muted); cursor: pointer; z-index: 10; }
+        .detail-info h2 { color: var(--pink-dark); margin: 6px 0 12px; font-size: 1.4em; }
+        .detail-price { font-size: 1.8em; color: var(--pink-dark); font-weight: bold; margin: 10px 0; }
+        .detail-badge { display: inline-block; padding: 5px 14px; border-radius: 14px; font-weight: bold; font-size: 0.9em; margin-bottom: 12px; }
+        .badge-ok { background: #e6f5ec; color: var(--ok); }
+        .badge-out { background: #f3f3f3; color: #8c8c8c; }
+        
+        .detail-meta { list-style: none; padding: 0; margin: 10px 0; color: var(--text-color); font-size: 0.95em; }
+        .detail-meta li { padding: 6px 0; border-bottom: 1px dashed var(--pink-light); display: flex; justify-content: space-between; align-items: center; }
+        .detail-meta li span:first-child { color: var(--muted); }
+
+        .edit-input { width: 100%; padding: 8px; border: 1px solid var(--pink-main); border-radius: 8px; font-family: inherit; font-size: 1em; margin-bottom: 5px; background: white;}
+        .edit-input-sm { width: 65%; padding: 4px 8px; border: 1px solid var(--pink-main); border-radius: 6px; font-family: inherit; font-size: 0.9em; background: white;}
+    </style>
+</head>
+<body>
+
+    <button id="a11y-btn" onclick="toggleA11y()" title="הגדרות נגישות" aria-label="נגישות">♿</button>
+    <button id="back-to-top" onclick="window.scrollTo({top: 0, behavior: 'smooth'})" title="חזור למעלה">⬆</button>
+
+    <div class="sticky-wrapper">
+        <header>
+            <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+            <div class="header-inner">
+                <img src="logo.jpg" alt="לוגו Bake & Party" class="logo">
+                <div class="header-text">
+                    <h1>Bake & Party</h1>
+                    <p class="tag">אפייה ומסיבות</p>
+                </div>
+            </div>
+        </header>
+
+        <div id="status-bar">משלוחים זמינים להזמנות מעל 200 ₪ (החלוקה מתבצעת לאחר שעות הסגירה)</div>
+        <nav class="cat-menu-bar" id="cat-menu-bar" aria-label="תפריט קטגוריות"></nav>
+    </div>
+
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+    <aside class="sidebar" id="sidebar">
+        <button class="sidebar-close" onclick="toggleSidebar()">✖</button>
+        <h2 style="color:var(--pink-dark); margin-top:0; text-align:center;">תפריט חנות</h2>
+        <div id="sidebar-account" style="margin-bottom: 10px; text-align: center;"></div>
+        
+        <div class="sidebar-search">
+            <input type="text" id="search-input" placeholder="חיפוש מוצר (למשל: תבנית)..." list="search-history">
+            <datalist id="search-history"></datalist>
+            <button class="btn btn-sm" onclick="doSearch()">🔍</button>
+        </div>
+        
+        <div class="sidebar-item" onclick="toggleAccordion('info-hours')">🕒 שעות פעילות</div>
+        <div id="info-hours" class="sidebar-content">
+            <div id="hours-text" style="margin-bottom: 12px; padding-bottom: 10px; border-bottom: 2px solid var(--pink-light);">טוען סטטוס נוכחי...</div>
+            <div id="hours-full-list">טוען שעות שבועיות...</div>
+        </div>
+        
+        <div class="sidebar-item" onclick="toggleAccordion('info-contact')">📞 צור קשר</div>
+        <div id="info-contact" class="sidebar-content">
+            <strong>טלפון לבירורים:</strong> 054-9881998 (פנחס)<br>
+            <strong>כתובת:</strong> יוני נתניהו 21, גבעת שמואל<br>
+            <strong>אימייל:</strong> pinukimmam@gmail.com
+        </div>
+        
+        <div class="sidebar-item ai-btn" onclick="alert('העוזר/ת החכם/ה שלנו (מבוסס AI) נמצא/ת בפיתוח ותעלה לאוויר בקרוב! 🤖🧁')">
+            ✨ שאל/י את ה-AI שלנו
+        </div>
+    </aside>
+
+    <main class="container">
+        <nav class="breadcrumb" id="breadcrumb" aria-label="נתיב ניווט"></nav>
+        <div class="toolbar">
+            <button id="back-button" class="back-btn" type="button">→ חזרה</button>
+            <h2 id="main-title">הקטגוריות שלנו</h2>
+        </div>
+        
+        <div id="categories-container" class="categories-container"></div>
+        
+        <section id="about-section">
+            <h3>קצת עלינו</h3>
+            <p>
+                ברוכים הבאים ל-Bake & Party! המקום בו כל חלום מתוק הופך למציאות. 
+                אנחנו מציעים את מיטב חומרי הגלם, אביזרי האפייה והקישוטים שיהפכו כל אירוע ומסיבה לבלתי נשכחים. 
+                הכל נבחר בקפידה ובאהבה כדי להבטיח לכם תוצאה מושלמת בכל פעם מחדש.
+            </p>
+        </section>
+
+        <div id="products-container" class="products-grid"></div>
+    </main>
+
+    <!-- מודל התחברות / הרשמה -->
+    <div class="modal-overlay" id="auth-modal">
+        <div class="modal">
+            <button class="close-x" type="button" onclick="closeAuth()">×</button>
+            <h2 id="auth-title">התחברות</h2>
+            <form id="login-form" onsubmit="handleLogin(event)">
+                <label>אימייל</label>
+                <input id="login-email" type="email" autocomplete="username" required>
+                <label>סיסמה</label>
+                <input id="login-password" type="password" autocomplete="current-password" required>
+                <button class="btn" type="submit">התחבר</button>
+                <p class="switch">אין לך חשבון? <a onclick="showAuthMode('register')">הרשמה</a></p>
+            </form>
+            <form id="register-form" style="display:none;" onsubmit="handleRegister(event)">
+                <label>שם מלא</label>
+                <input id="reg-name" type="text" autocomplete="name" required>
+                <label>אימייל</label>
+                <input id="reg-email" type="email" autocomplete="email" required>
+                <label>סיסמה (6 תווים לפחות)</label>
+                <input id="reg-password" type="password" autocomplete="new-password" required minlength="6">
+                <button class="btn" type="submit">הרשמה</button>
+                <p class="switch">כבר רשום/ה? <a onclick="showAuthMode('login')">התחברות</a></p>
+            </form>
+            <p class="msg" id="auth-msg"></p>
+        </div>
+    </div>
+
+    <!-- מודל הוספת מוצר (לאדמינים בלבד) -->
+    <div class="modal-overlay" id="add-product-modal">
+        <div class="modal">
+            <button class="close-x" type="button" onclick="document.getElementById('add-product-modal').classList.remove('open')">×</button>
+            <h2>הוספת מוצר חדש</h2>
+            <form id="add-product-form" onsubmit="submitAddProduct(event)">
+                <label>שם המוצר *</label>
+                <input type="text" id="add-p-name" required>
+                <label>מחיר (₪) *</label>
+                <input type="number" step="0.1" id="add-p-price" required>
+                <label>קטגוריה ראשונה</label>
+                <select id="add-p-cat-1"><option value="">ללא קטגוריה</option></select>
+                <label>קטגוריה שנייה (אופציונלי)</label>
+                <select id="add-p-cat-2"><option value="">ללא</option></select>
+                <label>תמונה (העלאת קובץ)</label>
+                <input type="file" id="add-p-file" accept="image/*">
+                <div style="display:flex; gap:10px; margin-top:5px;">
+                    <div style="flex:1;">
+                        <label>משקל (גרם)</label>
+                        <input type="number" id="add-p-weight">
+                    </div>
+                    <div style="flex:1;">
+                        <label>יחידות</label>
+                        <input type="number" id="add-p-units">
+                    </div>
+                </div>
+                <label>הערות למוצר (אופציונלי)</label>
+                <textarea id="add-p-notes" rows="2" placeholder="למשל: לא מתאים לאפייה בחום גבוה"></textarea>
+                
+                <button class="btn" type="submit" style="margin-top:20px;">+ שמור והוסף לחנות</button>
+                <p class="msg" id="add-p-msg"></p>
+            </form>
+        </div>
+    </div>
+
+    <!-- מודל דף מוצר / חלון עריכה עם גלילה אוטומטית -->
+    <div class="modal-overlay" id="detail-modal">
+        <div class="modal detail-modal">
+            <div class="detail-grid">
+                <div class="detail-img-wrap">
+                    <img id="detail-img" src="" alt="">
+                </div>
+                <div class="detail-info">
+                    <button class="close-x" type="button" onclick="closeDetail()">×</button>
+                    <div id="detail-badge"></div>
+                    <h2 id="detail-name"></h2>
+                    <div id="detail-category" style="color:var(--muted); font-size:0.9em; margin-bottom:10px;"></div>
+                    <div class="detail-price" id="detail-price"></div>
+                    <ul class="detail-meta" id="detail-meta"></ul>
+                    <div id="detail-action"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = 'http://localhost:8000';
+        const TOKEN_KEY = 'bp_token';
+        const PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150"><rect width="150" height="150" fill="%23FFD1DC"/><text x="50%" y="52%" font-size="48" text-anchor="middle" dominant-baseline="middle" fill="%23E05276">🧁</text></svg>');
+
+        let currentUser = null;
+        let adminSubcategories = []; 
+        let allProducts = [], allCategories = [], categoryTree = [];
+        let view = 'mains', currentMain = null, currentSub = null;
+        let currentFilteredProducts = null;
+
+        function token(){ return localStorage.getItem(TOKEN_KEY); }
+        function setToken(t){ localStorage.setItem(TOKEN_KEY, t); }
+        function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+        function authHeaders(){ return { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' }; }
+
+        window.toggleA11y = function() { document.body.classList.toggle('high-contrast'); };
+
+        window.addEventListener('scroll', () => {
+            const btt = document.getElementById('back-to-top');
+            if (window.scrollY > 300) btt.style.display = 'flex'; else btt.style.display = 'none';
+        });
+
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('open');
+            document.getElementById('sidebar-overlay').classList.toggle('open');
+        }
+        function toggleAccordion(id) { document.getElementById(id).classList.toggle('active'); }
+
+        function getEditDistance(a, b) {
+            if (a.length === 0) return b.length;
+            if (b.length === 0) return a.length;
+            const matrix = [];
+            for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+            for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+            for (let i = 1; i <= b.length; i++) {
+                for (let j = 1; j <= a.length; j++) {
+                    if (b.charAt(i - 1) === a.charAt(j - 1)) matrix[i][j] = matrix[i - 1][j - 1];
+                    else matrix[i][j] = Math.min(matrix[i-1][j-1] + 1, Math.min(matrix[i][j-1] + 1, matrix[i-1][j] + 1));
+                }
+            }
+            return matrix[b.length][a.length];
+        }
+        function loadSearchHistory() {
+            const history = JSON.parse(localStorage.getItem('bp_search_history') || '[]');
+            const datalist = document.getElementById('search-history');
+            datalist.innerHTML = '';
+            history.forEach(term => { const o = document.createElement('option'); o.value = term; datalist.appendChild(o); });
+        }
+        function saveSearchTerm(term) {
+            let history = JSON.parse(localStorage.getItem('bp_search_history') || '[]');
+            history = history.filter(t => t !== term); history.unshift(term); history = history.slice(0, 5);
+            localStorage.setItem('bp_search_history', JSON.stringify(history));
+            loadSearchHistory();
+        }
+        function doSearch() {
+            const inputEl = document.getElementById('search-input');
+            const term = inputEl.value.trim().toLowerCase();
+            if (!term) return;
+            saveSearchTerm(term);
+            const results = allProducts.filter(p => {
+                const name = p.name.toLowerCase();
+                if (name.includes(term)) return true;
+                for (let word of name.split(' ')) {
+                    if (term.length >= 3 && Math.abs(word.length - term.length) <= 1) {
+                        if (getEditDistance(term, word) <= 1) return true;
+                    }
+                }
+                return false;
+            });
+            inputEl.value = ''; inputEl.blur();
+            toggleSidebar();
+            currentMain = null; currentSub = null;
+            showProducts(results, `תוצאות חיפוש: "${term}"`, [{label:'דף ראשי', fn: goHome}, {label: `חיפוש: "${term}"`}]);
+        }
+        document.getElementById('search-input').addEventListener('keypress', e => { if (e.key === 'Enter') doSearch(); });
+
+        function renderAccount() {
+            const area = document.getElementById('sidebar-account');
+            area.innerHTML = '';
+            if (currentUser) {
+                area.innerHTML = `<div style="font-weight:bold; color:var(--pink-dark); margin-bottom:10px; font-size:1.1em;">שלום, ${currentUser.name || 'לקוח/ה'}</div>`;
+                if (currentUser.role === 'admin') {
+                    area.innerHTML += `<button class="btn btn-sm" style="display:block; width:100%; margin-bottom:10px; background-color:#4A90E2;" onclick="openAddProductModal()">➕ הוספת מוצר חדש</button>`;
+                    area.innerHTML += `<a href="admin.html" class="btn btn-sm" style="display:block; margin-bottom:10px;">ניהול שעות ומשלוחים ⚙️</a>`;
+                }
+                area.innerHTML += `<button class="btn btn-sm btn-ghost" onclick="logout()">התנתקות</button>`;
+            } else {
+                area.innerHTML = `
+                    <button class="btn btn-sm" onclick="openAuth('login')" style="margin-bottom:8px;">כניסה / התחברות</button>
+                    <button class="btn btn-sm btn-ghost" onclick="openAuth('register')">הרשמה</button>`;
+            }
+        }
+
+        async function initApp() {
+            loadSearchHistory();
+            if (token()) {
+                try {
+                    const res = await fetch(`${API}/api/me`, { headers: { 'Authorization': 'Bearer ' + token() } });
+                    if (res.ok) {
+                        currentUser = await res.json();
+                        if(currentUser.role === 'admin'){
+                            const catRes = await fetch(`${API}/api/admin/subcategories-flat`, { headers: authHeaders() });
+                            if(catRes.ok) adminSubcategories = await catRes.json();
+                        }
+                    } else clearToken();
+                } catch { clearToken(); }
+            }
+            renderAccount();
+            try {
+                const [cats, prods] = await Promise.all([
+                    fetch(`${API}/api/categories`).then(res => res.json()),
+                    fetch(`${API}/api/products`).then(res => res.json())
+                ]);
+                allCategories = cats; allProducts = prods;
+                loadCategoryMenu();
+                
+                // רענון המסך הקיים כדי להראות את השינויים
+                if (view === 'products') {
+                    if (currentSub) openSub(currentSub);
+                    else if (currentMain) openMain(currentMain);
+                    else loadMainCategories();
+                }
+                else loadMainCategories();
+            } catch (err) { console.error("שגיאה בטעינת נתונים:", err); }
+        }
+
+        function logout() {
+            fetch(`${API}/api/logout`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token() } })
+                .finally(() => { clearToken(); currentUser = null; renderAccount(); toggleSidebar(); initApp(); });
+        }
+
+        window.openAddProductModal = async function() {
+            toggleSidebar();
+            if(adminSubcategories.length > 0) {
+                const sel1 = document.getElementById('add-p-cat-1');
+                const sel2 = document.getElementById('add-p-cat-2');
+                sel1.innerHTML = '<option value="">ללא קטגוריה</option>';
+                sel2.innerHTML = '<option value="">ללא קטגוריה נוספת</option>';
+                adminSubcategories.forEach(c => {
+                    sel1.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+                    sel2.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+                });
+            }
+            document.getElementById('add-product-modal').classList.add('open');
+        }
+
+        window.submitAddProduct = async function(e) {
+            e.preventDefault();
+            const btn = e.target.querySelector('button[type="submit"]');
+            btn.textContent = 'שומר...'; btn.disabled = true;
+
+            try {
+                const fileInput = document.getElementById('add-p-file');
+                let imageUrl = null;
+                if (fileInput.files.length > 0) {
+                    const formData = new FormData();
+                    formData.append('file', fileInput.files[0]);
+                    const uploadRes = await fetch(`${API}/api/admin/upload-image`, {
+                        method: 'POST', headers: { 'Authorization': 'Bearer ' + token() }, body: formData
+                    });
+                    if (!uploadRes.ok) throw new Error('שגיאה בהעלאת התמונה');
+                    const uploadData = await uploadRes.json();
+                    imageUrl = uploadData.url;
+                }
+
+                const cat1 = document.getElementById('add-p-cat-1').value;
+                const cat2 = document.getElementById('add-p-cat-2').value;
+                const category_ids = [];
+                if (cat1) category_ids.push(parseInt(cat1));
+                if (cat2 && cat2 !== cat1) category_ids.push(parseInt(cat2));
+
+                const weight = document.getElementById('add-p-weight').value;
+                const units = document.getElementById('add-p-units').value;
+                const notes = document.getElementById('add-p-notes').value.trim();
+
+                const body = {
+                    name: document.getElementById('add-p-name').value.trim(),
+                    price: parseFloat(document.getElementById('add-p-price').value),
+                    category_ids: category_ids,
+                    image_url: imageUrl,
+                    weight_grams: weight ? parseInt(weight) : null,
+                    units_per_package: units ? parseInt(units) : null,
+                    notes: notes ? notes : null
+                };
+
+                const res = await fetch(`${API}/api/admin/products`, {
+                    method: 'POST', headers: authHeaders(), body: JSON.stringify(body)
+                });
+                if(!res.ok) throw new Error('שגיאה בהוספת המוצר');
+                
+                document.getElementById('add-p-msg').textContent = 'המוצר נוסף בהצלחה! ✓';
+                document.getElementById('add-product-form').reset();
+                setTimeout(() => { 
+                    document.getElementById('add-p-msg').textContent = ''; 
+                    document.getElementById('add-product-modal').classList.remove('open');
+                    initApp(); 
+                }, 1500);
+
+            } catch (err) {
+                alert(err.message);
+            } finally {
+                btn.textContent = '+ שמור והוסף לחנות'; btn.disabled = false;
+            }
+        }
+
+        function loadCategoryMenu() {
+            fetch(`${API}/api/categories/tree`).then(res => res.json()).then(tree => {
+                categoryTree = tree; renderCategoryMenu();
+            }).catch(() => {
+                categoryTree = allCategories.map(c => ({ ...c, subcategories: [] }));
+                renderCategoryMenu();
+            });
+        }
+
+        function renderCategoryMenu() {
+            const bar = document.getElementById('cat-menu-bar');
+            bar.innerHTML = '';
+            const home = document.createElement('button');
+            home.className = 'cat-menu-home';
+            home.innerHTML = '🏠 דף ראשי';
+            home.onclick = goHome;
+            bar.appendChild(home);
+
+            categoryTree.forEach(main => {
+                const item = document.createElement('div');
+                item.className = 'cat-menu-item';
+                const hasSubs = main.subcategories && main.subcategories.length > 0;
+                const trigger = document.createElement('button');
+                trigger.className = 'cat-menu-trigger';
+                trigger.innerHTML = `${main.name}${hasSubs ? ' <span class="arrow">▾</span>' : ''}`;
+                trigger.onclick = (e) => {
+                    e.stopPropagation();
+                    if (hasSubs) {
+                        document.querySelectorAll('.cat-menu-item.open').forEach(el => { if (el !== item) el.classList.remove('open'); });
+                        item.classList.toggle('open');
+                    } else {
+                        openMain(main);
+                    }
+                };
+                item.appendChild(trigger);
+
+                if (hasSubs) {
+                    const dd = document.createElement('div');
+                    dd.className = 'cat-dropdown';
+                    const allBtn = document.createElement('button');
+                    allBtn.className = 'dd-all';
+                    allBtn.textContent = `כל ה${main.name}`;
+                    allBtn.onclick = () => { item.classList.remove('open'); openMain(main); };
+                    dd.appendChild(allBtn);
+                    main.subcategories.forEach(sub => {
+                        const b = document.createElement('button');
+                        b.textContent = sub.name;
+                        b.onclick = () => { item.classList.remove('open'); currentMain = main; openSub(sub); };
+                        dd.appendChild(b);
+                    });
+                    item.appendChild(dd);
+                }
+                bar.appendChild(item);
+            });
+        }
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.cat-menu-item')) {
+                document.querySelectorAll('.cat-menu-item.open').forEach(el => el.classList.remove('open'));
+            }
+        });
+
+        function updateBreadcrumb(crumbs) {
+            const bc = document.getElementById('breadcrumb');
+            bc.innerHTML = '';
+            crumbs.forEach((c, i) => {
+                const isLast = i === crumbs.length - 1;
+                const btn = document.createElement('button');
+                btn.className = 'crumb' + (isLast ? ' current' : '');
+                btn.textContent = c.label;
+                if (!isLast && c.fn) btn.onclick = c.fn;
+                bc.appendChild(btn);
+                if (!isLast) {
+                    const sep = document.createElement('span');
+                    sep.className = 'sep'; sep.textContent = '›';
+                    bc.appendChild(sep);
+                }
+            });
+        }
+
+        function goHome() { loadMainCategories(); }
+
+        function loadMainCategories() {
+            view = 'mains'; currentMain = null; currentSub = null; currentFilteredProducts = null;
+            document.getElementById('back-button').style.display = 'none';
+            document.getElementById('main-title').textContent = 'הקטגוריות שלנו';
+            document.getElementById('products-container').innerHTML = '';
+            document.getElementById('categories-container').style.display = 'grid';
+            document.getElementById('about-section').style.display = 'block';
+            renderCategoryCircles(allCategories, true);
+            updateBreadcrumb([{label: 'דף ראשי'}]);
+        }
+
+        function openMain(main) {
+            currentMain = main; currentSub = null;
+            document.getElementById('about-section').style.display = 'none';
+            if (main.has_children) {
+                view = 'subs';
+                document.getElementById('main-title').textContent = main.name;
+                document.getElementById('back-button').style.display = 'block';
+                document.getElementById('products-container').innerHTML = '';
+                document.getElementById('categories-container').style.display = 'grid';
+                fetch(`${API}/api/categories/${main.id}/subcategories`).then(res => res.json())
+                    .then(subs => renderCategoryCircles(subs, false));
+                updateBreadcrumb([{label:'דף ראשי', fn: goHome}, {label: main.name}]);
+            } else {
+                const prods = allProducts.filter(p => p.category_id === main.id || (p.category_ids && p.category_ids.includes(main.id)));
+                showProducts(prods, main.name, [{label:'דף ראשי', fn: goHome}, {label: main.name}]);
+            }
+        }
+
+        function openSub(sub) {
+            currentSub = sub;
+            document.getElementById('about-section').style.display = 'none';
+            const prods = allProducts.filter(p => p.category_id === sub.id || (p.category_ids && p.category_ids.includes(sub.id)));
+            const crumbs = [{label:'דף ראשי', fn: goHome}];
+            if (currentMain) crumbs.push({label: currentMain.name, fn: () => openMain(currentMain)});
+            crumbs.push({label: sub.name});
+            showProducts(prods, sub.name, crumbs);
+        }
+
+        function renderCategoryCircles(cats, withAll) {
+            const container = document.getElementById('categories-container');
+            container.innerHTML = '';
+            if (withAll) {
+                const all = document.createElement('button');
+                all.className = 'category-circle';
+                all.innerHTML = `<span class="circle-img" style="background:var(--pink-main); color:white;">🛒</span><span class="cat-name">כל המוצרים</span>`;
+                all.onclick = () => { currentMain = null; currentSub = null;
+                    showProducts(allProducts, 'כל המוצרים', [{label:'דף ראשי', fn: goHome}, {label:'כל המוצרים'}]); };
+                container.appendChild(all);
+            }
+            cats.forEach(cat => {
+                const btn = document.createElement('button');
+                btn.className = 'category-circle';
+                const imgHtml = cat.image ? `<img src="${cat.image}" onerror="this.parentNode.textContent='${cat.name.charAt(0)}'">` : cat.name.charAt(0);
+                btn.innerHTML = `<span class="circle-img">${imgHtml}</span><span class="cat-name">${cat.name}</span>`;
+                btn.onclick = () => { if (view === 'mains') openMain(cat); else openSub(cat); };
+                container.appendChild(btn);
+            });
+        }
+
+        function showProducts(prods, title, crumbs) {
+            view = 'products'; currentFilteredProducts = prods;
+            document.getElementById('main-title').textContent = title;
+            document.getElementById('back-button').style.display = 'block';
+            document.getElementById('categories-container').style.display = 'none';
+            document.getElementById('about-section').style.display = 'none';
+            if (crumbs) updateBreadcrumb(crumbs);
+            renderProducts(prods);
+        }
+
+        function renderProducts(products) {
+            const container = document.getElementById('products-container');
+            container.innerHTML = '';
+            if (!products.length) { container.innerHTML = '<p class="state-msg">אין מוצרים להצגה.</p>'; return; }
+
+            products.forEach(p => {
+                const card = document.createElement('article');
+                card.className = 'product-card';
+                const imgSrc = (p.image && p.image.startsWith('/')) ? API + p.image : (p.image || PLACEHOLDER);
+                const priceHtml = p.in_stock ? `<div class="price">₪${p.price.toFixed(2)}</div>` : `<div class="price" style="color:#aaa;">₪${p.price.toFixed(2)} <span style="font-size:0.7em;">(אזל)</span></div>`;
+
+                card.innerHTML = `
+                    <div class="product-clickable" onclick="openProductDetail(${p.id})">
+                        <img src="${imgSrc}" alt="${p.name}" class="product-img" onerror="this.src='${PLACEHOLDER}'">
+                        <h3 class="p-title">${p.name}</h3>
+                        ${priceHtml}
+                    </div>`;
+                container.appendChild(card);
+            });
+        }
+
+        function fillDetail(p) {
+            const imgSrc = (p.image && p.image.startsWith('/')) ? API + p.image : (p.image || PLACEHOLDER);
+            document.getElementById('detail-img').src = imgSrc;
+            document.getElementById('detail-img').onerror = function(){ this.src = PLACEHOLDER; };
+            
+            const isAdmin = currentUser && currentUser.role === 'admin';
+
+            if (isAdmin) {
+                let catOptions = '<option value="">ללא קטגוריה</option>';
+                adminSubcategories.forEach(c => {
+                    catOptions += `<option value="${c.id}">${c.name}</option>`;
+                });
+
+                document.getElementById('detail-badge').innerHTML = ''; 
+                document.getElementById('detail-name').innerHTML = `<input type="text" id="edit-detail-name" value="${p.name.replace(/"/g, '&quot;')}" class="edit-input" placeholder="שם המוצר">`;
+                document.getElementById('detail-category').innerHTML = ''; 
+                document.getElementById('detail-price').innerHTML = `₪ <input type="number" step="0.1" id="edit-detail-price" value="${p.price}" class="edit-input" style="width:80%;" placeholder="מחיר">`;
+
+                const meta = document.getElementById('detail-meta');
+                meta.innerHTML = `
+                    <li><span style="font-size:0.85em;">קטגוריה 1</span><select id="edit-detail-cat1" class="edit-input-sm" style="width:65%;">${catOptions}</select></li>
+                    <li><span style="font-size:0.85em;">קטגוריה 2</span><select id="edit-detail-cat2" class="edit-input-sm" style="width:65%;">${catOptions}</select></li>
+                    <li><span>משקל (גרם)</span><input type="number" id="edit-detail-weight" value="${p.weight_grams || ''}" class="edit-input-sm"></li>
+                    <li><span>יחידות</span><input type="number" id="edit-detail-units" value="${p.units_per_package || ''}" class="edit-input-sm"></li>
+                    <li><span style="font-size:0.85em;">הערות</span><input type="text" id="edit-detail-notes" value="${p.notes || ''}" class="edit-input-sm" style="width:65%;" placeholder="אופציונלי"></li>
+                    <li><span style="font-size:0.85em;">תמונה חדשה</span><input type="file" id="edit-detail-file" accept="image/*" class="edit-input-sm"></li>
+                `;
+
+                setTimeout(() => {
+                    let cat1 = p.category_ids && p.category_ids.length > 0 ? p.category_ids[0] : (p.category_id || '');
+                    let cat2 = p.category_ids && p.category_ids.length > 1 ? p.category_ids[1] : '';
+                    if(document.getElementById('edit-detail-cat1')) document.getElementById('edit-detail-cat1').value = cat1;
+                    if(document.getElementById('edit-detail-cat2')) document.getElementById('edit-detail-cat2').value = cat2;
+                }, 10);
+
+                const stockBtnText = p.in_stock ? 'סמן כאזל מהמלאי' : 'החזר למלאי';
+                const stockBtnClass = p.in_stock ? 'btn-ghost' : 'btn';
+                const newStockValue = p.in_stock ? 0 : 100;
+
+                document.getElementById('detail-action').innerHTML = `
+                    <div style="display:flex; flex-direction:column; gap:10px; margin-top:15px;">
+                        <button class="btn" style="background-color:#4A90E2;" onclick="saveProductDetails(${p.id}, this)">💾 עדכון שינויים</button>
+                        <div style="display:flex; gap:10px;">
+                            <button class="btn ${stockBtnClass}" style="flex:1; font-size:0.9em; padding:8px;" onclick="updateProductStock(${p.id}, ${newStockValue})">${stockBtnText}</button>
+                            <button class="btn" style="flex:1; font-size:0.9em; background:#d9534f; padding:8px;" onclick="deleteProduct(${p.id})">🗑️ מחק מוצר</button>
+                        </div>
+                        <button class="btn btn-ghost" onclick="closeDetail()">ביטול</button>
+                    </div>
+                `;
+            } else {
+                document.getElementById('detail-name').textContent = p.name;
+                document.getElementById('detail-category').textContent = p.category ? `קטגוריה: ${p.category}` : '';
+                document.getElementById('detail-price').textContent = `₪${p.price.toFixed(2)}`;
+                const badge = document.getElementById('detail-badge');
+                badge.innerHTML = p.in_stock
+                    ? '<span class="detail-badge badge-ok">✔ במלאי</span>'
+                    : '<span class="detail-badge badge-out">אזל מהמלאי</span>';
+
+                const meta = document.getElementById('detail-meta');
+                meta.innerHTML = '';
+                if (p.weight_grams) meta.innerHTML += `<li><span>משקל</span><span>${p.weight_grams} גרם</span></li>`;
+                if (p.units_per_package) meta.innerHTML += `<li><span>יחידות באריזה</span><span>${p.units_per_package}</span></li>`;
+                if (p.notes) meta.innerHTML += `<li style="flex-direction: column; align-items: start; gap: 4px; background: #fffafa; padding: 10px; border-radius: 8px;"><strong>הערות מיוחדות:</strong><span style="color:var(--pink-dark);">${p.notes}</span></li>`;
+                
+                document.getElementById('detail-action').innerHTML = ''; 
+            }
+        }
+
+        function openProductDetail(id) {
+            const local = (currentFilteredProducts || allProducts).find(x => x.id === id)
+                        || allProducts.find(x => x.id === id);
+            if (local) fillDetail(local);
+            document.getElementById('detail-modal').classList.add('open');
+            fetch(`${API}/api/products/${id}`).then(res => res.ok ? res.json() : null)
+                .then(full => { if (full) fillDetail(full); }).catch(() => {});
+        }
+        function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
+        document.getElementById('detail-modal').addEventListener('click', e => {
+            if (e.target.id === 'detail-modal') closeDetail();
+        });
+
+        window.saveProductDetails = async function(id, btn) {
+            const name = document.getElementById('edit-detail-name').value.trim();
+            const price = parseFloat(document.getElementById('edit-detail-price').value);
+            const weightInput = document.getElementById('edit-detail-weight').value;
+            const unitsInput = document.getElementById('edit-detail-units').value;
+            const notesInput = document.getElementById('edit-detail-notes').value.trim();
+            
+            const cat1 = document.getElementById('edit-detail-cat1').value;
+            const cat2 = document.getElementById('edit-detail-cat2').value;
+            const category_ids = [];
+            if (cat1) category_ids.push(parseInt(cat1));
+            if (cat2 && cat2 !== cat1) category_ids.push(parseInt(cat2));
+            
+            const weight = weightInput ? parseInt(weightInput) : null;
+            const units = unitsInput ? parseInt(unitsInput) : null;
+            const fileInput = document.getElementById('edit-detail-file');
+
+            btn.textContent = 'מעדכן...';
+            btn.disabled = true;
+
+            try {
+                let imageUrl = undefined;
+                if (fileInput.files.length > 0) {
+                    const formData = new FormData();
+                    formData.append('file', fileInput.files[0]);
+                    const uploadRes = await fetch(`${API}/api/admin/upload-image`, {
+                        method: 'POST', headers: { 'Authorization': 'Bearer ' + token() }, body: formData
+                    });
+                    if (!uploadRes.ok) throw new Error('שגיאה בהעלאת התמונה');
+                    const uploadData = await uploadRes.json();
+                    imageUrl = uploadData.url;
+                }
+
+                const body = { name, price, weight_grams: weight, units_per_package: units, category_ids: category_ids, notes: notesInput ? notesInput : null };
+                if (imageUrl !== undefined) body.image_url = imageUrl;
+
+                const res = await fetch(`${API}/api/admin/products/${id}`, {
+                    method: 'PATCH',
+                    headers: { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                
+                if (!res.ok) throw new Error('שגיאה בעדכון המוצר');
+                
+                alert('המוצר עודכן בהצלחה! ✓');
+                closeDetail();
+                await initApp(); 
+            } catch (err) {
+                alert(err.message);
+            } finally {
+                btn.textContent = '💾 עדכון שינויים';
+                btn.disabled = false;
+            }
+        };
+
+        window.updateProductStock = async function(id, newStock) {
+            try {
+                const res = await fetch(`${API}/api/admin/products/${id}`, {
+                    method: 'PATCH',
+                    headers: { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stock_quantity: newStock })
+                });
+                if (!res.ok) throw new Error('שגיאה בעדכון המלאי');
+                const ap = allProducts.find(x => x.id === id);
+                if (ap) ap.in_stock = newStock > 0;
+                const fp = currentFilteredProducts?.find(x => x.id === id);
+                if (fp) fp.in_stock = newStock > 0;
+                renderProducts(currentFilteredProducts || allProducts);
+                openProductDetail(id); 
+            } catch(e) { alert(e.message); }
+        };
+
+        window.deleteProduct = async function(id) {
+            if(!confirm('האם את בטוחה שברצונך למחוק את המוצר לחלוטין מהחנות?')) return;
+            try {
+                const res = await fetch(`${API}/api/admin/products/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + token() }
+                });
+                if (!res.ok) throw new Error('שגיאה במחיקת מוצר');
+                allProducts = allProducts.filter(x => x.id !== id);
+                if (currentFilteredProducts) currentFilteredProducts = currentFilteredProducts.filter(x => x.id !== id);
+                closeDetail();
+                renderProducts(currentFilteredProducts || allProducts);
+            } catch(e) { alert(e.message); }
+        };
+
+        document.getElementById('back-button').onclick = () => {
+            if (view === 'products' && currentSub && currentMain) openMain(currentMain);
+            else if (view === 'subs' && currentMain) loadMainCategories();
+            else loadMainCategories();
+        };
+
+        const modal = document.getElementById('auth-modal');
+        function openAuth(mode) { toggleSidebar(); showAuthMode(mode); modal.classList.add('open'); }
+        function closeAuth() { modal.classList.remove('open'); }
+        window.showAuthMode = function(mode) {
+            const isLogin = mode === 'login';
+            document.getElementById('login-form').style.display = isLogin ? 'block' : 'none';
+            document.getElementById('register-form').style.display = isLogin ? 'none' : 'block';
+            document.getElementById('auth-title').textContent = isLogin ? 'התחברות' : 'הרשמה';
+            document.getElementById('auth-msg').textContent = '';
+        };
+        window.handleLogin = function(e) {
+            e.preventDefault();
+            const email = document.getElementById('login-email').value.trim();
+            const password = document.getElementById('login-password').value;
+            fetch(`${API}/api/login`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ email, password }) })
+                .then(res => res.json().then(d => ({ ok: res.ok, d })))
+                .then(({ ok, d }) => {
+                    if (!ok) throw new Error(d.detail || 'שגיאה בהתחברות');
+                    setToken(d.token); currentUser = d.user; closeAuth(); renderAccount(); initApp();
+                })
+                .catch(err => { document.getElementById('auth-msg').textContent = err.message; });
+        };
+        window.handleRegister = function(e) {
+            e.preventDefault();
+            const name = document.getElementById('reg-name').value.trim();
+            const email = document.getElementById('reg-email').value.trim();
+            const password = document.getElementById('reg-password').value;
+            fetch(`${API}/api/register`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, email, password }) })
+                .then(res => res.json().then(d => ({ ok: res.ok, d })))
+                .then(({ ok, d }) => {
+                    if (!ok) throw new Error(d.detail || 'שגיאה בהרשמה');
+                    setToken(d.token); currentUser = d.user; closeAuth(); renderAccount(); initApp();
+                })
+                .catch(err => { document.getElementById('auth-msg').textContent = err.message; });
+        };
+
+        fetch(`${API}/api/store-status`).then(res => res.json()).then(data => {
+            document.getElementById('hours-text').innerHTML = `
+                <strong>מצב כעת:</strong> ${data.store_open ? 'פתוח' : 'סגור'}<br>
+                <strong>שעות היום:</strong> ${data.opening_hours}<br>
+                <em style="font-size:0.9em; display:block; margin-top:5px; color:var(--pink-dark);">${data.message}</em>`;
+        });
+
+        fetch(`${API}/api/schedule`).then(res => res.json()).then(data => {
+            let html = '<div style="margin-bottom: 8px;"><strong>שעות פעילות שבועיות:</strong></div>';
+            html += '<table style="width: 100%; text-align: right; font-size: 0.9em; border-collapse: collapse;">';
+            data.weekly.forEach(d => {
+                let hours = d.is_closed ? '<span style="color:var(--pink-dark); font-weight:bold;">סגור</span>' : `${d.opening_time} - ${d.closing_time}`;
+                html += `<tr style="border-bottom: 1px dashed var(--pink-light);"><td style="padding: 6px 0;">${d.day_name}</td><td style="padding: 6px 0;">${hours}</td></tr>`;
+            });
+            html += '</table>';
+            if (data.special && data.special.length > 0) {
+                html += '<div style="margin-top: 15px; margin-bottom: 8px;"><strong>ימים מיוחדים וחגים קרובים:</strong></div>';
+                data.special.forEach(sp => {
+                    let hours = sp.is_closed ? '<span style="color:var(--pink-dark); font-weight:bold;">סגור</span>' : `${sp.opening_time} - ${sp.closing_time}`;
+                    html += `<div style="font-size: 0.85em; background: #fffafa; border: 1px solid var(--pink-light); padding: 10px; border-radius: 8px; margin-bottom: 8px;">
+                        <strong>${sp.title} (${sp.holiday_date})</strong><br>שעות: ${hours}
+                        ${sp.note ? `<br><span style="color:var(--pink-dark); display:block; margin-top:4px;">${sp.note}</span>` : ''}</div>`;
+                });
+            }
+            document.getElementById('hours-full-list').innerHTML = html;
+        }).catch(e => console.error("שגיאה בטעינת לוח שעות:", e));
+
+        initApp();
+    </script>
+</body>
+</html>
