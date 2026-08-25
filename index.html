@@ -498,8 +498,7 @@
     </div>
 
     <script>
-        const API = window.location.origin;  // עובד גם מקומית (localhost:8000) וגם בפרודקשן
-        const TOKEN_KEY = 'bp_token';
+        const API = 'https://bake-party-production.up.railway.app';        const TOKEN_KEY = 'bp_token';
         const PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150"><rect width="150" height="150" fill="%23FFD1DC"/><text x="50%" y="52%" font-size="48" text-anchor="middle" dominant-baseline="middle" fill="%23E05276">🧁</text></svg>');
 
         let currentUser = null;
