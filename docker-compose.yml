@@ -10,6 +10,8 @@ services:
       POSTGRES_DB: bakeshop
     ports:
       - "5433:5432"
+    volumes:
+      - bake_shop_pg_data:/var/lib/postgresql/data
 
   pgadmin_web:
     image: dpage/pgadmin4
@@ -21,3 +23,6 @@ services:
       - "5050:80"
     depends_on:
       - postgres_db
+
+volumes:
+  bake_shop_pg_data:

@@ -73,6 +73,44 @@ def ensure_tables(cur):
         """
     )
 
+    # --- טבלאות שעות פעילות (היו חסרות לגמרי!) ---
+    # main.py ו-admin.html מסתמכים על שתי הטבלאות האלה (שעות שבועיות + ימים
+    # מיוחדים/חגים), אבל שום סקריפט לא באמת יצר אותן. בלי זה, כל מה שקשור
+    # לשעות פתיחה (סטטוס "פתוח/סגור", לוח השעות באתר, פאנל השעות ב-admin)
+    # קורס עם שגיאת "relation does not exist".
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS weekly_hours (
+            day_of_week   INTEGER PRIMARY KEY,  -- 0 = ראשון ... 6 = שבת (תואם ל-main.py)
+            day_name      VARCHAR(20) NOT NULL,
+            is_closed     BOOLEAN NOT NULL DEFAULT FALSE,
+            opening_time  VARCHAR(5) NOT NULL DEFAULT '09:00',
+            closing_time  VARCHAR(5) NOT NULL DEFAULT '18:00'
+        );
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS special_days (
+            id            SERIAL PRIMARY KEY,
+            holiday_date  DATE UNIQUE NOT NULL,
+            title         VARCHAR(255) NOT NULL,
+            is_closed     BOOLEAN NOT NULL DEFAULT FALSE,
+            opening_time  VARCHAR(5) DEFAULT '09:00',
+            closing_time  VARCHAR(5) DEFAULT '18:00',
+            note          TEXT
+        );
+        """
+    )
+    # זריעת 7 ימי השבוע כברירת מחדל – רק אם הטבלה ריקה (לא דורסים שינויים קיימים)
+    day_names = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+    for dow, name in enumerate(day_names):
+        cur.execute(
+            "INSERT INTO weekly_hours (day_of_week, day_name, is_closed, opening_time, closing_time) "
+            "VALUES (%s, %s, FALSE, '09:00', '18:00') ON CONFLICT (day_of_week) DO NOTHING;",
+            (dow, name),
+        )
+
 
 def main():
     conn = psycopg2.connect(**DB_CONFIG)

@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ניהול שעות פעילות ומוצרים | Bake & Party</title>
+    <title>ניהול שעות ומשלוחים | Bake & Party</title>
+    <!-- TEMP: חוסם אינדוקס בגוגל עד שהאתר מוכן להשקה רשמית (ובכל מקרה כדאי שפאנל הניהול לא יאונדקס גם אחרי ההשקה). -->
+    <meta name="robots" content="noindex, nofollow">
+    <!-- /TEMP -->
     <style>
         :root {
             --cream: #FFF9F5; --pink-light: #FFD1DC; --pink-main: #FF85A2;
@@ -54,12 +57,43 @@
             border: 1px solid var(--pink-light); padding: 12px 16px; border-radius: 10px; margin-bottom: 8px; }
         .special-details { display: flex; flex-direction: column; gap: 4px; }
 
-        .product-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; }
-        .form-group { display: flex; flex-direction: column; }
-
         .radio-group { display: flex; gap: 20px; margin-top: 10px; flex-wrap: wrap; }
         .radio-group label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: normal; }
         .msg { color: var(--ok); font-weight: bold; margin-top: 10px; display: inline-block; }
+
+        /* --- טאבים --- */
+        .tab-bar { max-width: 900px; margin: 20px auto 0; padding: 0 20px; display: flex; gap: 8px; }
+        .tab-btn { background: #fff; border: 2px solid var(--pink-light); color: var(--text-color);
+            padding: 10px 18px; border-radius: 14px 14px 0 0; cursor: pointer; font-weight: bold;
+            font-size: 0.95em; font-family: inherit; border-bottom: none; opacity: 0.7; }
+        .tab-btn.active { opacity: 1; background: var(--pink-light); color: var(--pink-dark); }
+        .tab-page { display: none; }
+        .tab-page.active { display: block; }
+
+        /* --- טאב מוצרים וקטגוריות --- */
+        .prod-toolbar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+        .prod-toolbar input[type="text"] { flex: 1; min-width: 180px; }
+        .prod-filter-chip { background: #fffafa; border: 2px solid var(--pink-light); border-radius: 14px;
+            padding: 8px 14px; cursor: pointer; font-weight: bold; font-size: 0.85em; color: var(--muted); white-space: nowrap; }
+        .prod-filter-chip.active { background: var(--pink-main); color: #fff; border-color: var(--pink-main); }
+        .prod-table-wrap { overflow-x: auto; }
+        .prod-row { display: grid; grid-template-columns: 50px 1.6fr 1fr 1fr 90px; gap: 12px; align-items: center;
+            background: #fffafa; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--pink-light); margin-bottom: 8px; }
+        .prod-row.no-cat { border-color: #d9534f; background: #fff3f2; }
+        .prod-row img { width: 42px; height: 42px; object-fit: contain; border-radius: 8px; background: #fff; border: 1px solid var(--pink-light); }
+        .prod-name { font-weight: 600; font-size: 0.92em; }
+        .prod-warn { display: inline-block; margin-top: 3px; font-size: 0.78em; color: #d9534f; font-weight: bold; }
+        .prod-cat-select { width: 100%; font-size: 0.85em; padding: 6px 8px; }
+        .prod-save-btn { background: var(--pink-main); color: #fff; border: none; border-radius: 10px;
+            padding: 8px 10px; font-size: 0.8em; font-weight: bold; cursor: pointer; width: 100%; font-family: inherit; }
+        .prod-save-btn:hover { background: var(--pink-dark); }
+        .prod-save-btn.saved { background: var(--ok); }
+        .prod-table-head { display: grid; grid-template-columns: 50px 1.6fr 1fr 1fr 90px; gap: 12px;
+            font-size: 0.8em; font-weight: bold; color: var(--muted); padding: 0 12px 8px; }
+        @media (max-width: 700px) {
+            .prod-row, .prod-table-head { grid-template-columns: 40px 1fr 1fr; }
+            .prod-table-head span:nth-child(4), .prod-table-head span:nth-child(5) { display:none; }
+        }
     </style>
 </head>
 <body>
@@ -78,53 +112,21 @@
 
     <div id="admin-view" style="display:none;">
         <header>
-            <h1>פאנל ניהול חנות</h1>
+            <h1>פאנל ניהול חנות (שעות ומשלוחים)</h1>
             <div class="header-actions">
                 <a href="index.html" class="btn ghost">← חזור לאתר הראשי</a>
                 <button class="btn ghost" type="button" id="logout-btn">התנתק</button>
             </div>
         </header>
 
+        <div class="tab-bar">
+            <button class="tab-btn active" type="button" id="tab-btn-hours" onclick="switchTab('hours')">🕒 שעות ומשלוחים</button>
+            <button class="tab-btn" type="button" id="tab-btn-products" onclick="switchTab('products')">🏷️ מוצרים וקטגוריות</button>
+        </div>
+
         <div class="container">
-            
-            <!-- הוספת מוצר חדש לחנות -->
-            <div class="card">
-                <h2>הוספת מוצר חדש לחנות</h2>
-                <form id="add-product-form" onsubmit="handleCreateProduct(event)">
-                    <div class="product-form-grid">
-                        <div class="form-group">
-                            <label>שם המוצר *</label>
-                            <input type="text" id="p-name" required placeholder="למשל: תבנית סיליקון לבבות">
-                        </div>
-                        <div class="form-group">
-                            <label>מחיר (₪) *</label>
-                            <input type="number" step="0.1" id="p-price" required placeholder="49.90">
-                        </div>
-                        <div class="form-group">
-                            <label>תת-קטגוריה ראשונה</label>
-                            <select id="p-cat-1"><option value="">ללא קטגוריה</option></select>
-                        </div>
-                        <div class="form-group">
-                            <label>תת-קטגוריה שנייה (אופציונלי)</label>
-                            <select id="p-cat-2"><option value="">ללא קטגוריה נוספת</option></select>
-                        </div>
-                        <div class="form-group">
-                            <label>תמונה (העלאת קובץ)</label>
-                            <input type="file" id="p-image-file" accept="image/*">
-                        </div>
-                        <div class="form-group">
-                            <label>משקל (גרם)</label>
-                            <input type="number" id="p-weight" placeholder="250">
-                        </div>
-                        <div class="form-group">
-                            <label>יחידות באריזה</label>
-                            <input type="number" id="p-units" placeholder="10">
-                        </div>
-                    </div>
-                    <button class="btn" type="submit" style="margin-top: 18px;">+ הוסף מוצר לחנות</button>
-                    <span class="msg" id="product-msg"></span>
-                </form>
-            </div>
+
+            <div class="tab-page active" id="tab-page-hours">
 
             <div class="card">
                 <h2>מצב משלוחים מהיר</h2>
@@ -172,11 +174,34 @@
                 <div id="special-list"></div>
             </div>
 
+            </div><!-- /tab-page-hours -->
+
+            <div class="tab-page" id="tab-page-products">
+                <div class="card">
+                    <h2>שיוך מהיר של מוצרים לקטגוריה שנייה</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        רשימה של כל המוצרים בחנות עם הקטגוריות המשויכות להם. אפשר לבחור קטגוריה שנייה מהתפריט
+                        ולשמור בלחיצה אחת. מוצר שמסומן באדום הוא מוצר <strong>ללא קטגוריה בכלל</strong> — הוא לא
+                        מוצג באתר הראשי בכלל עד שתשייכי לו קטגוריה.
+                    </p>
+                    <div class="prod-toolbar">
+                        <input type="text" id="prod-search" placeholder="חיפוש מוצר לפי שם..." oninput="renderProductRows()">
+                        <span class="prod-filter-chip active" id="chip-all" onclick="setProdFilter('all')">הכל</span>
+                        <span class="prod-filter-chip" id="chip-nocat" onclick="setProdFilter('nocat')">ללא קטגוריה ⚠️</span>
+                        <span class="prod-filter-chip" id="chip-onecat" onclick="setProdFilter('onecat')">קטגוריה אחת בלבד</span>
+                    </div>
+                    <div class="prod-table-head">
+                        <span></span><span>מוצר</span><span>קטגוריה 1</span><span>קטגוריה 2</span><span></span>
+                    </div>
+                    <div class="prod-table-wrap" id="prod-list">טוען מוצרים...</div>
+                </div>
+            </div><!-- /tab-page-products -->
+
         </div>
     </div>
 
     <script>
-        const API = 'http://localhost:8000';
+        const API = window.location.origin;
         const TOKEN_KEY = 'bp_token';
 
         function token(){ return localStorage.getItem(TOKEN_KEY); }
@@ -216,79 +241,8 @@
                 renderSpecial(data.special);
                 const r = document.querySelector(`input[name="override"][value="${data.delivery_override}"]`);
                 if (r) r.checked = true;
-
-                const catRes = await fetch(`${API}/api/admin/subcategories-flat`, { headers: authHeaders() });
-                const subs = await catRes.json();
-                const sel1 = document.getElementById('p-cat-1');
-                const sel2 = document.getElementById('p-cat-2');
-                sel1.innerHTML = '<option value="">ללא קטגוריה</option>';
-                sel2.innerHTML = '<option value="">ללא קטגוריה נוספת</option>';
-                subs.forEach(c => {
-                    sel1.innerHTML += `<option value="${c.id}">${c.name}</option>`;
-                    sel2.innerHTML += `<option value="${c.id}">${c.name}</option>`;
-                });
             } catch { clearToken(); showLogin(); }
         }
-
-        window.handleCreateProduct = async function(e) {
-            e.preventDefault();
-            const btn = e.target.querySelector('button[type="submit"]');
-            const originalText = btn.textContent;
-            btn.textContent = 'מעלה...';
-            btn.disabled = true;
-
-            try {
-                const fileInput = document.getElementById('p-image-file');
-                let imageUrl = null;
-                
-                // העלאת התמונה לשרת אם נבחר קובץ
-                if (fileInput.files.length > 0) {
-                    const formData = new FormData();
-                    formData.append('file', fileInput.files[0]);
-                    const uploadRes = await fetch(`${API}/api/admin/upload-image`, {
-                        method: 'POST',
-                        headers: { 'Authorization': 'Bearer ' + token() },
-                        body: formData
-                    });
-                    if (!uploadRes.ok) throw new Error('שגיאה בהעלאת התמונה');
-                    const uploadData = await uploadRes.json();
-                    imageUrl = uploadData.url;
-                }
-
-                const cat1 = document.getElementById('p-cat-1').value;
-                const cat2 = document.getElementById('p-cat-2').value;
-                const category_ids = [];
-                if (cat1) category_ids.push(parseInt(cat1));
-                if (cat2 && cat2 !== cat1) category_ids.push(parseInt(cat2));
-
-                const body = {
-                    name: document.getElementById('p-name').value.trim(),
-                    price: parseFloat(document.getElementById('p-price').value),
-                    category_ids: category_ids,
-                    image_url: imageUrl,
-                    weight_grams: document.getElementById('p-weight').value ? parseInt(document.getElementById('p-weight').value) : null,
-                    units_per_package: document.getElementById('p-units').value ? parseInt(document.getElementById('p-units').value) : null,
-                };
-
-                const res = await fetch(`${API}/api/admin/products`, {
-                    method: 'POST',
-                    headers: authHeaders(),
-                    body: JSON.stringify(body)
-                });
-                
-                if(!res.ok) throw new Error('שגיאה בהוספת המוצר');
-                
-                const msg = document.getElementById('product-msg');
-                msg.textContent = 'המוצר נוסף בהצלחה לקטגוריות שנבחרו! ✓';
-                document.getElementById('add-product-form').reset();
-                setTimeout(() => msg.textContent = '', 4000);
-            } catch (err) {
-                alert(err.message);
-            } finally {
-                btn.textContent = originalText;
-                btn.disabled = false;
-            }
-        };
 
         function renderWeekly(days) {
             const list = document.getElementById('week-list');
@@ -398,6 +352,118 @@
             fetch(`${API}/api/admin/schedule/special/${id}`, { method: 'DELETE', headers: authHeaders() })
                 .then(() => loadAdminData());
         };
+
+        // --- טאבים ---
+        let productsLoaded = false;
+        window.switchTab = function(name) {
+            document.getElementById('tab-btn-hours').classList.toggle('active', name === 'hours');
+            document.getElementById('tab-btn-products').classList.toggle('active', name === 'products');
+            document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
+            document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
+            if (name === 'products' && !productsLoaded) loadProductsTab();
+        };
+
+        // --- טאב מוצרים וקטגוריות ---
+        const PLACEHOLDER_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60"><rect width="60" height="60" fill="%23FFD1DC"/><text x="50%" y="55%" font-size="24" text-anchor="middle" dominant-baseline="middle" fill="%23E05276">🧁</text></svg>');
+        let allProductsData = [];
+        let allSubcatsFlat = [];
+        let prodFilter = 'all';
+
+        async function loadProductsTab() {
+            const listEl = document.getElementById('prod-list');
+            listEl.textContent = 'טוען מוצרים...';
+            try {
+                const [prodRes, subRes] = await Promise.all([
+                    fetch(`${API}/api/products`),
+                    fetch(`${API}/api/admin/subcategories-flat`, { headers: authHeaders() })
+                ]);
+                if (!prodRes.ok || !subRes.ok) throw new Error('שגיאה בטעינת נתונים');
+                allProductsData = await prodRes.json();
+                allSubcatsFlat = await subRes.json();
+                productsLoaded = true;
+                renderProductRows();
+            } catch (e) {
+                listEl.textContent = 'שגיאה בטעינת המוצרים. נסי לרענן את הדף.';
+            }
+        }
+
+        window.setProdFilter = function(f) {
+            prodFilter = f;
+            ['all', 'nocat', 'onecat'].forEach(k => document.getElementById(`chip-${k}`).classList.toggle('active', k === f));
+            renderProductRows();
+        };
+
+        function catOptionsHtml(selectedId) {
+            let html = '<option value="">— ללא —</option>';
+            allSubcatsFlat.forEach(c => {
+                html += `<option value="${c.id}" ${String(c.id) === String(selectedId) ? 'selected' : ''}>${c.name}</option>`;
+            });
+            return html;
+        }
+
+        function renderProductRows() {
+            const listEl = document.getElementById('prod-list');
+            const search = (document.getElementById('prod-search').value || '').trim().toLowerCase();
+
+            let rows = allProductsData.filter(p => !search || p.name.toLowerCase().includes(search));
+            if (prodFilter === 'nocat') rows = rows.filter(p => !p.category_ids || p.category_ids.length === 0);
+            if (prodFilter === 'onecat') rows = rows.filter(p => p.category_ids && p.category_ids.length === 1);
+
+            if (!rows.length) { listEl.innerHTML = '<p style="color:var(--muted); padding:10px;">לא נמצאו מוצרים תואמים.</p>'; return; }
+
+            listEl.innerHTML = '';
+            rows.forEach(p => {
+                const catIds = p.category_ids || [];
+                const noCat = catIds.length === 0;
+                const cat1 = catIds[0] || '';
+                const cat2 = catIds[1] || '';
+                const img = (p.image && p.image.startsWith('/')) ? API + p.image : (p.image || PLACEHOLDER_IMG);
+
+                const row = document.createElement('div');
+                row.className = `prod-row ${noCat ? 'no-cat' : ''}`;
+                row.innerHTML = `
+                    <img src="${img}" onerror="this.src='${PLACEHOLDER_IMG}'" alt="">
+                    <div>
+                        <div class="prod-name">${p.name}</div>
+                        ${noCat ? '<span class="prod-warn">⚠️ ללא קטגוריה — לא מוצג באתר</span>' : ''}
+                    </div>
+                    <select class="prod-cat-select cat1-select">${catOptionsHtml(cat1)}</select>
+                    <select class="prod-cat-select cat2-select">${catOptionsHtml(cat2)}</select>
+                    <button class="prod-save-btn" type="button">שמור</button>
+                `;
+                const cat1Sel = row.querySelector('.cat1-select');
+                const cat2Sel = row.querySelector('.cat2-select');
+                const saveBtn = row.querySelector('.prod-save-btn');
+
+                saveBtn.onclick = async () => {
+                    const c1 = cat1Sel.value ? parseInt(cat1Sel.value) : null;
+                    const c2 = cat2Sel.value ? parseInt(cat2Sel.value) : null;
+                    const category_ids = [];
+                    if (c1) category_ids.push(c1);
+                    if (c2 && c2 !== c1) category_ids.push(c2);
+
+                    saveBtn.textContent = 'שומר...';
+                    saveBtn.disabled = true;
+                    try {
+                        const res = await fetch(`${API}/api/admin/products/${p.id}`, {
+                            method: 'PATCH', headers: authHeaders(),
+                            body: JSON.stringify({ category_ids })
+                        });
+                        if (!res.ok) throw new Error();
+                        p.category_ids = category_ids;
+                        saveBtn.textContent = '✓ נשמר';
+                        saveBtn.classList.add('saved');
+                        row.classList.toggle('no-cat', category_ids.length === 0);
+                        setTimeout(() => { saveBtn.textContent = 'שמור'; saveBtn.classList.remove('saved'); saveBtn.disabled = false; }, 1500);
+                    } catch {
+                        saveBtn.textContent = 'שגיאה, נסי שוב';
+                        saveBtn.disabled = false;
+                    }
+                };
+
+                listEl.appendChild(row);
+            });
+        }
 
         if (token()) showAdmin(); else showLogin();
     </script>

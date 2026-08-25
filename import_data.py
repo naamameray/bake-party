@@ -1,3 +1,6 @@
+import glob
+import sys
+
 import pandas as pd
 import psycopg2
 
@@ -161,7 +164,14 @@ def import_data(file_path):
         image_url = first_image(row["images"])
         
         # משיכת הערות מהאקסל אם קיימת העמודה "notes"
-        notes = str(row["notes"]) if "notes" in row and pd.notna(row["notes"]) else None
+        # וולט שומרים את התיאור בעמודה "description" (יש בה 1062 תיאורים!).
+        # אם אין description, ננסה גם "notes" ליתר ביטחון.
+        if "description" in row and pd.notna(row["description"]):
+            notes = str(row["description"])
+        elif "notes" in row and pd.notna(row["notes"]):
+            notes = str(row["notes"])
+        else:
+            notes = None
 
         cursor.execute(
             """
@@ -226,6 +236,48 @@ def import_data(file_path):
     )
 
 
+def find_excel_file():
+    """
+    מוצא אוטומטית את קובץ ה-xlsx בתיקייה, כדי שלא תצטרכי לעדכן שם קובץ
+    בקוד בכל פעם שמורידים גיליון חדש מוולט (השמות משתנים כל הזמן, כולל
+    איך שהם נשמרים אחרי הורדה/העלאה - סוגריים הופכים לפעמים לקו תחתון וכו').
+    אפשר גם להריץ: python import_data.py "שם_הקובץ.xlsx" כדי לציין ידנית.
+    """
+    if len(sys.argv) > 1:
+        return sys.argv[1]
+
+    candidates = [f for f in glob.glob("*.xlsx") if not f.startswith("~$")]
+    if not candidates:
+        print("לא נמצא קובץ xlsx בתיקייה. ודאי שקובץ האקסל של וולט נמצא באותה תיקייה, "
+              "או הריצי: python import_data.py \"שם_הקובץ.xlsx\"")
+        sys.exit(1)
+    if len(candidates) > 1:
+        print("נמצאו כמה קבצי xlsx בתיקייה:")
+        for c in candidates:
+            print("  -", c)
+        print("נא להריץ עם שם קובץ מפורש: python import_data.py \"שם_הקובץ.xlsx\"")
+        sys.exit(1)
+    return candidates[0]
+
+
 if __name__ == "__main__":
-    # !!! שימי לב להחליף את זה לשם של קובץ האקסל המקורי שלך !!!
-    import_data("[pinookim-givat-shmuel]-[2026-08-24]-[09_38].xlsx")
+    excel_file = find_excel_file()
+    print(f"משתמשת בקובץ: {excel_file}")
+
+    # --- אישור בטיחות ---
+    # מריצים את הסקריפט הזה כבר לא באופן שוטף (המחירים והמידע מנוהלים
+    # ידנית באתר עכשיו), אז זו הפכה לפעולה נדירה וממש הרסנית: היא מוחקת
+    # ובונה מחדש את כל טבלאות Products ו-Categories, כלומר כל שינוי ידני
+    # שנעשה דרך פאנל הניהול (מחירים, קטגוריות, תמונות, מוצרים שנמחקו) הולך
+    # לאיבוד ומוחלף בנתונים הגולמיים מוולט. בלי אישור מפורש, קל מדי להריץ
+    # את זה בטעות ולאבד עבודה של ימים.
+    print()
+    print("⚠️  שימו לב: הרצה זו תמחק ותבנה מחדש את טבלאות Products ו-Categories.")
+    print("   כל שינוי ידני שנעשה דרך פאנל הניהול (מחירים, קטגוריות, תמונות,")
+    print("   מוצרים שנמחקו) יימחק ויוחלף בנתונים הגולמיים מהאקסל של וולט.")
+    confirm = input("   להמשיך בכל זאת? הקלידו בדיוק: כן / yes  ").strip().lower()
+    if confirm not in ("כן", "yes", "y"):
+        print("בוטל. שום דבר לא נמחק.")
+        sys.exit(0)
+
+    import_data(excel_file)

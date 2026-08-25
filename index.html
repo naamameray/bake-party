@@ -4,6 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bake & Party - אפייה ומסיבות</title>
+    <link rel="icon" type="image/jpeg" href="logo.jpg">
+    <meta name="description" content="Bake & Party - חנות אפייה ומסיבות בגבעת שמואל. חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע. שעות פתיחה, יצירת קשר ומשלוחים מעל 200 ₪.">
+    <meta property="og:title" content="Bake & Party - אפייה ומסיבות">
+    <meta property="og:description" content="חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע ומסיבה.">
+    <meta property="og:image" content="logo.jpg">
+    <meta property="og:type" content="website">
+    <!-- TEMP: חוסם אינדוקס בגוגל עד שהאתר מוכן להשקה רשמית. -->
+    <!-- להסיר את השורה הזו (ורק אותה) כשמשיקים בפועל! -->
+    <meta name="robots" content="noindex, nofollow">
+    <!-- /TEMP -->
     <style>
         :root {
             --cream: #FFF9F5; --pink-light: #FFD1DC; --pink-main: #FF85A2;
@@ -18,12 +28,43 @@
             border-radius: 50%; width: 55px; height: 55px; font-size: 28px; cursor: pointer; z-index: 9999; 
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; transition: 0.3s; }
         #a11y-btn:hover { background: #004494; transform: translateY(-3px); }
-        
+
+        /* כפתור ווצאפ צף */
+        #wa-btn { position: fixed; bottom: 85px; left: 20px; background: #25D366; color: white; border: none;
+            border-radius: 50%; width: 55px; height: 55px; font-size: 30px; cursor: pointer; z-index: 9999;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;
+            text-decoration: none; transition: 0.3s; }
+        #wa-btn:hover { background: #1da851; transform: translateY(-3px); }
+
+        /* פאנל נגישות */
+        #a11y-panel { position: fixed; bottom: 85px; left: 20px; width: 270px; background: #fff; border-radius: 16px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.25); z-index: 10000; padding: 16px; display: none;
+            border: 2px solid #005eb8; direction: rtl; }
+        #a11y-panel.open { display: block; }
+        #a11y-panel h3 { margin: 0 0 12px; color: #005eb8; text-align: center; font-size: 1.1em; }
+        .a11y-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+        .a11y-row span { font-weight: 600; font-size: 0.95em; color: #222; }
+        .a11y-opt { background: #eef4fb; border: 2px solid #cfe0f2; color: #005eb8; border-radius: 10px;
+            padding: 8px 10px; cursor: pointer; font-family: inherit; font-weight: bold; font-size: 0.9em; flex: 1; }
+        .a11y-opt:hover { background: #dce9f7; }
+        .a11y-opt.active { background: #005eb8; color: #fff; border-color: #005eb8; }
+        .a11y-font-btns { display: flex; gap: 6px; }
+        .a11y-font-btns button { width: 40px; }
+        #a11y-reset { background: #d9534f; color: #fff; border: none; border-radius: 10px; padding: 9px;
+            width: 100%; margin-top: 6px; cursor: pointer; font-family: inherit; font-weight: bold; }
+
+        /* מצבי נגישות */
         body.high-contrast { background: #121212 !important; color: #fff !important; }
         body.high-contrast header, body.high-contrast .cat-menu-bar, body.high-contrast .sidebar, 
         body.high-contrast .modal, body.high-contrast .product-card, body.high-contrast .detail-img-wrap { background: #1e1e1e !important; border-color: #555 !important; }
-        body.high-contrast * { color: #fff !important; }
+        body.high-contrast *:not(#a11y-panel):not(#a11y-panel *) { color: #fff !important; }
         body.high-contrast .btn { background: #fff !important; color: #000 !important; }
+        body.a11y-links a, body.a11y-links .crumb, body.a11y-links .cat-menu-trigger,
+        body.a11y-links button:not(.a11y-opt):not(#a11y-reset) { text-decoration: underline !important; outline: 2px solid currentColor; outline-offset: 1px; }
+        body.a11y-noanim *, body.a11y-noanim *::before, body.a11y-noanim *::after {
+            animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+        body.a11y-readable, body.a11y-readable * { font-family: Arial, "Segoe UI", sans-serif !important; letter-spacing: 0.4px; line-height: 1.7 !important; }
+
 
         #back-to-top { position: fixed; bottom: 20px; right: 20px; background: var(--pink-main); color: white; border: none; 
             border-radius: 50%; width: 55px; height: 55px; font-size: 24px; cursor: pointer; z-index: 9999; 
@@ -47,6 +88,12 @@
 
         #status-bar { background-color: var(--pink-main); color: white; text-align: center; padding: 6px 10px; font-weight: bold; font-size: 0.95em; }
 
+        #construction-banner { background: #FFF3E0; color: #8a5a12; border-bottom: 2px solid #F5C874;
+            text-align: center; padding: 9px 40px 9px 15px; font-size: 0.9em; font-weight: 600; position: relative; }
+        #construction-banner .cb-close { position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+            background: none; border: none; color: #8a5a12; font-size: 1.3em; cursor: pointer; line-height: 1; padding: 4px 8px; }
+        #construction-banner .cb-close:hover { opacity: 0.7; }
+
         .cat-menu-bar { background: #fff; display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
             gap: 4px; padding: 6px 12px; position: relative; z-index: 40; border-bottom: 2px solid var(--pink-light); }
         .cat-menu-home { background: var(--pink-main); color: #fff; border: none; border-radius: 16px;
@@ -58,6 +105,7 @@
         .cat-menu-trigger .arrow { font-size: 0.75em; transition: transform 0.2s; color: var(--pink-main); }
         .cat-menu-item.open .cat-menu-trigger .arrow { transform: rotate(180deg); }
         .cat-dropdown { position: absolute; top: 100%; right: 0; margin-top: 6px; min-width: 210px; background: #fff; border: 2px solid var(--pink-light); border-radius: 14px; box-shadow: 0 8px 20px rgba(224,82,118,0.18); padding: 6px; display: none; z-index: 60; }
+        .cat-dropdown::before { content: ''; position: absolute; top: -10px; left: 0; right: 0; height: 10px; background: transparent; }
         .cat-menu-item:hover .cat-dropdown, .cat-menu-item.open .cat-dropdown { display: block; }
         .cat-dropdown button { display: block; width: 100%; text-align: right; background: none; border: none; font-family: inherit; font-size: 0.9em; color: var(--text-color); padding: 8px 12px; border-radius: 10px; cursor: pointer; white-space: nowrap; }
         .cat-dropdown button:hover { background: var(--pink-light); color: var(--pink-dark); }
@@ -108,6 +156,32 @@
         #about-section h3 { color: var(--pink-dark); font-size: 1.6em; margin-bottom: 10px; }
         #about-section p { font-size: 1.15em; line-height: 1.6; color: var(--text-color); }
 
+        /* --- רצועת יתרונות (למה לקנות אצלנו) --- */
+        #features-section { max-width: 1100px; margin: 10px auto 40px; padding: 0 20px; display: none; }
+        .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 20px; }
+        .feature-card { background: #fff; border: 2px solid var(--pink-light); border-radius: 18px; padding: 22px 16px;
+            text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.02); transition: transform 0.2s, box-shadow 0.2s; }
+        .feature-card:hover { transform: translateY(-4px); box-shadow: 0 10px 20px var(--shadow); }
+        .feature-icon { width: 60px; height: 60px; margin: 0 auto 12px; border-radius: 50%; background: var(--pink-light);
+            display: flex; align-items: center; justify-content: center; }
+        .feature-icon svg { width: 30px; height: 30px; }
+        .feature-card h4 { margin: 0 0 6px; color: var(--pink-dark); font-size: 1.05em; }
+        .feature-card p { margin: 0; font-size: 0.88em; color: var(--muted); line-height: 1.5; }
+
+        /* --- כותרת תחתונה (footer) --- */
+        footer#site-footer { background: var(--pink-light); margin-top: 50px; padding: 34px 20px 18px; color: var(--text-color); }
+        .footer-inner { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 28px; }
+        .footer-col h4 { color: var(--pink-dark); margin: 0 0 12px; font-size: 1.05em; }
+        .footer-col p, .footer-col a { font-size: 0.92em; line-height: 1.8; color: var(--text-color); text-decoration: none; }
+        .footer-col a:hover { color: var(--pink-dark); text-decoration: underline; }
+        .footer-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .footer-brand img { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; }
+        .footer-brand strong { color: var(--pink-dark); font-size: 1.15em; }
+        .footer-hours-list { list-style: none; padding: 0; margin: 0; font-size: 0.88em; }
+        .footer-hours-list li { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px dashed rgba(74,46,53,0.12); }
+        .footer-bottom { max-width: 1200px; margin: 22px auto 0; padding-top: 16px; border-top: 1px solid rgba(74,46,53,0.15);
+            text-align: center; font-size: 0.85em; color: var(--muted); }
+
         .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 25px; }
         .product-card { background: white; border: 2px solid var(--pink-light); border-radius: 20px; padding: 15px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); display: flex; flex-direction: column; justify-content: space-between; transition: box-shadow 0.2s; cursor: pointer; }
         .product-card:hover { box-shadow: 0 8px 18px var(--shadow); transform: translateY(-3px); }
@@ -115,6 +189,25 @@
         .product-card h3 { font-size: 1.1em; margin: 10px 0; min-height: 40px; }
         .price { font-size: 1.4em; color: var(--pink-dark); font-weight: bold; margin: 10px 0; }
         .state-msg { text-align: center; color: var(--muted); padding: 40px 0; font-size: 1.1em; grid-column: 1 / -1; }
+
+        /* --- מעבר עדין (fade) בין קטגוריות/מוצרים בזמן ניווט --- */
+        #categories-container, #products-container { transition: opacity 0.22s ease; }
+        #categories-container.fade-out, #products-container.fade-out { opacity: 0; }
+
+        /* --- Skeleton loading (טעינה ראשונית, במקום מסך ריק) --- */
+        .skeleton-shimmer { position: relative; overflow: hidden; background: #ecdfe2; }
+        .skeleton-shimmer::after { content: ''; position: absolute; inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent);
+            transform: translateX(-100%); animation: skeleton-sweep 1.3s ease-in-out infinite; }
+        @keyframes skeleton-sweep { 100% { transform: translateX(100%); } }
+        .skeleton-circle { width: 150px; height: 150px; border-radius: 50%; margin: 0 auto; }
+        .skeleton-line { height: 15px; width: 65%; border-radius: 8px; margin: 14px auto 0; }
+        .skeleton-product { background: white; border: 2px solid var(--pink-light); border-radius: 20px; padding: 15px; height: 300px; display: flex; flex-direction: column; gap: 12px; }
+        .skeleton-img { width: 100%; height: 160px; border-radius: 14px; }
+        .skeleton-text { height: 16px; border-radius: 8px; }
+        .skeleton-text.w60 { width: 60%; }
+        .skeleton-text.w40 { width: 40%; }
+        body.a11y-noanim .skeleton-shimmer::after { animation: none !important; }
 
         .modal-overlay { position: fixed; inset: 0; background: rgba(74,46,53,0.45); display: none; align-items: center; justify-content: center; z-index: 2000; padding: 20px; }
         .modal-overlay.open { display: flex; }
@@ -152,7 +245,29 @@
 </head>
 <body>
 
-    <button id="a11y-btn" onclick="toggleA11y()" title="הגדרות נגישות" aria-label="נגישות">♿</button>
+    <button id="a11y-btn" onclick="toggleA11yPanel()" title="הגדרות נגישות" aria-label="פתיחת תפריט נגישות" aria-haspopup="true">♿</button>
+    <a id="wa-btn" href="#" target="_blank" rel="noopener" title="שליחת הודעת וואטסאפ" aria-label="צ'אט וואטסאפ">
+        <svg viewBox="0 0 32 32" width="30" height="30" fill="#fff" xmlns="http://www.w3.org/2000/svg">
+            <path d="M16.005 3C9.377 3 4 8.373 4 15c0 2.34.68 4.523 1.86 6.36L4 29l7.84-1.83A11.93 11.93 0 0 0 16.005 27C22.633 27 28 21.627 28 15S22.633 3 16.005 3zm0 21.7c-1.94 0-3.75-.53-5.31-1.45l-.38-.22-4.65 1.09 1.11-4.53-.25-.4A9.63 9.63 0 0 1 6.3 15c0-5.36 4.36-9.7 9.7-9.7 5.36 0 9.7 4.34 9.7 9.7 0 5.36-4.34 9.7-9.7 9.7zm5.32-7.27c-.29-.15-1.72-.85-1.99-.95-.27-.1-.46-.15-.66.15-.2.29-.76.95-.93 1.15-.17.2-.34.22-.63.07-.29-.15-1.22-.45-2.32-1.43-.86-.76-1.44-1.71-1.6-2-.17-.29-.02-.45.13-.6.13-.13.29-.34.44-.51.15-.17.2-.29.29-.49.1-.2.05-.37-.02-.51-.07-.15-.66-1.59-.9-2.18-.24-.57-.48-.5-.66-.51-.17-.01-.37-.01-.56-.01-.2 0-.51.07-.78.37-.27.29-1.02 1-1.02 2.43 0 1.43 1.05 2.81 1.19 3 .15.2 2.06 3.14 5 4.4.7.3 1.24.48 1.67.62.7.22 1.34.19 1.84.12.56-.08 1.72-.7 1.97-1.38.24-.68.24-1.26.17-1.38-.07-.13-.26-.2-.55-.35z"/>
+        </svg>
+    </a>
+
+    <div id="a11y-panel" role="dialog" aria-label="הגדרות נגישות">
+        <h3>הגדרות נגישות</h3>
+        <div class="a11y-row">
+            <span>גודל טקסט</span>
+            <div class="a11y-font-btns">
+                <button class="a11y-opt" onclick="a11yFont(-1)" aria-label="הקטן טקסט">א−</button>
+                <button class="a11y-opt" onclick="a11yFont(0)" aria-label="איפוס גודל">א</button>
+                <button class="a11y-opt" onclick="a11yFont(1)" aria-label="הגדל טקסט">א+</button>
+            </div>
+        </div>
+        <div class="a11y-row"><span>ניגודיות גבוהה</span><button class="a11y-opt" data-a11y="high-contrast" onclick="a11yToggle('high-contrast', this)">הפעל</button></div>
+        <div class="a11y-row"><span>הדגשת קישורים</span><button class="a11y-opt" data-a11y="a11y-links" onclick="a11yToggle('a11y-links', this)">הפעל</button></div>
+        <div class="a11y-row"><span>עצירת אנימציות</span><button class="a11y-opt" data-a11y="a11y-noanim" onclick="a11yToggle('a11y-noanim', this)">הפעל</button></div>
+        <div class="a11y-row"><span>גופן קריא</span><button class="a11y-opt" data-a11y="a11y-readable" onclick="a11yToggle('a11y-readable', this)">הפעל</button></div>
+        <button id="a11y-reset" onclick="a11yReset()">איפוס כל ההגדרות</button>
+    </div>
     <button id="back-to-top" onclick="window.scrollTo({top: 0, behavior: 'smooth'})" title="חזור למעלה">⬆</button>
 
     <div class="sticky-wrapper">
@@ -167,8 +282,13 @@
             </div>
         </header>
 
-        <div id="status-bar">משלוחים זמינים להזמנות מעל 200 ₪ (החלוקה מתבצעת לאחר שעות הסגירה)</div>
+        <div id="status-bar">משלוחים בתיאום טלפוני/וואטסאפ להזמנות מעל 200 ₪ (החלוקה מתבצעת לאחר שעות הסגירה)</div>
         <nav class="cat-menu-bar" id="cat-menu-bar" aria-label="תפריט קטגוריות"></nav>
+    </div>
+
+    <div id="construction-banner">
+        🚧 האתר עדיין בבנייה — בקרוב תתווסף גם אפשרות הזמנה ישירות דרך האתר!
+        <button class="cb-close" type="button" onclick="dismissConstructionBanner()" aria-label="סגירת הודעה">×</button>
     </div>
 
     <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
@@ -191,9 +311,24 @@
         
         <div class="sidebar-item" onclick="toggleAccordion('info-contact')">📞 צור קשר</div>
         <div id="info-contact" class="sidebar-content">
-            <strong>טלפון לבירורים:</strong> 054-9881998 (פנחס)<br>
-            <strong>כתובת:</strong> יוני נתניהו 21, גבעת שמואל<br>
-            <strong>אימייל:</strong> pinukimmam@gmail.com
+            <div id="contact-display">
+                <strong>טלפון לבירורים:</strong> <span id="c-phone">...</span><br>
+                <strong>כתובת:</strong> <span id="c-address">...</span><br>
+                <strong>אימייל:</strong> <span id="c-email">...</span>
+            </div>
+            <button id="contact-edit-btn" class="btn btn-sm btn-ghost" style="display:none; margin-top:10px;" onclick="showContactEdit()">✏️ ערוך פרטי קשר</button>
+            <div id="contact-edit" style="display:none; margin-top:10px;">
+                <label style="font-size:0.85em; font-weight:bold;">טלפון</label>
+                <input id="ce-phone" style="width:100%; padding:6px; margin:3px 0; border:1px solid var(--pink-main); border-radius:6px;">
+                <label style="font-size:0.85em; font-weight:bold;">כתובת</label>
+                <input id="ce-address" style="width:100%; padding:6px; margin:3px 0; border:1px solid var(--pink-main); border-radius:6px;">
+                <label style="font-size:0.85em; font-weight:bold;">אימייל</label>
+                <input id="ce-email" style="width:100%; padding:6px; margin:3px 0; border:1px solid var(--pink-main); border-radius:6px;">
+                <label style="font-size:0.85em; font-weight:bold;">מספר וואטסאפ (בפורמט 9725...)</label>
+                <input id="ce-whatsapp" style="width:100%; padding:6px; margin:3px 0; border:1px solid var(--pink-main); border-radius:6px;">
+                <button class="btn btn-sm" style="width:100%; margin-top:6px;" onclick="saveContact()">שמור</button>
+                <p id="contact-msg" style="font-size:0.85em; text-align:center; margin:6px 0 0;"></p>
+            </div>
         </div>
         
         <div class="sidebar-item ai-btn" onclick="alert('העוזר/ת החכם/ה שלנו (מבוסס AI) נמצא/ת בפיתוח ותעלה לאוויר בקרוב! 🤖🧁')">
@@ -209,18 +344,76 @@
         </div>
         
         <div id="categories-container" class="categories-container"></div>
-        
+
+        <section id="features-section">
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#E05276" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.6 6.6L22 9l-5.5 4.6L18 22l-6-4.2L6 22l1.5-8.4L2 9l7.4-.4L12 2z"/></svg></div>
+                    <h4>מוצרים איכותיים</h4>
+                    <p>מבחר מוקפד של חומרי גלם, אביזרי אפייה וקישוטים – רק מה שהיינו רוצות בעצמנו בבית.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#E05276" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 1 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg></div>
+                    <h4>שירות אישי ומקצועי</h4>
+                    <p>כל שאלה, ייעוץ או בקשה מיוחדת – זמינים עבורכם באמצעות הטלפון והוואטסאפ.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#E05276" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/></svg></div>
+                    <h4>מגוון ענק לכל אירוע</h4>
+                    <p>מיום הולדת ועד חתונה – כל מה שצריך לאפייה ולעיצוב המסיבה במקום אחד.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="#E05276" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h11v9H3z"/><path d="M14 10h4l3 3v3h-7z"/><circle cx="7.5" cy="18.5" r="1.5"/><circle cx="17.5" cy="18.5" r="1.5"/></svg></div>
+                    <h4>משלוחים עד הבית</h4>
+                    <p>צרו קשר טלפוני להזמנת משלוח מעל 200 ₪ – מחולק אצלכם לאחר שעות הסגירה.</p>
+                </div>
+            </div>
+        </section>
+
         <section id="about-section">
             <h3>קצת עלינו</h3>
             <p>
-                ברוכים הבאים ל-Bake & Party! המקום בו כל חלום מתוק הופך למציאות. 
-                אנחנו מציעים את מיטב חומרי הגלם, אביזרי האפייה והקישוטים שיהפכו כל אירוע ומסיבה לבלתי נשכחים. 
+                ברוכים הבאים ל-Bake & Party! המקום בו כל חלום מתוק הופך למציאות.
+                אנחנו מציעים את מיטב חומרי הגלם, אביזרי האפייה והקישוטים שיהפכו כל אירוע ומסיבה לבלתי נשכחים.
                 הכל נבחר בקפידה ובאהבה כדי להבטיח לכם תוצאה מושלמת בכל פעם מחדש.
+            </p>
+            <p>
+                אנחנו ממוקמים בגבעת שמואל ושמחים לקבל גם לקוחות שמעדיפים להגיע ולבחור בעצמם, וגם כאלה שמעדיפים
+                ליצור קשר טלפוני או בוואטסאפ ולקבל עזרה בבחירה. חנות משפחתית, בגישה אישית וחמה – ממש כמו שאפייה טובה אמורה להרגיש.
             </p>
         </section>
 
         <div id="products-container" class="products-grid"></div>
     </main>
+
+    <footer id="site-footer">
+        <div class="footer-inner">
+            <div class="footer-col">
+                <div class="footer-brand">
+                    <img src="logo.jpg" alt="לוגו Bake & Party">
+                    <strong>Bake & Party</strong>
+                </div>
+                <p>אפייה ומסיבות – כל מה שצריך כדי להפוך כל יום לחגיגה.</p>
+            </div>
+            <div class="footer-col">
+                <h4>יצירת קשר</h4>
+                <p>טלפון: <span id="f-phone">...</span></p>
+                <p>כתובת: <span id="f-address">...</span></p>
+                <p>אימייל: <a id="f-email" href="#"></a></p>
+            </div>
+            <div class="footer-col">
+                <h4>שעות פעילות</h4>
+                <ul class="footer-hours-list" id="footer-hours-list"><li>טוען שעות...</li></ul>
+            </div>
+            <div class="footer-col">
+                <h4>ניווט מהיר</h4>
+                <p><a href="#" onclick="goHome(); window.scrollTo({top:0,behavior:'smooth'}); return false;">דף הבית</a></p>
+                <p><a href="#" onclick="toggleSidebar(); return false;">תפריט וקטגוריות</a></p>
+                <p><a href="#" id="f-whatsapp" target="_blank" rel="noopener">שליחת הודעה בוואטסאפ</a></p>
+            </div>
+        </div>
+        <div class="footer-bottom">© <span id="f-year"></span> Bake & Party – אפייה ומסיבות. כל הזכויות שמורות.</div>
+    </footer>
 
     <!-- מודל התחברות / הרשמה -->
     <div class="modal-overlay" id="auth-modal">
@@ -305,7 +498,7 @@
     </div>
 
     <script>
-        const API = 'http://localhost:8000';
+        const API = window.location.origin;  // עובד גם מקומית (localhost:8000) וגם בפרודקשן
         const TOKEN_KEY = 'bp_token';
         const PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150"><rect width="150" height="150" fill="%23FFD1DC"/><text x="50%" y="52%" font-size="48" text-anchor="middle" dominant-baseline="middle" fill="%23E05276">🧁</text></svg>');
 
@@ -315,12 +508,157 @@
         let view = 'mains', currentMain = null, currentSub = null;
         let currentFilteredProducts = null;
 
+        // --- מעבר עדין (fade) בין תצוגות ---
+        const FADE_MS = 180;
+        function fadeOutContent() {
+            document.getElementById('categories-container').classList.add('fade-out');
+            document.getElementById('products-container').classList.add('fade-out');
+        }
+        function fadeInContent() {
+            // ה-rAF מוודא שהדפדפן "יראה" את שינוי התוכן לפני שמתחילים להעלות את השקיפות בחזרה,
+            // כדי שהאנימציה תרוץ בכל פעם (גם אם ה-DOM כבר היה fade-out).
+            requestAnimationFrame(() => {
+                document.getElementById('categories-container').classList.remove('fade-out');
+                document.getElementById('products-container').classList.remove('fade-out');
+            });
+        }
+
+        // --- Skeleton loading: מלבנים מהבהבים בזמן טעינה ראשונית ---
+        function renderSkeletonCategories(count = 8) {
+            const container = document.getElementById('categories-container');
+            container.style.display = 'grid';
+            let html = '';
+            for (let i = 0; i < count; i++) {
+                html += `<div class="category-circle" style="cursor:default;">
+                    <span class="circle-img skeleton-circle skeleton-shimmer" style="border-color: var(--pink-light);"></span>
+                    <span class="skeleton-line skeleton-shimmer"></span>
+                </div>`;
+            }
+            container.innerHTML = html;
+        }
+        function renderSkeletonProducts(count = 8) {
+            const container = document.getElementById('products-container');
+            let html = '';
+            for (let i = 0; i < count; i++) {
+                html += `<div class="skeleton-product">
+                    <span class="skeleton-img skeleton-shimmer"></span>
+                    <span class="skeleton-text w60 skeleton-shimmer"></span>
+                    <span class="skeleton-text w40 skeleton-shimmer"></span>
+                </div>`;
+            }
+            container.innerHTML = html;
+        }
+
         function token(){ return localStorage.getItem(TOKEN_KEY); }
         function setToken(t){ localStorage.setItem(TOKEN_KEY, t); }
         function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
         function authHeaders(){ return { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' }; }
 
-        window.toggleA11y = function() { document.body.classList.toggle('high-contrast'); };
+        // --- נגישות: פאנל מלא עם שמירה ---
+        const A11Y_KEY = 'bp_a11y';
+
+        // --- הודעת "אתר בבנייה" - נסגרת ולא חוזרת ---
+        const CB_KEY = 'bp_construction_dismissed';
+        if (localStorage.getItem(CB_KEY)) {
+            const cb = document.getElementById('construction-banner');
+            if (cb) cb.style.display = 'none';
+        }
+        window.dismissConstructionBanner = function() {
+            localStorage.setItem(CB_KEY, '1');
+            document.getElementById('construction-banner').style.display = 'none';
+        };
+        let a11yState = JSON.parse(localStorage.getItem(A11Y_KEY) || '{"font":0,"classes":[]}');
+
+        function a11ySave() { localStorage.setItem(A11Y_KEY, JSON.stringify(a11yState)); }
+
+        function a11yApply() {
+            // גודל טקסט: 0 ברירת מחדל, כל צעד 12%
+            document.documentElement.style.fontSize = (100 + a11yState.font * 12) + '%';
+            ['high-contrast','a11y-links','a11y-noanim','a11y-readable'].forEach(c => document.body.classList.remove(c));
+            a11yState.classes.forEach(c => document.body.classList.add(c));
+            // סימון הכפתורים הפעילים בפאנל
+            document.querySelectorAll('.a11y-opt[data-a11y]').forEach(btn => {
+                const on = a11yState.classes.includes(btn.dataset.a11y);
+                btn.classList.toggle('active', on);
+                btn.textContent = on ? 'בטל' : 'הפעל';
+            });
+        }
+
+        window.toggleA11yPanel = function() { document.getElementById('a11y-panel').classList.toggle('open'); };
+        window.a11yFont = function(dir) {
+            if (dir === 0) a11yState.font = 0;
+            else a11yState.font = Math.max(-2, Math.min(4, a11yState.font + dir));
+            a11ySave(); a11yApply();
+        };
+        window.a11yToggle = function(cls) {
+            const i = a11yState.classes.indexOf(cls);
+            if (i >= 0) a11yState.classes.splice(i, 1); else a11yState.classes.push(cls);
+            a11ySave(); a11yApply();
+        };
+        window.a11yReset = function() {
+            a11yState = { font: 0, classes: [] }; a11ySave(); a11yApply();
+        };
+        // סגירת הפאנל בלחיצה בחוץ
+        document.addEventListener('click', (e) => {
+            const panel = document.getElementById('a11y-panel');
+            if (panel.classList.contains('open') && !e.target.closest('#a11y-panel') && !e.target.closest('#a11y-btn')) {
+                panel.classList.remove('open');
+            }
+        });
+        a11yApply(); // החלת ההגדרות השמורות בטעינה
+
+        // --- פרטי יצירת קשר + כפתור ווצאפ ---
+        let contactInfo = null;
+        function loadContact() {
+            fetch(`${API}/api/contact`).then(res => res.json()).then(c => {
+                contactInfo = c;
+                const ph = document.getElementById('c-phone'); if (ph) ph.textContent = c.phone;
+                const ad = document.getElementById('c-address'); if (ad) ad.textContent = c.address;
+                const em = document.getElementById('c-email'); if (em) em.textContent = c.email;
+                const wa = document.getElementById('wa-btn');
+                if (wa && c.whatsapp) wa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, '')}`;
+
+                const fph = document.getElementById('f-phone'); if (fph) fph.textContent = c.phone;
+                const fad = document.getElementById('f-address'); if (fad) fad.textContent = c.address;
+                const fem = document.getElementById('f-email'); if (fem) { fem.textContent = c.email; fem.href = `mailto:${c.email}`; }
+                const fwa = document.getElementById('f-whatsapp');
+                if (fwa && c.whatsapp) fwa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, '')}`;
+            }).catch(() => {});
+        }
+        window.showContactEdit = function() {
+            if (!contactInfo) return;
+            document.getElementById('ce-phone').value = contactInfo.phone;
+            document.getElementById('ce-address').value = contactInfo.address;
+            document.getElementById('ce-email').value = contactInfo.email;
+            document.getElementById('ce-whatsapp').value = contactInfo.whatsapp;
+            document.getElementById('contact-display').style.display = 'none';
+            document.getElementById('contact-edit-btn').style.display = 'none';
+            document.getElementById('contact-edit').style.display = 'block';
+        };
+        window.saveContact = function() {
+            const body = {
+                phone: document.getElementById('ce-phone').value.trim(),
+                address: document.getElementById('ce-address').value.trim(),
+                email: document.getElementById('ce-email').value.trim(),
+                whatsapp: document.getElementById('ce-whatsapp').value.trim(),
+            };
+            fetch(`${API}/api/admin/contact`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify(body) })
+                .then(res => res.json().then(d => ({ ok: res.ok, d })))
+                .then(({ ok }) => {
+                    if (!ok) throw new Error('שגיאה');
+                    document.getElementById('contact-msg').style.color = 'var(--ok, green)';
+                    document.getElementById('contact-msg').textContent = 'נשמר בהצלחה ✓';
+                    document.getElementById('contact-edit').style.display = 'none';
+                    document.getElementById('contact-display').style.display = 'block';
+                    document.getElementById('contact-edit-btn').style.display = 'block';
+                    loadContact();
+                })
+                .catch(() => {
+                    document.getElementById('contact-msg').style.color = 'var(--pink-dark)';
+                    document.getElementById('contact-msg').textContent = 'השמירה נכשלה';
+                });
+        };
+        loadContact();
 
         window.addEventListener('scroll', () => {
             const btt = document.getElementById('back-to-top');
@@ -396,6 +734,8 @@
                     <button class="btn btn-sm" onclick="openAuth('login')" style="margin-bottom:8px;">כניסה / התחברות</button>
                     <button class="btn btn-sm btn-ghost" onclick="openAuth('register')">הרשמה</button>`;
             }
+            const cEdit = document.getElementById('contact-edit-btn');
+            if (cEdit) cEdit.style.display = (currentUser && currentUser.role === 'admin') ? 'block' : 'none';
         }
 
         async function initApp() {
@@ -592,37 +932,53 @@
         function goHome() { loadMainCategories(); }
 
         function loadMainCategories() {
-            view = 'mains'; currentMain = null; currentSub = null; currentFilteredProducts = null;
-            document.getElementById('back-button').style.display = 'none';
-            document.getElementById('main-title').textContent = 'הקטגוריות שלנו';
-            document.getElementById('products-container').innerHTML = '';
-            document.getElementById('categories-container').style.display = 'grid';
-            document.getElementById('about-section').style.display = 'block';
-            renderCategoryCircles(allCategories, true);
-            updateBreadcrumb([{label: 'דף ראשי'}]);
+            fadeOutContent();
+            setTimeout(() => {
+                view = 'mains'; currentMain = null; currentSub = null; currentFilteredProducts = null;
+                document.getElementById('back-button').style.display = 'none';
+                document.getElementById('main-title').textContent = 'הקטגוריות שלנו';
+                document.getElementById('products-container').innerHTML = '';
+                document.getElementById('categories-container').style.display = 'grid';
+                document.getElementById('about-section').style.display = 'block';
+                document.getElementById('features-section').style.display = 'block';
+                renderCategoryCircles(allCategories, true);
+                updateBreadcrumb([{label: 'דף ראשי'}]);
+                fadeInContent();
+            }, FADE_MS);
         }
 
         function openMain(main) {
             currentMain = main; currentSub = null;
             document.getElementById('about-section').style.display = 'none';
-            if (main.has_children) {
-                view = 'subs';
-                document.getElementById('main-title').textContent = main.name;
-                document.getElementById('back-button').style.display = 'block';
-                document.getElementById('products-container').innerHTML = '';
-                document.getElementById('categories-container').style.display = 'grid';
-                fetch(`${API}/api/categories/${main.id}/subcategories`).then(res => res.json())
-                    .then(subs => renderCategoryCircles(subs, false));
-                updateBreadcrumb([{label:'דף ראשי', fn: goHome}, {label: main.name}]);
-            } else {
-                const prods = allProducts.filter(p => p.category_id === main.id || (p.category_ids && p.category_ids.includes(main.id)));
-                showProducts(prods, main.name, [{label:'דף ראשי', fn: goHome}, {label: main.name}]);
-            }
+            document.getElementById('features-section').style.display = 'none';
+            fadeOutContent();
+            setTimeout(() => {
+                if (main.has_children) {
+                    view = 'subs';
+                    document.getElementById('main-title').textContent = main.name;
+                    document.getElementById('back-button').style.display = 'block';
+                    document.getElementById('products-container').innerHTML = '';
+                    document.getElementById('categories-container').style.display = 'grid';
+                    fetch(`${API}/api/categories/${main.id}/subcategories`).then(res => res.json())
+                        .then(subs => { renderCategoryCircles(subs, false); fadeInContent(); });
+                    updateBreadcrumb([{label:'דף ראשי', fn: goHome}, {label: main.name}]);
+                } else {
+                    const prods = allProducts.filter(p => p.category_id === main.id || (p.category_ids && p.category_ids.includes(main.id)));
+                    view = 'products'; currentFilteredProducts = prods;
+                    document.getElementById('main-title').textContent = main.name;
+                    document.getElementById('back-button').style.display = 'block';
+                    document.getElementById('categories-container').style.display = 'none';
+                    updateBreadcrumb([{label:'דף ראשי', fn: goHome}, {label: main.name}]);
+                    renderProducts(prods);
+                    fadeInContent();
+                }
+            }, FADE_MS);
         }
 
         function openSub(sub) {
             currentSub = sub;
             document.getElementById('about-section').style.display = 'none';
+            document.getElementById('features-section').style.display = 'none';
             const prods = allProducts.filter(p => p.category_id === sub.id || (p.category_ids && p.category_ids.includes(sub.id)));
             const crumbs = [{label:'דף ראשי', fn: goHome}];
             if (currentMain) crumbs.push({label: currentMain.name, fn: () => openMain(currentMain)});
@@ -652,13 +1008,18 @@
         }
 
         function showProducts(prods, title, crumbs) {
-            view = 'products'; currentFilteredProducts = prods;
-            document.getElementById('main-title').textContent = title;
-            document.getElementById('back-button').style.display = 'block';
-            document.getElementById('categories-container').style.display = 'none';
             document.getElementById('about-section').style.display = 'none';
-            if (crumbs) updateBreadcrumb(crumbs);
-            renderProducts(prods);
+            document.getElementById('features-section').style.display = 'none';
+            fadeOutContent();
+            setTimeout(() => {
+                view = 'products'; currentFilteredProducts = prods;
+                document.getElementById('main-title').textContent = title;
+                document.getElementById('back-button').style.display = 'block';
+                document.getElementById('categories-container').style.display = 'none';
+                if (crumbs) updateBreadcrumb(crumbs);
+                renderProducts(prods);
+                fadeInContent();
+            }, FADE_MS);
         }
 
         function renderProducts(products) {
@@ -726,7 +1087,7 @@
                         <button class="btn" style="background-color:#4A90E2;" onclick="saveProductDetails(${p.id}, this)">💾 עדכון שינויים</button>
                         <div style="display:flex; gap:10px;">
                             <button class="btn ${stockBtnClass}" style="flex:1; font-size:0.9em; padding:8px;" onclick="updateProductStock(${p.id}, ${newStockValue})">${stockBtnText}</button>
-                            <button class="btn" style="flex:1; font-size:0.9em; background:#d9534f; padding:8px;" onclick="deleteProduct(${p.id})">🗑️ מחק מוצר</button>
+                            <button class="btn" style="flex:1; font-size:0.9em; background:#d9534f; padding:8px;" onclick="deleteProduct(${p.id}, '${p.name.replace(/'/g, "\\'")}')">🗑️ מחק מוצר</button>
                         </div>
                         <button class="btn btn-ghost" onclick="closeDetail()">ביטול</button>
                     </div>
@@ -835,8 +1196,13 @@
             } catch(e) { alert(e.message); }
         };
 
-        window.deleteProduct = async function(id) {
-            if(!confirm('האם את בטוחה שברצונך למחוק את המוצר לחלוטין מהחנות?')) return;
+        window.deleteProduct = async function(id, name) {
+            // מחיקה קשה יותר להפעיל בטעות: מקלידים את המילה "מחק" ולא רק
+            // לוחצים אישור. חשוב גם כי המוצרים כבר לא מתעדכנים אוטומטית
+            // מוולט, אז מוצר שנמחק לא יחזור לבד בריענון הבא.
+            const typed = prompt(`פעולה זו תמחק את "${name}" לצמיתות מהחנות, ולא ניתן לשחזר אותה (המוצרים כבר לא מתעדכנים אוטומטית מוולט).\n\nלאישור, הקלידו בדיוק את המילה: מחק`);
+            if (typed === null) return;
+            if (typed.trim() !== 'מחק') { alert('המחיקה בוטלה — הטקסט שהוקלד לא תואם.'); return; }
             try {
                 const res = await fetch(`${API}/api/admin/products/${id}`, {
                     method: 'DELETE',
@@ -857,7 +1223,8 @@
         };
 
         const modal = document.getElementById('auth-modal');
-        function openAuth(mode) { toggleSidebar(); showAuthMode(mode); modal.classList.add('open'); }
+        function openAuth(mode) { toggleSidebar(); showAuthMode(mode); modal.classList.add('open');
+            if (mode === 'login') { const le = localStorage.getItem('bp_last_email'); if (le) document.getElementById('login-email').value = le; } }
         function closeAuth() { modal.classList.remove('open'); }
         window.showAuthMode = function(mode) {
             const isLogin = mode === 'login';
@@ -874,6 +1241,7 @@
                 .then(res => res.json().then(d => ({ ok: res.ok, d })))
                 .then(({ ok, d }) => {
                     if (!ok) throw new Error(d.detail || 'שגיאה בהתחברות');
+                    localStorage.setItem('bp_last_email', email);
                     setToken(d.token); currentUser = d.user; closeAuth(); renderAccount(); initApp();
                 })
                 .catch(err => { document.getElementById('auth-msg').textContent = err.message; });
@@ -917,8 +1285,22 @@
                 });
             }
             document.getElementById('hours-full-list').innerHTML = html;
+
+            const footerList = document.getElementById('footer-hours-list');
+            if (footerList) {
+                footerList.innerHTML = data.weekly.map(d => {
+                    const hours = d.is_closed ? 'סגור' : `${d.opening_time}-${d.closing_time}`;
+                    return `<li><span>${d.day_name}</span><span>${hours}</span></li>`;
+                }).join('');
+            }
         }).catch(e => console.error("שגיאה בטעינת לוח שעות:", e));
 
+        const fYear = document.getElementById('f-year');
+        if (fYear) fYear.textContent = new Date().getFullYear();
+
+        // מציגים שלד טעינה (skeleton) מיד, לפני שהתשובה מהשרת חוזרת,
+        // כדי שלא יהיה רגע של מסך ריק בטעינה הראשונית.
+        renderSkeletonCategories();
         initApp();
     </script>
 </body>

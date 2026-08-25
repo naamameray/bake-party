@@ -1,9 +1,11 @@
-from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from datetime import datetime, date, time
 from typing import Optional, List
+from collections import defaultdict
 import hashlib
 import hmac
 import secrets
@@ -14,20 +16,24 @@ import psycopg2
 
 app = FastAPI(title="Bake & Party API")
 
+# --- CORS: בפרודקשן, הגדירי ALLOWED_ORIGINS כמשתנה סביבה עם הדומיין שלך ---
+# לדוגמה: ALLOWED_ORIGINS=https://bakeparty.co.il,https://www.bakeparty.co.il
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# --- חיבור ל-DB: תומך במשתני סביבה (לפרודקשן) או ברירת מחדל (לפיתוח) ---
 DB_CONFIG = {
-    "host": "localhost",
-    "port": "5433",
-    "dbname": "bakeshop",
-    "user": "admin",
-    "password": "adminpassword",
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": os.environ.get("DB_PORT", "5433"),
+    "dbname": os.environ.get("DB_NAME", "bakeshop"),
+    "user": os.environ.get("DB_USER", "admin"),
+    "password": os.environ.get("DB_PASSWORD", "adminpassword"),
 }
 
 # --- יצירת טבלאות ושדות חדשים באופן אוטומטי ---
@@ -42,6 +48,37 @@ try:
         );
     """)
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS notes TEXT;")
+
+    # רשת ביטחון: אלו נוצרות רגיל דרך create_admin.py, אבל אם השרת עולה
+    # לפני שהריצו אותו (למשל אחרי clone טרי של הריפו), עדיף שהאתר לא יקרוס
+    # לגמרי במקום להציג שגיאת "relation does not exist" בכל טעינה.
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS weekly_hours (
+            day_of_week   INTEGER PRIMARY KEY,
+            day_name      VARCHAR(20) NOT NULL,
+            is_closed     BOOLEAN NOT NULL DEFAULT FALSE,
+            opening_time  VARCHAR(5) NOT NULL DEFAULT '09:00',
+            closing_time  VARCHAR(5) NOT NULL DEFAULT '18:00'
+        );
+    """)
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS special_days (
+            id            SERIAL PRIMARY KEY,
+            holiday_date  DATE UNIQUE NOT NULL,
+            title         VARCHAR(255) NOT NULL,
+            is_closed     BOOLEAN NOT NULL DEFAULT FALSE,
+            opening_time  VARCHAR(5) DEFAULT '09:00',
+            closing_time  VARCHAR(5) DEFAULT '18:00',
+            note          TEXT
+        );
+    """)
+    day_names = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"]
+    for dow, dname in enumerate(day_names):
+        init_cur.execute(
+            "INSERT INTO weekly_hours (day_of_week, day_name, is_closed, opening_time, closing_time) "
+            "VALUES (%s, %s, FALSE, '09:00', '18:00') ON CONFLICT (day_of_week) DO NOTHING;",
+            (dow, dname),
+        )
     init_conn.commit()
     init_cur.close()
     init_conn.close()
@@ -52,7 +89,7 @@ IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "product_i
 os.makedirs(IMAGES_DIR, exist_ok=True)
 app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
 
-PLACEHOLDER = "https://via.placeholder.com/150"
+PLACEHOLDER = "data:image/svg+xml;utf8," + "%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Crect width='150' height='150' fill='%23FFD1DC'/%3E%3Ctext x='50%25' y='52%25' font-size='48' text-anchor='middle' dominant-baseline='middle' fill='%23E05276'%3E🧁%3C/text%3E%3C/svg%3E"
 
 def get_conn():
     return psycopg2.connect(**DB_CONFIG)
@@ -143,17 +180,30 @@ def register(body: RegisterBody):
     cur.close(); conn.close()
     return {"token": _issue_token(user_id, "customer"), "user": _user_public(user)}
 
+# --- הגנת brute force: מקסימום 10 ניסיונות התחברות כושלים בדקה מכתובת IP ---
+LOGIN_ATTEMPTS = defaultdict(list)  # ip -> [timestamps of failed attempts]
+
+def check_rate_limit(ip: str, max_attempts: int = 10, window: int = 60):
+    now = time_module.time()
+    LOGIN_ATTEMPTS[ip] = [t for t in LOGIN_ATTEMPTS[ip] if now - t < window]
+    if len(LOGIN_ATTEMPTS[ip]) >= max_attempts:
+        raise HTTPException(status_code=429, detail="יותר מדי ניסיונות התחברות. נסו שוב בעוד דקה.")
+
 @app.post("/api/login")
-def login(body: LoginBody):
+def login(body: LoginBody, request: Request):
+    ip = request.client.host if request.client else "unknown"
+    check_rate_limit(ip)
     email = body.email.strip().lower()
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT id, password_hash, role FROM users WHERE email = %s;", (email,))
     row = cur.fetchone()
     if not row or not verify_password(body.password, row[1]):
         cur.close(); conn.close()
+        LOGIN_ATTEMPTS[ip].append(time_module.time())
         raise HTTPException(status_code=401, detail="אימייל או סיסמה שגויים")
     user = _fetch_user(cur, row[0])
     cur.close(); conn.close()
+    LOGIN_ATTEMPTS.pop(ip, None)  # איפוס אחרי הצלחה
     return {"token": _issue_token(row[0], row[2]), "user": _user_public(user)}
 
 @app.post("/api/logout")
@@ -227,7 +277,9 @@ def get_store_status():
     else:
         delivery_active = is_open
 
-    msg = "משלוחים זמינים" if delivery_active else "המשלוחים סגורים כעת, ניתן להזמין לאיסוף עצמי בלבד"
+    # שימו לב: אין כרגע מערכת הזמנות באתר, אז ההודעה כאן מתארת רק את מצב
+    # החנות עצמה (פתוחה/סגורה) ולא רומזת על אפשרות "להזמין" משהו.
+    msg = "החנות פתוחה כעת" if is_open else "החנות סגורה כרגע"
     if note_text:
         msg = f"{note_text} | {msg}"
 
@@ -470,11 +522,18 @@ def admin_update_product(product_id: int, body: ProductUpdateBody, sess: dict = 
     conn = get_conn(); cur = conn.cursor()
     
     cat_ids = fields.pop("category_ids", None)
-    
-    if fields:
-        if "category_id" not in fields and cat_ids:
-            fields["category_id"] = cat_ids[0]
 
+    # תוקן: קודם ה-pop() מוציא את category_ids מ-fields, ואז הבדיקה "if fields"
+    # הייתה נכנסת ל-False בדיוק כשהבקשה מכילה רק category_ids (המקרה של טאב
+    # "מוצרים וקטגוריות" ב-admin.html, ששולח *רק* את זה) - כך שהעדכון של
+    # category_id (הקטגוריה הראשית בטבלת Products) פשוט לא קרה בפועל אף פעם.
+    # התוצאה: שינוי/הסרת קטגוריות בפאנל הניהול עדכן רק את טבלת הקישור
+    # product_categories, בעוד שהעמודה category_id (שקובעת בפועל תחת איזו
+    # קטגוריה המוצר מוצג באתר, ואם הוא "ללא קטגוריה") נשארה עם הערך הישן.
+    if cat_ids is not None:
+        fields["category_id"] = cat_ids[0] if cat_ids else None
+
+    if fields:
         sets = ", ".join(f"{k} = %s" for k in fields)
         cur.execute(f"UPDATE Products SET {sets} WHERE id = %s;", list(fields.values()) + [product_id])
         
@@ -571,6 +630,67 @@ def get_categories_tree():
             main["subcategories"] = []
     return mains
 
+# --- פרטי יצירת קשר (ניתנים לעריכה ע"י המנהל, נשמרים בטבלת settings) ---
+CONTACT_DEFAULTS = {
+    "contact_phone": "054-9881998",
+    "contact_address": "יוני נתניהו 21, גבעת שמואל",
+    "contact_email": "pinukimmam@gmail.com",
+    "contact_whatsapp": "972549881998",
+}
+
+def _get_contact():
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT key, value FROM settings WHERE key = ANY(%s);", (list(CONTACT_DEFAULTS.keys()),))
+    data = dict(cur.fetchall())
+    cur.close(); conn.close()
+    return {
+        "phone": data.get("contact_phone", CONTACT_DEFAULTS["contact_phone"]),
+        "address": data.get("contact_address", CONTACT_DEFAULTS["contact_address"]),
+        "email": data.get("contact_email", CONTACT_DEFAULTS["contact_email"]),
+        "whatsapp": data.get("contact_whatsapp", CONTACT_DEFAULTS["contact_whatsapp"]),
+    }
+
+@app.get("/api/contact")
+def get_contact():
+    return _get_contact()
+
+class ContactBody(BaseModel):
+    phone: str
+    address: str
+    email: str
+    whatsapp: str
+
+@app.put("/api/admin/contact")
+def update_contact(body: ContactBody, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    for key, val in [("contact_phone", body.phone), ("contact_address", body.address),
+                     ("contact_email", body.email), ("contact_whatsapp", body.whatsapp)]:
+        cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;", (key, val))
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True}
+
+# --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
+# בפרודקשן, FastAPI מגיש את כל הקבצים — לא צריך שרת נפרד.
+STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
+
 @app.get("/")
-def root():
-    return {"message": "השרת פועל בהצלחה!"}
+def serve_index():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+@app.get("/admin.html")
+def serve_admin():
+    return FileResponse(os.path.join(STATIC_DIR, "admin.html"))
+
+@app.get("/logo.jpg")
+def serve_logo():
+    path = os.path.join(STATIC_DIR, "logo.jpg")
+    if os.path.exists(path):
+        return FileResponse(path)
+    raise HTTPException(status_code=404)
+
+@app.get("/robots.txt")
+def serve_robots():
+    path = os.path.join(STATIC_DIR, "robots.txt")
+    if os.path.exists(path):
+        return FileResponse(path)
+    raise HTTPException(status_code=404)
