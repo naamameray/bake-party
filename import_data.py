@@ -1,15 +1,16 @@
 import glob
 import sys
+import os
 
 import pandas as pd
 import psycopg2
 
 DB_CONFIG = {
-    "host": "localhost",
-    "port": "5433",
-    "dbname": "bakeshop",
-    "user": "admin",
-    "password": "adminpassword",
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": os.environ.get("DB_PORT", "5433"),
+    "dbname": os.environ.get("DB_NAME", "bakeshop"),
+    "user": os.environ.get("DB_USER", "admin"),
+    "password": os.environ.get("DB_PASSWORD", "adminpassword"),
 }
 
 # --- סכימת מסד הנתונים מעודכנת לתמיכה בטבלת קישור (קטגוריות מרובות) ועמודת הערות ---
