@@ -79,6 +79,39 @@ try:
             "VALUES (%s, %s, FALSE, '09:00', '18:00') ON CONFLICT (day_of_week) DO NOTHING;",
             (dow, dname),
         )
+    # --- טבלאות users + settings (נוצרות בדרך כלל ע"י create_admin.py) ---
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY, name VARCHAR(150), email VARCHAR(255) UNIQUE NOT NULL,
+            phone VARCHAR(50), address TEXT, password_hash TEXT NOT NULL,
+            role VARCHAR(20) NOT NULL DEFAULT 'customer', created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    for col in ("phone", "address", "name"):
+        init_cur.execute(f"ALTER TABLE users ALTER COLUMN {col} DROP NOT NULL;")
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (key VARCHAR(50) PRIMARY KEY, value TEXT);
+    """)
+    init_cur.execute("""
+        INSERT INTO settings (key, value) VALUES ('opening_time','09:00'),('closing_time','18:00'),
+        ('delivery_override','auto') ON CONFLICT (key) DO NOTHING;
+    """)
+
+    # --- יצירת מנהל אוטומטית מ-env vars (לפרודקשן) ---
+    admin_email = os.environ.get("ADMIN_EMAIL")
+    admin_pass = os.environ.get("ADMIN_PASSWORD")
+    if admin_email and admin_pass:
+        import hashlib as _h
+        _salt = os.urandom(16)
+        _dk = _h.pbkdf2_hmac("sha256", admin_pass.encode(), _salt, 200_000)
+        _hash = f"pbkdf2_sha256$200000${_salt.hex()}${_dk.hex()}"
+        admin_name = os.environ.get("ADMIN_NAME", "מנהל")
+        init_cur.execute(
+            "INSERT INTO users (name, email, password_hash, role) VALUES (%s, %s, %s, 'admin') "
+            "ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, role='admin';",
+            (admin_name, admin_email.lower(), _hash))
+        print(f"✅ מנהל '{admin_email}' נוצר/עודכן אוטומטית מ-env vars")
+
     init_conn.commit()
     init_cur.close()
     init_conn.close()
