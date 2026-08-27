@@ -11,8 +11,10 @@
     <meta property="og:description" content="חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע ומסיבה.">
     <meta property="og:image" content="logo.jpg">
     <meta property="og:type" content="website">
-    
+    <!-- TEMP: חוסם אינדוקס בגוגל עד שהאתר מוכן להשקה רשמית. -->
+    <!-- להסיר את השורה הזו (ורק אותה) כשמשיקים בפועל! -->
     <meta name="robots" content="noindex, nofollow">
+    <!-- /TEMP -->
     <style>
         :root {
             --cream: #FFF9F5; --pink-light: #FFD1DC; --pink-main: #FF85A2;
@@ -28,12 +30,14 @@
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; transition: 0.3s; }
         #a11y-btn:hover { background: #004494; transform: translateY(-3px); }
 
+        /* כפתור ווצאפ צף */
         #wa-btn { position: fixed; bottom: 85px; left: 20px; background: #25D366; color: white; border: none;
             border-radius: 50%; width: 55px; height: 55px; font-size: 30px; cursor: pointer; z-index: 9999;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;
             text-decoration: none; transition: 0.3s; }
         #wa-btn:hover { background: #1da851; transform: translateY(-3px); }
 
+        /* פאנל נגישות */
         #a11y-panel { position: fixed; bottom: 85px; left: 20px; width: 270px; background: #fff; border-radius: 16px;
             box-shadow: 0 8px 30px rgba(0,0,0,0.25); z-index: 10000; padding: 16px; display: none;
             border: 2px solid #005eb8; direction: rtl; }
@@ -50,6 +54,7 @@
         #a11y-reset { background: #d9534f; color: #fff; border: none; border-radius: 10px; padding: 9px;
             width: 100%; margin-top: 6px; cursor: pointer; font-family: inherit; font-weight: bold; }
 
+        /* מצבי נגישות */
         body.high-contrast { background: #121212 !important; color: #fff !important; }
         body.high-contrast header, body.high-contrast .cat-menu-bar, body.high-contrast .sidebar, 
         body.high-contrast .modal, body.high-contrast .product-card, body.high-contrast .detail-img-wrap { background: #1e1e1e !important; border-color: #555 !important; }
@@ -60,6 +65,7 @@
         body.a11y-noanim *, body.a11y-noanim *::before, body.a11y-noanim *::after {
             animation: none !important; transition: none !important; scroll-behavior: auto !important; }
         body.a11y-readable, body.a11y-readable * { font-family: Arial, "Segoe UI", sans-serif !important; letter-spacing: 0.4px; line-height: 1.7 !important; }
+
 
         #back-to-top { position: fixed; bottom: 20px; right: 20px; background: var(--pink-main); color: white; border: none; 
             border-radius: 50%; width: 55px; height: 55px; font-size: 24px; cursor: pointer; z-index: 9999; 
@@ -151,6 +157,7 @@
         #about-section h3 { color: var(--pink-dark); font-size: 1.6em; margin-bottom: 10px; }
         #about-section p { font-size: 1.15em; line-height: 1.6; color: var(--text-color); }
 
+        /* --- רצועת יתרונות (למה לקנות אצלנו) --- */
         #features-section { max-width: 1100px; margin: 10px auto 40px; padding: 0 20px; display: none; }
         .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 20px; }
         .feature-card { background: #fff; border: 2px solid var(--pink-light); border-radius: 18px; padding: 22px 16px;
@@ -162,6 +169,7 @@
         .feature-card h4 { margin: 0 0 6px; color: var(--pink-dark); font-size: 1.05em; }
         .feature-card p { margin: 0; font-size: 0.88em; color: var(--muted); line-height: 1.5; }
 
+        /* --- כותרת תחתונה (footer) --- */
         footer#site-footer { background: var(--pink-light); margin-top: 50px; padding: 34px 20px 18px; color: var(--text-color); }
         .footer-inner { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 28px; }
         .footer-col h4 { color: var(--pink-dark); margin: 0 0 12px; font-size: 1.05em; }
@@ -177,12 +185,13 @@
 
         .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 20px; }
         
-        /* --- מבצעים --- */
+        /* מבצעים */
         .sale-badge { position: absolute; top: 8px; right: 8px; background: #FF4444; color: #fff;
             font-weight: bold; font-size: 0.78em; padding: 4px 10px; border-radius: 12px; z-index: 5;
             box-shadow: 0 2px 6px rgba(255,68,68,0.3); }
         .sale-star { position: absolute; top: -6px; left: -6px; font-size: 1.6em; z-index: 5;
             filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3)); }
+        .old-price { text-decoration: line-through; color: var(--muted); font-size: 0.85em; margin-left: 8px; }
         .product-card { position: relative; }
 
         .product-card { background: white; border: 2px solid var(--pink-light); border-radius: 20px; padding: 15px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); display: flex; flex-direction: column; justify-content: space-between; transition: box-shadow 0.2s; cursor: pointer; }
@@ -192,9 +201,11 @@
         .price { font-size: 1.4em; color: var(--pink-dark); font-weight: bold; margin: 10px 0; }
         .state-msg { text-align: center; color: var(--muted); padding: 40px 0; font-size: 1.1em; grid-column: 1 / -1; }
 
+        /* --- מעבר עדין (fade) בין קטגוריות/מוצרים בזמן ניווט --- */
         #categories-container, #products-container { transition: opacity 0.22s ease; }
         #categories-container.fade-out, #products-container.fade-out { opacity: 0; }
 
+        /* --- Skeleton loading (טעינה ראשונית, במקום מסך ריק) --- */
         .skeleton-shimmer { position: relative; overflow: hidden; background: #ecdfe2; }
         .skeleton-shimmer::after { content: ''; position: absolute; inset: 0;
             background: linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent);
@@ -627,7 +638,7 @@
 
         let contactInfo = null;
         function loadContact() {
-            fetch(`${API}/api/contact`).then(res => res.json()).then(c => {
+            fetch(`${API}/api/contact?_t=${new Date().getTime()}`).then(res => res.json()).then(c => {
                 contactInfo = c;
                 const ph = document.getElementById('c-phone'); if (ph) ph.textContent = c.phone;
                 const ad = document.getElementById('c-address'); if (ad) ad.textContent = c.address;
@@ -757,13 +768,14 @@
 
         async function initApp() {
             loadSearchHistory();
+            const ts = new Date().getTime();
             if (token()) {
                 try {
-                    const res = await fetch(`${API}/api/me`, { headers: { 'Authorization': 'Bearer ' + token() } });
+                    const res = await fetch(`${API}/api/me?_t=${ts}`, { headers: { 'Authorization': 'Bearer ' + token() } });
                     if (res.ok) {
                         currentUser = await res.json();
                         if(currentUser.role === 'admin'){
-                            const catRes = await fetch(`${API}/api/admin/subcategories-flat`, { headers: authHeaders() });
+                            const catRes = await fetch(`${API}/api/admin/subcategories-flat?_t=${ts}`, { headers: authHeaders() });
                             if(catRes.ok) adminSubcategories = await catRes.json();
                         }
                     } else clearToken();
@@ -772,8 +784,8 @@
             renderAccount();
             try {
                 const [cats, prods] = await Promise.all([
-                    fetch(`${API}/api/categories`).then(res => res.json()),
-                    fetch(`${API}/api/products`).then(res => res.json())
+                    fetch(`${API}/api/categories?_t=${ts}`).then(res => res.json()),
+                    fetch(`${API}/api/products?_t=${ts}`).then(res => res.json())
                 ]);
                 allCategories = cats; allProducts = prods;
                 loadCategoryMenu();
@@ -858,6 +870,7 @@
                 if(!res.ok) throw new Error('שגיאה בהוספת המוצר');
                 
                 document.getElementById('add-p-msg').textContent = 'המוצר נוסף בהצלחה! ✓';
+                document.getElementById('add-product-form').reset();
                 setTimeout(() => { 
                     document.getElementById('add-p-msg').textContent = ''; 
                     document.getElementById('add-product-modal').classList.remove('open');
@@ -883,18 +896,16 @@
                 document.getElementById('categories-container').style.display = 'none';
                 updateBreadcrumb([{label:'דף ראשי', fn: goHome}, {label: 'מבצעים חמים 🎁'}]);
                 
-                fetch(`${API}/api/products/on-sale`)
-                    .then(res => res.json())
-                    .then(prods => {
-                        currentFilteredProducts = prods;
-                        renderProducts(prods);
-                        fadeInContent();
-                    });
+                // שינוי ענק! שולפים את המבצעים ישירות מהזיכרון המעודכן שלנו בלי לבקש מהשרת
+                const saleProds = allProducts.filter(p => p.is_on_sale === true);
+                currentFilteredProducts = saleProds;
+                renderProducts(saleProds);
+                fadeInContent();
             }, FADE_MS);
         }
 
         function loadCategoryMenu() {
-            fetch(`${API}/api/categories/tree`).then(res => res.json()).then(tree => {
+            fetch(`${API}/api/categories/tree?_t=${new Date().getTime()}`).then(res => res.json()).then(tree => {
                 categoryTree = tree; renderCategoryMenu();
             }).catch(() => {
                 categoryTree = allCategories.map(c => ({ ...c, subcategories: [] }));
@@ -1010,7 +1021,7 @@
                     document.getElementById('back-button').style.display = 'block';
                     document.getElementById('products-container').innerHTML = '';
                     document.getElementById('categories-container').style.display = 'grid';
-                    fetch(`${API}/api/categories/${main.id}/subcategories`).then(res => res.json())
+                    fetch(`${API}/api/categories/${main.id}/subcategories?_t=${new Date().getTime()}`).then(res => res.json())
                         .then(subs => { renderCategoryCircles(subs, false, main); fadeInContent(); });
                     updateBreadcrumb([{label:'דף ראשי', fn: goHome}, {label: main.name}]);
                 } else {
@@ -1041,20 +1052,18 @@
             const container = document.getElementById('categories-container');
             container.innerHTML = '';
             
-            // תת קטגוריה של כל המוצרים של הראשי הנוכחי
             if (parentMain) {
                 const allCat = document.createElement('button');
                 allCat.className = 'category-circle';
                 allCat.innerHTML = '<span class="circle-img" style="background:var(--pink-main); color:white; font-size:1.2em;">🛒</span><span class="cat-name">כל המוצרים</span>';
                 allCat.onclick = () => { 
-                    fetch(`${API}/api/categories/${parentMain.id}/products`).then(res => res.json())
+                    fetch(`${API}/api/categories/${parentMain.id}/products?_t=${new Date().getTime()}`).then(res => res.json())
                         .then(prods => showProducts(prods, 'כל המוצרים - ' + parentMain.name, 
                             [{label:'דף ראשי', fn: goHome}, {label: parentMain.name, fn: () => openMain(parentMain)}, {label:'כל המוצרים'}]));
                 };
                 container.appendChild(allCat);
             }
             
-            // כפתור מבצעים בעמוד הבית
             if (!parentMain && withAll) {
                 const saleCircle = document.createElement('button');
                 saleCircle.className = 'category-circle';
@@ -1205,7 +1214,7 @@
                         || allProducts.find(x => x.id === id);
             if (local) fillDetail(local);
             document.getElementById('detail-modal').classList.add('open');
-            fetch(`${API}/api/products/${id}`).then(res => res.ok ? res.json() : null)
+            fetch(`${API}/api/products/${id}?_t=${new Date().getTime()}`).then(res => res.ok ? res.json() : null)
                 .then(full => { if (full) fillDetail(full); }).catch(() => {});
         }
         function closeDetail() { document.getElementById('detail-modal').classList.remove('open'); }
@@ -1353,14 +1362,14 @@
                 .catch(err => { document.getElementById('auth-msg').textContent = err.message; });
         };
 
-        fetch(`${API}/api/store-status`).then(res => res.json()).then(data => {
+        fetch(`${API}/api/store-status?_t=${new Date().getTime()}`).then(res => res.json()).then(data => {
             document.getElementById('hours-text').innerHTML = `
                 <strong>מצב כעת:</strong> ${data.store_open ? 'פתוח' : 'סגור'}<br>
                 <strong>שעות היום:</strong> ${data.opening_hours}<br>
                 <em style="font-size:0.9em; display:block; margin-top:5px; color:var(--pink-dark);">${data.message}</em>`;
         });
 
-        fetch(`${API}/api/schedule`).then(res => res.json()).then(data => {
+        fetch(`${API}/api/schedule?_t=${new Date().getTime()}`).then(res => res.json()).then(data => {
             let html = '<div style="margin-bottom: 8px;"><strong>שעות פעילות שבועיות:</strong></div>';
             html += '<table style="width: 100%; text-align: right; font-size: 0.9em; border-collapse: collapse;">';
             data.weekly.forEach(d => {
