@@ -48,6 +48,10 @@ try:
         );
     """)
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS notes TEXT;")
+    # --- מבצעים ---
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS is_on_sale BOOLEAN DEFAULT FALSE;")
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(10,2);")
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS sale_label TEXT;")  # e.g. "4 ב-25₪"
 
     # רשת ביטחון: אלו נוצרות רגיל דרך create_admin.py, אבל אם השרת עולה
     # לפני שהריצו אותו (למשל אחרי clone טרי של הריפו), עדיף שהאתר לא יקרוס
@@ -452,12 +456,20 @@ def _serialize_products(rows):
         cat_ids = list(p[10]) if len(p) > 10 and p[10] else []
         if p[6] and p[6] not in cat_ids:
             cat_ids.append(p[6])
+        
+        # promotion fields (indices 11-13, may not exist in older queries)
+        is_on_sale = p[11] if len(p) > 11 else False
+        sale_price = float(p[12]) if len(p) > 12 and p[12] is not None else None
+        sale_label = p[13] if len(p) > 13 else None
             
         data.append({
             "id": p[0], "name": p[1], "price": float(p[2]), "in_stock": p[3] > 0, 
             "category": p[4], "image": p[5] if p[5] else PLACEHOLDER, "category_id": p[6],
             "weight_grams": p[7], "units_per_package": p[8], "notes": p[9],
-            "category_ids": cat_ids
+            "category_ids": cat_ids,
+            "is_on_sale": bool(is_on_sale),
+            "sale_price": sale_price,
+            "sale_label": sale_label,
         })
     return data
 
@@ -503,7 +515,8 @@ def get_products():
     cur.execute("""
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
-               (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id)
+               (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
+               p.is_on_sale, p.sale_price, p.sale_label
         FROM Products p 
         LEFT JOIN Categories c ON p.category_id = c.id 
         WHERE p.category_id IS NOT NULL 
@@ -524,7 +537,8 @@ def get_category_products(category_id: int):
         )
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
-               (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id)
+               (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
+               p.is_on_sale, p.sale_price, p.sale_label
         FROM Products p 
         LEFT JOIN Categories c ON p.category_id = c.id 
         WHERE p.category_id IN (SELECT id FROM subtree) 
@@ -701,6 +715,69 @@ def update_contact(body: ContactBody, sess: dict = Depends(require_admin)):
         cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;", (key, val))
     conn.commit(); cur.close(); conn.close()
     return {"ok": True}
+
+
+
+# --- ניהול קטגוריות (CRUD) ---
+class CategoryCreateBody(BaseModel):
+    name: str
+    parent_id: Optional[int] = None
+
+class CategoryUpdateBody(BaseModel):
+    name: Optional[str] = None
+    parent_id: Optional[int] = None
+    sort_order: Optional[int] = None
+
+@app.post("/api/admin/categories")
+def admin_create_category(body: CategoryCreateBody, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("INSERT INTO Categories (name, parent_id, sort_order) VALUES (%s, %s, 999) RETURNING id;", (body.name, body.parent_id))
+    new_id = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    return {"id": new_id, "name": body.name, "parent_id": body.parent_id}
+
+@app.patch("/api/admin/categories/{category_id}")
+def admin_update_category(category_id: int, body: CategoryUpdateBody, sess: dict = Depends(require_admin)):
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="לא נשלחו שדות לעדכון")
+    conn = get_conn(); cur = conn.cursor()
+    sets = ", ".join(f"{k} = %s" for k in fields)
+    cur.execute(f"UPDATE Categories SET {sets} WHERE id = %s RETURNING id;", list(fields.values()) + [category_id])
+    if not cur.fetchone():
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="הקטגוריה לא נמצאה")
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True}
+
+@app.delete("/api/admin/categories/{category_id}")
+def admin_delete_category(category_id: int, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM Categories WHERE id = %s RETURNING id;", (category_id,))
+    deleted = cur.fetchone()
+    conn.commit(); cur.close(); conn.close()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="הקטגוריה לא נמצאה")
+    return {"ok": True, "deleted": category_id}
+
+
+# --- מוצרים במבצע ---
+@app.get("/api/products/on-sale")
+def get_products_on_sale():
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
+               p.category_id, p.weight_grams, p.units_per_package, p.notes,
+               (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
+               p.is_on_sale, p.sale_price, p.sale_label
+        FROM Products p 
+        LEFT JOIN Categories c ON p.category_id = c.id 
+        WHERE p.is_on_sale = TRUE AND p.category_id IS NOT NULL
+        ORDER BY p.id;
+    """)
+    data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
+    return data
+
 
 # --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
 # בפרודקשן, FastAPI מגיש את כל הקבצים — לא צריך שרת נפרד.

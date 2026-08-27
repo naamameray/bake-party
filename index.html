@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bake & Party - אפייה ומסיבות</title>
+    <title>Bake & Party - אפייה ומסיבות | ממלכת הגלידות מבית פינוקים</title>
     <link rel="icon" type="image/jpeg" href="logo.jpg">
+    <meta name="keywords" content="ממלכת הגלידות, פינוקים, גבעת שמואל, אפייה, מסיבות, גלידות, שוקולד, בלונים, חומרי גלם לאפייה, Bake and Party">
     <meta name="description" content="Bake & Party - חנות אפייה ומסיבות בגבעת שמואל. חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע. שעות פתיחה, יצירת קשר ומשלוחים מעל 200 ₪.">
-    <meta property="og:title" content="Bake & Party - אפייה ומסיבות">
+    <meta property="og:title" content="Bake & Party | ממלכת הגלידות מבית פינוקים">
     <meta property="og:description" content="חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע ומסיבה.">
     <meta property="og:image" content="logo.jpg">
     <meta property="og:type" content="website">
@@ -182,7 +183,17 @@
         .footer-bottom { max-width: 1200px; margin: 22px auto 0; padding-top: 16px; border-top: 1px solid rgba(74,46,53,0.15);
             text-align: center; font-size: 0.85em; color: var(--muted); }
 
-        .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 25px; }
+        .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 20px; }
+        
+        /* מבצעים */
+        .sale-badge { position: absolute; top: 8px; right: 8px; background: #FF4444; color: #fff;
+            font-weight: bold; font-size: 0.78em; padding: 4px 10px; border-radius: 12px; z-index: 5;
+            box-shadow: 0 2px 6px rgba(255,68,68,0.3); }
+        .sale-star { position: absolute; top: -6px; left: -6px; font-size: 1.6em; z-index: 5;
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3)); }
+        .old-price { text-decoration: line-through; color: var(--muted); font-size: 0.85em; margin-left: 8px; }
+        .product-card { position: relative; }
+
         .product-card { background: white; border: 2px solid var(--pink-light); border-radius: 20px; padding: 15px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); display: flex; flex-direction: column; justify-content: space-between; transition: box-shadow 0.2s; cursor: pointer; }
         .product-card:hover { box-shadow: 0 8px 18px var(--shadow); transform: translateY(-3px); }
         .product-img { width: 100%; height: 160px; object-fit: contain; margin-bottom: 10px; }
@@ -241,6 +252,24 @@
 
         .edit-input { width: 100%; padding: 8px; border: 1px solid var(--pink-main); border-radius: 8px; font-family: inherit; font-size: 1em; margin-bottom: 5px; background: white;}
         .edit-input-sm { width: 65%; padding: 4px 8px; border: 1px solid var(--pink-main); border-radius: 6px; font-family: inherit; font-size: 0.9em; background: white;}
+    
+        @media (max-width: 600px) {
+            .cat-menu-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 6px 10px; }
+            .cat-dropdown { position: fixed !important; top: auto !important; bottom: 0 !important; 
+                left: 0 !important; right: 0 !important; width: 100% !important; max-height: 50vh;
+                overflow-y: auto; border-radius: 16px 16px 0 0 !important; margin: 0 !important;
+                box-shadow: 0 -4px 20px rgba(0,0,0,0.2) !important; z-index: 9000 !important; }
+            .cat-menu-item.open .cat-dropdown { display: block; }
+            .products-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
+            .product-card { padding: 10px; border-radius: 14px; }
+            .product-img { height: 110px; }
+            .product-card h3 { font-size: 0.9em; min-height: 32px; }
+            .price { font-size: 1.1em; margin: 6px 0; }
+            .categories-container { grid-template-columns: repeat(3, 1fr) !important; gap: 16px !important; }
+            .circle-img { width: 100px !important; height: 100px !important; }
+            .cat-name { font-size: 0.85em; }
+        }
+    
     </style>
 </head>
 <body>
@@ -615,13 +644,15 @@
                 const ad = document.getElementById('c-address'); if (ad) ad.textContent = c.address;
                 const em = document.getElementById('c-email'); if (em) em.textContent = c.email;
                 const wa = document.getElementById('wa-btn');
-                if (wa && c.whatsapp) wa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, '')}`;
+                if (wa && c.whatsapp) wa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, "")}?text=${encodeURIComponent("שלום, באתי מהאתר של Bake & Party ואני מתעניין/ת בנוגע ל...")}`; // pre-filled
+                // old: wa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, '')}`;
 
                 const fph = document.getElementById('f-phone'); if (fph) fph.textContent = c.phone;
                 const fad = document.getElementById('f-address'); if (fad) fad.textContent = c.address;
                 const fem = document.getElementById('f-email'); if (fem) { fem.textContent = c.email; fem.href = `mailto:${c.email}`; }
                 const fwa = document.getElementById('f-whatsapp');
-                if (fwa && c.whatsapp) fwa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, '')}`;
+                if (fwa && c.whatsapp) fwa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, "")}?text=${encodeURIComponent("שלום, באתי מהאתר של Bake & Party ואני מתעניין/ת בנוגע ל...")}`; // pre-filled
+                // old: wa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, '')}`;
             }).catch(() => {});
         }
         window.showContactEdit = function() {
@@ -985,9 +1016,21 @@
             showProducts(prods, sub.name, crumbs);
         }
 
-        function renderCategoryCircles(cats, withAll) {
+        function renderCategoryCircles(cats, withAll, parentMain) {
             const container = document.getElementById('categories-container');
             container.innerHTML = '';
+            if (parentMain) {
+                // "כל המוצרים" של הקטגוריה הראשית הזו
+                const allCat = document.createElement('button');
+                allCat.className = 'category-circle';
+                allCat.innerHTML = '<span class="circle-img" style="background:var(--pink-main); color:white; font-size:1.2em;">🛒</span><span class="cat-name">כל המוצרים</span>';
+                allCat.onclick = () => { 
+                    fetch(\`\${API}/api/categories/\${parentMain.id}/products\`).then(res => res.json())
+                        .then(prods => showProducts(prods, 'כל המוצרים - ' + parentMain.name, 
+                            [{label:'דף ראשי', fn: goHome}, {label: parentMain.name, fn: () => openMain(parentMain)}, {label:'כל המוצרים'}]));
+                };
+                container.appendChild(allCat);
+            }
             if (withAll) {
                 const all = document.createElement('button');
                 all.className = 'category-circle';
@@ -1030,9 +1073,20 @@
                 const card = document.createElement('article');
                 card.className = 'product-card';
                 const imgSrc = (p.image && p.image.startsWith('/')) ? API + p.image : (p.image || PLACEHOLDER);
-                const priceHtml = p.in_stock ? `<div class="price">₪${p.price.toFixed(2)}</div>` : `<div class="price" style="color:#aaa;">₪${p.price.toFixed(2)} <span style="font-size:0.7em;">(אזל)</span></div>`;
+                // מבצע + מחיר
+                let saleBadge = '';
+                let priceHtml = '';
+                if (p.is_on_sale && p.sale_label) {
+                    saleBadge = `<span class="sale-star">⭐</span><span class="sale-badge">מבצע: ${p.sale_label}</span>`;
+                    priceHtml = `<div class="price">₪${p.price.toFixed(2)}</div>`;
+                } else if (p.in_stock) {
+                    priceHtml = `<div class="price">₪${p.price.toFixed(2)}</div>`;
+                } else {
+                    priceHtml = `<div class="price" style="color:#aaa;">₪${p.price.toFixed(2)} <span style="font-size:0.7em;">(אזל)</span></div>`;
+                }
 
                 card.innerHTML = `
+                    ${saleBadge}
                     <div class="product-clickable" onclick="openProductDetail(${p.id})">
                         <img src="${imgSrc}" alt="${p.name}" class="product-img" onerror="this.src='${PLACEHOLDER}'">
                         <h3 class="p-title">${p.name}</h3>
