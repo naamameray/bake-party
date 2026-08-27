@@ -480,7 +480,7 @@
         }
 
         window.setProdFilter = function(f) {
-            prodFilter = f;
+            prodFilter = f; prodPage = 0;
             ['all', 'nocat', 'onecat'].forEach(k => document.getElementById(`chip-${k}`).classList.toggle('active', k === f));
             renderProductRows();
         };
@@ -493,6 +493,9 @@
             return html;
         }
 
+        let prodPage = 0;
+        const PROD_PER_PAGE = 30;
+
         function renderProductRows() {
             const listEl = document.getElementById('prod-list');
             const search = (document.getElementById('prod-search').value || '').trim().toLowerCase();
@@ -503,8 +506,24 @@
 
             if (!rows.length) { listEl.innerHTML = '<p style="color:var(--muted); padding:10px;">לא נמצאו מוצרים תואמים.</p>'; return; }
 
+            const totalPages = Math.ceil(rows.length / PROD_PER_PAGE);
+            if (prodPage >= totalPages) prodPage = totalPages - 1;
+            const start = prodPage * PROD_PER_PAGE;
+            const pageRows = rows.slice(start, start + PROD_PER_PAGE);
+
             listEl.innerHTML = '';
-            rows.forEach(p => {
+
+            // Pager top
+            const pager = document.createElement('div');
+            pager.style.cssText = 'display:flex; justify-content:center; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap;';
+            pager.innerHTML = \`
+                <button class="chip \${prodPage > 0 ? '' : 'disabled'}" onclick="prodPage--;renderProductRows()" \${prodPage > 0 ? '' : 'disabled'}>→ הקודם</button>
+                <span style="font-weight:bold; color:var(--muted);">\${start+1}–\${Math.min(start+PROD_PER_PAGE, rows.length)} מתוך \${rows.length}</span>
+                <button class="chip \${prodPage < totalPages-1 ? '' : 'disabled'}" onclick="prodPage++;renderProductRows()" \${prodPage < totalPages-1 ? '' : 'disabled'}>הבא ←</button>
+            \`;
+            listEl.appendChild(pager);
+
+            pageRows.forEach(p => {
                 const catIds = p.category_ids || [];
                 const noCat = catIds.length === 0;
                 const cat1 = catIds[0] || '';
