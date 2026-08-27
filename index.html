@@ -1025,7 +1025,7 @@
                 allCat.className = 'category-circle';
                 allCat.innerHTML = '<span class="circle-img" style="background:var(--pink-main); color:white; font-size:1.2em;">🛒</span><span class="cat-name">כל המוצרים</span>';
                 allCat.onclick = () => { 
-                    fetch(\`\${API}/api/categories/\${parentMain.id}/products\`).then(res => res.json())
+                    fetch(`${API}/api/categories/${parentMain.id}/products`).then(res => res.json())
                         .then(prods => showProducts(prods, 'כל המוצרים - ' + parentMain.name, 
                             [{label:'דף ראשי', fn: goHome}, {label: parentMain.name, fn: () => openMain(parentMain)}, {label:'כל המוצרים'}]));
                 };
