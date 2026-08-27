@@ -546,6 +546,44 @@ class ProductUpdateBody(BaseModel):
     is_on_sale: Optional[bool] = None
     sale_label: Optional[str] = None
 
+
+@app.get("/api/admin/products")
+def admin_list_products(search: str = "", only_unsorted: bool = False,
+                        limit: int = 30, offset: int = 0,
+                        sess: dict = Depends(require_admin)):
+    """רשימת מוצרים מדופדפת לפאנל הניהול, עם חיפוש וסינון."""
+    limit = max(1, min(limit, 100))
+    conn = get_conn(); cur = conn.cursor()
+    conditions, params = [], []
+    if search:
+        conditions.append("p.name ILIKE %s")
+        params.append(f"%{search}%")
+    if only_unsorted:
+        conditions.append("p.category_id IS NULL")
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    cur.execute(f"SELECT COUNT(*) FROM Products p {where};", params)
+    total = cur.fetchone()[0]
+    cur.execute(f"""
+        SELECT p.id, p.name, p.price, p.stock_quantity, p.image_url, p.category_id,
+               (SELECT array_agg(pc.category_id) FROM product_categories pc WHERE pc.product_id = p.id) AS cat_ids
+        FROM Products p {where}
+        ORDER BY p.id
+        LIMIT %s OFFSET %s;
+    """, params + [limit, offset])
+    items = []
+    for r in cur.fetchall():
+        cat_ids = list(r[6]) if r[6] else []
+        if r[5] and r[5] not in cat_ids:
+            cat_ids.append(r[5])
+        items.append({
+            "id": r[0], "name": r[1], "price": float(r[2]),
+            "stock_quantity": r[3],
+            "image": r[4] if r[4] else PLACEHOLDER,
+            "category_id": r[5], "category_ids": cat_ids,
+        })
+    cur.close(); conn.close()
+    return {"total": total, "items": items, "limit": limit, "offset": offset}
+
 @app.patch("/api/admin/products/{product_id}")
 def admin_update_product(product_id: int, body: ProductUpdateBody, sess: dict = Depends(require_admin)):
     fields = body.model_dump(exclude_unset=True)
