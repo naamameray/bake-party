@@ -11,10 +11,8 @@
     <meta property="og:description" content="חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע ומסיבה.">
     <meta property="og:image" content="logo.jpg">
     <meta property="og:type" content="website">
-    <!-- TEMP: חוסם אינדוקס בגוגל עד שהאתר מוכן להשקה רשמית. -->
-    <!-- להסיר את השורה הזו (ורק אותה) כשמשיקים בפועל! -->
+    
     <meta name="robots" content="noindex, nofollow">
-    <!-- /TEMP -->
     <style>
         :root {
             --cream: #FFF9F5; --pink-light: #FFD1DC; --pink-main: #FF85A2;
@@ -30,14 +28,12 @@
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; transition: 0.3s; }
         #a11y-btn:hover { background: #004494; transform: translateY(-3px); }
 
-        /* כפתור ווצאפ צף */
         #wa-btn { position: fixed; bottom: 85px; left: 20px; background: #25D366; color: white; border: none;
             border-radius: 50%; width: 55px; height: 55px; font-size: 30px; cursor: pointer; z-index: 9999;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;
             text-decoration: none; transition: 0.3s; }
         #wa-btn:hover { background: #1da851; transform: translateY(-3px); }
 
-        /* פאנל נגישות */
         #a11y-panel { position: fixed; bottom: 85px; left: 20px; width: 270px; background: #fff; border-radius: 16px;
             box-shadow: 0 8px 30px rgba(0,0,0,0.25); z-index: 10000; padding: 16px; display: none;
             border: 2px solid #005eb8; direction: rtl; }
@@ -54,7 +50,6 @@
         #a11y-reset { background: #d9534f; color: #fff; border: none; border-radius: 10px; padding: 9px;
             width: 100%; margin-top: 6px; cursor: pointer; font-family: inherit; font-weight: bold; }
 
-        /* מצבי נגישות */
         body.high-contrast { background: #121212 !important; color: #fff !important; }
         body.high-contrast header, body.high-contrast .cat-menu-bar, body.high-contrast .sidebar, 
         body.high-contrast .modal, body.high-contrast .product-card, body.high-contrast .detail-img-wrap { background: #1e1e1e !important; border-color: #555 !important; }
@@ -65,7 +60,6 @@
         body.a11y-noanim *, body.a11y-noanim *::before, body.a11y-noanim *::after {
             animation: none !important; transition: none !important; scroll-behavior: auto !important; }
         body.a11y-readable, body.a11y-readable * { font-family: Arial, "Segoe UI", sans-serif !important; letter-spacing: 0.4px; line-height: 1.7 !important; }
-
 
         #back-to-top { position: fixed; bottom: 20px; right: 20px; background: var(--pink-main); color: white; border: none; 
             border-radius: 50%; width: 55px; height: 55px; font-size: 24px; cursor: pointer; z-index: 9999; 
@@ -157,7 +151,6 @@
         #about-section h3 { color: var(--pink-dark); font-size: 1.6em; margin-bottom: 10px; }
         #about-section p { font-size: 1.15em; line-height: 1.6; color: var(--text-color); }
 
-        /* --- רצועת יתרונות (למה לקנות אצלנו) --- */
         #features-section { max-width: 1100px; margin: 10px auto 40px; padding: 0 20px; display: none; }
         .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 20px; }
         .feature-card { background: #fff; border: 2px solid var(--pink-light); border-radius: 18px; padding: 22px 16px;
@@ -169,7 +162,6 @@
         .feature-card h4 { margin: 0 0 6px; color: var(--pink-dark); font-size: 1.05em; }
         .feature-card p { margin: 0; font-size: 0.88em; color: var(--muted); line-height: 1.5; }
 
-        /* --- כותרת תחתונה (footer) --- */
         footer#site-footer { background: var(--pink-light); margin-top: 50px; padding: 34px 20px 18px; color: var(--text-color); }
         .footer-inner { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 28px; }
         .footer-col h4 { color: var(--pink-dark); margin: 0 0 12px; font-size: 1.05em; }
@@ -185,13 +177,12 @@
 
         .products-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 20px; }
         
-        /* מבצעים */
+        /* --- מבצעים --- */
         .sale-badge { position: absolute; top: 8px; right: 8px; background: #FF4444; color: #fff;
             font-weight: bold; font-size: 0.78em; padding: 4px 10px; border-radius: 12px; z-index: 5;
             box-shadow: 0 2px 6px rgba(255,68,68,0.3); }
         .sale-star { position: absolute; top: -6px; left: -6px; font-size: 1.6em; z-index: 5;
             filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3)); }
-        .old-price { text-decoration: line-through; color: var(--muted); font-size: 0.85em; margin-left: 8px; }
         .product-card { position: relative; }
 
         .product-card { background: white; border: 2px solid var(--pink-light); border-radius: 20px; padding: 15px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); display: flex; flex-direction: column; justify-content: space-between; transition: box-shadow 0.2s; cursor: pointer; }
@@ -201,11 +192,9 @@
         .price { font-size: 1.4em; color: var(--pink-dark); font-weight: bold; margin: 10px 0; }
         .state-msg { text-align: center; color: var(--muted); padding: 40px 0; font-size: 1.1em; grid-column: 1 / -1; }
 
-        /* --- מעבר עדין (fade) בין קטגוריות/מוצרים בזמן ניווט --- */
         #categories-container, #products-container { transition: opacity 0.22s ease; }
         #categories-container.fade-out, #products-container.fade-out { opacity: 0; }
 
-        /* --- Skeleton loading (טעינה ראשונית, במקום מסך ריק) --- */
         .skeleton-shimmer { position: relative; overflow: hidden; background: #ecdfe2; }
         .skeleton-shimmer::after { content: ''; position: absolute; inset: 0;
             background: linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent);
@@ -481,6 +470,16 @@
                 <input type="text" id="add-p-name" required>
                 <label>מחיר (₪) *</label>
                 <input type="number" step="0.1" id="add-p-price" required>
+                
+                <label style="display:flex; gap:8px; align-items:center; margin-top:15px; color:#d9534f; font-weight:bold;">
+                    <input type="checkbox" id="add-p-sale" onchange="document.getElementById('add-sale-opts').style.display = this.checked ? 'block' : 'none'">
+                    הגדר כמוצר במבצע 🎁
+                </label>
+                <div id="add-sale-opts" style="display:none; background:#fffafa; border:1px solid #FFD1DC; padding:10px; border-radius:10px; margin-bottom:15px; margin-top:5px;">
+                    <label>תווית מבצע (למשל: 4 ב-25₪)</label>
+                    <input type="text" id="add-p-sale-label">
+                </div>
+
                 <label>קטגוריה ראשונה</label>
                 <select id="add-p-cat-1"><option value="">ללא קטגוריה</option></select>
                 <label>קטגוריה שנייה (אופציונלי)</label>
@@ -506,7 +505,7 @@
         </div>
     </div>
 
-    <!-- מודל דף מוצר / חלון עריכה עם גלילה אוטומטית -->
+    <!-- מודל דף מוצר / חלון עריכה -->
     <div class="modal-overlay" id="detail-modal">
         <div class="modal detail-modal">
             <div class="detail-grid">
@@ -527,7 +526,8 @@
     </div>
 
     <script>
-        const API = 'https://bake-party-production.up.railway.app';        const TOKEN_KEY = 'bp_token';
+        const API = 'https://bake-party-production.up.railway.app';
+        const TOKEN_KEY = 'bp_token';
         const PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150"><rect width="150" height="150" fill="%23FFD1DC"/><text x="50%" y="52%" font-size="48" text-anchor="middle" dominant-baseline="middle" fill="%23E05276">🧁</text></svg>');
 
         let currentUser = null;
@@ -536,22 +536,18 @@
         let view = 'mains', currentMain = null, currentSub = null;
         let currentFilteredProducts = null;
 
-        // --- מעבר עדין (fade) בין תצוגות ---
         const FADE_MS = 180;
         function fadeOutContent() {
             document.getElementById('categories-container').classList.add('fade-out');
             document.getElementById('products-container').classList.add('fade-out');
         }
         function fadeInContent() {
-            // ה-rAF מוודא שהדפדפן "יראה" את שינוי התוכן לפני שמתחילים להעלות את השקיפות בחזרה,
-            // כדי שהאנימציה תרוץ בכל פעם (גם אם ה-DOM כבר היה fade-out).
             requestAnimationFrame(() => {
                 document.getElementById('categories-container').classList.remove('fade-out');
                 document.getElementById('products-container').classList.remove('fade-out');
             });
         }
 
-        // --- Skeleton loading: מלבנים מהבהבים בזמן טעינה ראשונית ---
         function renderSkeletonCategories(count = 8) {
             const container = document.getElementById('categories-container');
             container.style.display = 'grid';
@@ -582,10 +578,7 @@
         function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
         function authHeaders(){ return { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' }; }
 
-        // --- נגישות: פאנל מלא עם שמירה ---
         const A11Y_KEY = 'bp_a11y';
-
-        // --- הודעת "אתר בבנייה" - נסגרת ולא חוזרת ---
         const CB_KEY = 'bp_construction_dismissed';
         if (localStorage.getItem(CB_KEY)) {
             const cb = document.getElementById('construction-banner');
@@ -600,11 +593,9 @@
         function a11ySave() { localStorage.setItem(A11Y_KEY, JSON.stringify(a11yState)); }
 
         function a11yApply() {
-            // גודל טקסט: 0 ברירת מחדל, כל צעד 12%
             document.documentElement.style.fontSize = (100 + a11yState.font * 12) + '%';
             ['high-contrast','a11y-links','a11y-noanim','a11y-readable'].forEach(c => document.body.classList.remove(c));
             a11yState.classes.forEach(c => document.body.classList.add(c));
-            // סימון הכפתורים הפעילים בפאנל
             document.querySelectorAll('.a11y-opt[data-a11y]').forEach(btn => {
                 const on = a11yState.classes.includes(btn.dataset.a11y);
                 btn.classList.toggle('active', on);
@@ -626,16 +617,14 @@
         window.a11yReset = function() {
             a11yState = { font: 0, classes: [] }; a11ySave(); a11yApply();
         };
-        // סגירת הפאנל בלחיצה בחוץ
         document.addEventListener('click', (e) => {
             const panel = document.getElementById('a11y-panel');
             if (panel.classList.contains('open') && !e.target.closest('#a11y-panel') && !e.target.closest('#a11y-btn')) {
                 panel.classList.remove('open');
             }
         });
-        a11yApply(); // החלת ההגדרות השמורות בטעינה
+        a11yApply(); 
 
-        // --- פרטי יצירת קשר + כפתור ווצאפ ---
         let contactInfo = null;
         function loadContact() {
             fetch(`${API}/api/contact`).then(res => res.json()).then(c => {
@@ -644,15 +633,13 @@
                 const ad = document.getElementById('c-address'); if (ad) ad.textContent = c.address;
                 const em = document.getElementById('c-email'); if (em) em.textContent = c.email;
                 const wa = document.getElementById('wa-btn');
-                if (wa && c.whatsapp) wa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, "")}?text=${encodeURIComponent("שלום, באתי מהאתר של Bake & Party ואני מתעניין/ת בנוגע ל...")}`; // pre-filled
-                // old: wa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, '')}`;
+                if (wa && c.whatsapp) wa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, "")}?text=${encodeURIComponent("שלום, באתי מהאתר של Bake & Party ואני מתעניין/ת בנוגע ל...")}`;
 
                 const fph = document.getElementById('f-phone'); if (fph) fph.textContent = c.phone;
                 const fad = document.getElementById('f-address'); if (fad) fad.textContent = c.address;
                 const fem = document.getElementById('f-email'); if (fem) { fem.textContent = c.email; fem.href = `mailto:${c.email}`; }
                 const fwa = document.getElementById('f-whatsapp');
-                if (fwa && c.whatsapp) fwa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, "")}?text=${encodeURIComponent("שלום, באתי מהאתר של Bake & Party ואני מתעניין/ת בנוגע ל...")}`; // pre-filled
-                // old: wa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, '')}`;
+                if (fwa && c.whatsapp) fwa.href = `https://wa.me/${c.whatsapp.replace(/[^0-9]/g, "")}?text=${encodeURIComponent("שלום, באתי מהאתר של Bake & Party ואני מתעניין/ת בנוגע ל...")}`;
             }).catch(() => {});
         }
         window.showContactEdit = function() {
@@ -756,7 +743,7 @@
                 area.innerHTML = `<div style="font-weight:bold; color:var(--pink-dark); margin-bottom:10px; font-size:1.1em;">שלום, ${currentUser.name || 'לקוח/ה'}</div>`;
                 if (currentUser.role === 'admin') {
                     area.innerHTML += `<button class="btn btn-sm" style="display:block; width:100%; margin-bottom:10px; background-color:#4A90E2;" onclick="openAddProductModal()">➕ הוספת מוצר חדש</button>`;
-                    area.innerHTML += `<a href="admin.html" class="btn btn-sm" style="display:block; margin-bottom:10px;">ניהול שעות ומשלוחים ⚙️</a>`;
+                    area.innerHTML += `<a href="admin.html" class="btn btn-sm" style="display:block; margin-bottom:10px;">ניהול חנות וקטגוריות ⚙️</a>`;
                 }
                 area.innerHTML += `<button class="btn btn-sm btn-ghost" onclick="logout()">התנתקות</button>`;
             } else {
@@ -791,7 +778,6 @@
                 allCategories = cats; allProducts = prods;
                 loadCategoryMenu();
                 
-                // רענון המסך הקיים כדי להראות את השינויים
                 if (view === 'products') {
                     if (currentSub) openSub(currentSub);
                     else if (currentMain) openMain(currentMain);
@@ -818,6 +804,8 @@
                     sel2.innerHTML += `<option value="${c.id}">${c.name}</option>`;
                 });
             }
+            document.getElementById('add-product-form').reset();
+            document.getElementById('add-sale-opts').style.display = 'none';
             document.getElementById('add-product-modal').classList.add('open');
         }
 
@@ -849,6 +837,8 @@
                 const weight = document.getElementById('add-p-weight').value;
                 const units = document.getElementById('add-p-units').value;
                 const notes = document.getElementById('add-p-notes').value.trim();
+                const isOnSale = document.getElementById('add-p-sale').checked;
+                const saleLabel = document.getElementById('add-p-sale-label').value.trim();
 
                 const body = {
                     name: document.getElementById('add-p-name').value.trim(),
@@ -857,7 +847,9 @@
                     image_url: imageUrl,
                     weight_grams: weight ? parseInt(weight) : null,
                     units_per_package: units ? parseInt(units) : null,
-                    notes: notes ? notes : null
+                    notes: notes ? notes : null,
+                    is_on_sale: isOnSale,
+                    sale_label: saleLabel ? saleLabel : null
                 };
 
                 const res = await fetch(`${API}/api/admin/products`, {
@@ -866,7 +858,6 @@
                 if(!res.ok) throw new Error('שגיאה בהוספת המוצר');
                 
                 document.getElementById('add-p-msg').textContent = 'המוצר נוסף בהצלחה! ✓';
-                document.getElementById('add-product-form').reset();
                 setTimeout(() => { 
                     document.getElementById('add-p-msg').textContent = ''; 
                     document.getElementById('add-product-modal').classList.remove('open');
@@ -878,6 +869,28 @@
             } finally {
                 btn.textContent = '+ שמור והוסף לחנות'; btn.disabled = false;
             }
+        }
+
+        // --- הצגת מוצרים במבצע ---
+        window.openSales = function() {
+            document.getElementById('about-section').style.display = 'none';
+            document.getElementById('features-section').style.display = 'none';
+            fadeOutContent();
+            setTimeout(() => {
+                view = 'products'; currentMain = null; currentSub = null;
+                document.getElementById('main-title').textContent = 'מבצעים חמים 🎁';
+                document.getElementById('back-button').style.display = 'block';
+                document.getElementById('categories-container').style.display = 'none';
+                updateBreadcrumb([{label:'דף ראשי', fn: goHome}, {label: 'מבצעים חמים 🎁'}]);
+                
+                fetch(`${API}/api/products/on-sale`)
+                    .then(res => res.json())
+                    .then(prods => {
+                        currentFilteredProducts = prods;
+                        renderProducts(prods);
+                        fadeInContent();
+                    });
+            }, FADE_MS);
         }
 
         function loadCategoryMenu() {
@@ -892,11 +905,19 @@
         function renderCategoryMenu() {
             const bar = document.getElementById('cat-menu-bar');
             bar.innerHTML = '';
+            
             const home = document.createElement('button');
             home.className = 'cat-menu-home';
             home.innerHTML = '🏠 דף ראשי';
             home.onclick = goHome;
             bar.appendChild(home);
+
+            const saleBtn = document.createElement('button');
+            saleBtn.className = 'cat-menu-home';
+            saleBtn.style.background = '#FF4444';
+            saleBtn.innerHTML = '🎁 מבצעים';
+            saleBtn.onclick = openSales;
+            bar.appendChild(saleBtn);
 
             categoryTree.forEach(main => {
                 const item = document.createElement('div');
@@ -971,7 +992,7 @@
                 document.getElementById('categories-container').style.display = 'grid';
                 document.getElementById('about-section').style.display = 'block';
                 document.getElementById('features-section').style.display = 'block';
-                renderCategoryCircles(allCategories, true);
+                renderCategoryCircles(allCategories, true, null);
                 updateBreadcrumb([{label: 'דף ראשי'}]);
                 fadeInContent();
             }, FADE_MS);
@@ -990,7 +1011,7 @@
                     document.getElementById('products-container').innerHTML = '';
                     document.getElementById('categories-container').style.display = 'grid';
                     fetch(`${API}/api/categories/${main.id}/subcategories`).then(res => res.json())
-                        .then(subs => { renderCategoryCircles(subs, false); fadeInContent(); });
+                        .then(subs => { renderCategoryCircles(subs, false, main); fadeInContent(); });
                     updateBreadcrumb([{label:'דף ראשי', fn: goHome}, {label: main.name}]);
                 } else {
                     const prods = allProducts.filter(p => p.category_id === main.id || (p.category_ids && p.category_ids.includes(main.id)));
@@ -1019,8 +1040,9 @@
         function renderCategoryCircles(cats, withAll, parentMain) {
             const container = document.getElementById('categories-container');
             container.innerHTML = '';
+            
+            // תת קטגוריה של כל המוצרים של הראשי הנוכחי
             if (parentMain) {
-                // "כל המוצרים" של הקטגוריה הראשית הזו
                 const allCat = document.createElement('button');
                 allCat.className = 'category-circle';
                 allCat.innerHTML = '<span class="circle-img" style="background:var(--pink-main); color:white; font-size:1.2em;">🛒</span><span class="cat-name">כל המוצרים</span>';
@@ -1031,6 +1053,16 @@
                 };
                 container.appendChild(allCat);
             }
+            
+            // כפתור מבצעים בעמוד הבית
+            if (!parentMain && withAll) {
+                const saleCircle = document.createElement('button');
+                saleCircle.className = 'category-circle';
+                saleCircle.innerHTML = `<span class="circle-img" style="background:#FF4444; color:white; font-size:2em; border-color:#d93838;">🎁</span><span class="cat-name" style="color:#d93838;">מבצעים חמים</span>`;
+                saleCircle.onclick = openSales;
+                container.appendChild(saleCircle);
+            }
+
             if (withAll) {
                 const all = document.createElement('button');
                 all.className = 'category-circle';
@@ -1073,7 +1105,7 @@
                 const card = document.createElement('article');
                 card.className = 'product-card';
                 const imgSrc = (p.image && p.image.startsWith('/')) ? API + p.image : (p.image || PLACEHOLDER);
-                // מבצע + מחיר
+                
                 let saleBadge = '';
                 let priceHtml = '';
                 if (p.is_on_sale && p.sale_label) {
@@ -1116,6 +1148,10 @@
 
                 const meta = document.getElementById('detail-meta');
                 meta.innerHTML = `
+                    <li><label style="font-size:0.85em;display:flex;align-items:center;gap:5px;color:#d9534f;font-weight:bold;">
+                        <input type="checkbox" id="edit-detail-sale" ${p.is_on_sale ? 'checked' : ''}> המוצר במבצע 🎁
+                    </label></li>
+                    <li><span style="font-size:0.85em;">תווית מבצע</span><input type="text" id="edit-detail-sale-label" value="${p.sale_label || ''}" class="edit-input-sm" style="width:65%;" placeholder="למשל: 4 ב-25₪"></li>
                     <li><span style="font-size:0.85em;">קטגוריה 1</span><select id="edit-detail-cat1" class="edit-input-sm" style="width:65%;">${catOptions}</select></li>
                     <li><span style="font-size:0.85em;">קטגוריה 2</span><select id="edit-detail-cat2" class="edit-input-sm" style="width:65%;">${catOptions}</select></li>
                     <li><span>משקל (גרם)</span><input type="number" id="edit-detail-weight" value="${p.weight_grams || ''}" class="edit-input-sm"></li>
@@ -1184,6 +1220,9 @@
             const unitsInput = document.getElementById('edit-detail-units').value;
             const notesInput = document.getElementById('edit-detail-notes').value.trim();
             
+            const isOnSale = document.getElementById('edit-detail-sale').checked;
+            const saleLabel = document.getElementById('edit-detail-sale-label').value.trim();
+
             const cat1 = document.getElementById('edit-detail-cat1').value;
             const cat2 = document.getElementById('edit-detail-cat2').value;
             const category_ids = [];
@@ -1210,7 +1249,11 @@
                     imageUrl = uploadData.url;
                 }
 
-                const body = { name, price, weight_grams: weight, units_per_package: units, category_ids: category_ids, notes: notesInput ? notesInput : null };
+                const body = { 
+                    name, price, weight_grams: weight, units_per_package: units, 
+                    category_ids: category_ids, notes: notesInput ? notesInput : null,
+                    is_on_sale: isOnSale, sale_label: saleLabel ? saleLabel : null
+                };
                 if (imageUrl !== undefined) body.image_url = imageUrl;
 
                 const res = await fetch(`${API}/api/admin/products/${id}`, {
@@ -1250,10 +1293,7 @@
         };
 
         window.deleteProduct = async function(id, name) {
-            // מחיקה קשה יותר להפעיל בטעות: מקלידים את המילה "מחק" ולא רק
-            // לוחצים אישור. חשוב גם כי המוצרים כבר לא מתעדכנים אוטומטית
-            // מוולט, אז מוצר שנמחק לא יחזור לבד בריענון הבא.
-            const typed = prompt(`פעולה זו תמחק את "${name}" לצמיתות מהחנות, ולא ניתן לשחזר אותה (המוצרים כבר לא מתעדכנים אוטומטית מוולט).\n\nלאישור, הקלידו בדיוק את המילה: מחק`);
+            const typed = prompt(`פעולה זו תמחק את "${name}" לצמיתות מהחנות.\n\nלאישור, הקלידו בדיוק את המילה: מחק`);
             if (typed === null) return;
             if (typed.trim() !== 'מחק') { alert('המחיקה בוטלה — הטקסט שהוקלד לא תואם.'); return; }
             try {
@@ -1351,8 +1391,6 @@
         const fYear = document.getElementById('f-year');
         if (fYear) fYear.textContent = new Date().getFullYear();
 
-        // מציגים שלד טעינה (skeleton) מיד, לפני שהתשובה מהשרת חוזרת,
-        // כדי שלא יהיה רגע של מסך ריק בטעינה הראשונית.
         renderSkeletonCategories();
         initApp();
     </script>

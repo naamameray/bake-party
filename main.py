@@ -16,8 +16,6 @@ import psycopg2
 
 app = FastAPI(title="Bake & Party API")
 
-# --- CORS: בפרודקשן, הגדירי ALLOWED_ORIGINS כמשתנה סביבה עם הדומיין שלך ---
-# לדוגמה: ALLOWED_ORIGINS=https://bakeparty.co.il,https://www.bakeparty.co.il
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -27,7 +25,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- חיבור ל-DB: תומך במשתני סביבה (לפרודקשן) או ברירת מחדל (לפיתוח) ---
 DB_CONFIG = {
     "host": os.environ.get("DB_HOST", "localhost"),
     "port": os.environ.get("DB_PORT", "5433"),
@@ -36,7 +33,6 @@ DB_CONFIG = {
     "password": os.environ.get("DB_PASSWORD", "adminpassword"),
 }
 
-# --- יצירת טבלאות ושדות חדשים באופן אוטומטי ---
 try:
     init_conn = psycopg2.connect(**DB_CONFIG)
     init_cur = init_conn.cursor()
@@ -48,14 +44,10 @@ try:
         );
     """)
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS notes TEXT;")
-    # --- מבצעים ---
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS is_on_sale BOOLEAN DEFAULT FALSE;")
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(10,2);")
-    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS sale_label TEXT;")  # e.g. "4 ב-25₪"
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS sale_label TEXT;")
 
-    # רשת ביטחון: אלו נוצרות רגיל דרך create_admin.py, אבל אם השרת עולה
-    # לפני שהריצו אותו (למשל אחרי clone טרי של הריפו), עדיף שהאתר לא יקרוס
-    # לגמרי במקום להציג שגיאת "relation does not exist" בכל טעינה.
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS weekly_hours (
             day_of_week   INTEGER PRIMARY KEY,
@@ -83,7 +75,6 @@ try:
             "VALUES (%s, %s, FALSE, '09:00', '18:00') ON CONFLICT (day_of_week) DO NOTHING;",
             (dow, dname),
         )
-    # --- טבלאות users + settings (נוצרות בדרך כלל ע"י create_admin.py) ---
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY, name VARCHAR(150), email VARCHAR(255) UNIQUE NOT NULL,
@@ -101,7 +92,6 @@ try:
         ('delivery_override','auto') ON CONFLICT (key) DO NOTHING;
     """)
 
-    # --- יצירת מנהל אוטומטית מ-env vars (לפרודקשן) ---
     admin_email = os.environ.get("ADMIN_EMAIL")
     admin_pass = os.environ.get("ADMIN_PASSWORD")
     if admin_email and admin_pass:
@@ -114,7 +104,6 @@ try:
             "INSERT INTO users (name, email, password_hash, role) VALUES (%s, %s, %s, 'admin') "
             "ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, role='admin';",
             (admin_name, admin_email.lower(), _hash))
-        print(f"✅ מנהל '{admin_email}' נוצר/עודכן אוטומטית מ-env vars")
 
     init_conn.commit()
     init_cur.close()
@@ -131,7 +120,6 @@ PLACEHOLDER = "data:image/svg+xml;utf8," + "%3Csvg xmlns='http://www.w3.org/2000
 def get_conn():
     return psycopg2.connect(**DB_CONFIG)
 
-# --- Authentication ---
 SESSIONS = {}
 SESSION_TTL = 60 * 60 * 24 * 7
 
@@ -217,8 +205,7 @@ def register(body: RegisterBody):
     cur.close(); conn.close()
     return {"token": _issue_token(user_id, "customer"), "user": _user_public(user)}
 
-# --- הגנת brute force: מקסימום 10 ניסיונות התחברות כושלים בדקה מכתובת IP ---
-LOGIN_ATTEMPTS = defaultdict(list)  # ip -> [timestamps of failed attempts]
+LOGIN_ATTEMPTS = defaultdict(list)
 
 def check_rate_limit(ip: str, max_attempts: int = 10, window: int = 60):
     now = time_module.time()
@@ -240,7 +227,7 @@ def login(body: LoginBody, request: Request):
         raise HTTPException(status_code=401, detail="אימייל או סיסמה שגויים")
     user = _fetch_user(cur, row[0])
     cur.close(); conn.close()
-    LOGIN_ATTEMPTS.pop(ip, None)  # איפוס אחרי הצלחה
+    LOGIN_ATTEMPTS.pop(ip, None)
     return {"token": _issue_token(row[0], row[2]), "user": _user_public(user)}
 
 @app.post("/api/logout")
@@ -258,7 +245,6 @@ def get_me(sess: dict = Depends(require_auth)):
         raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
     return _user_public(user)
 
-# --- Store Hours & Deliveries ---
 def _parse_time(val, default):
     try:
         h, m = val.split(":")
@@ -314,8 +300,6 @@ def get_store_status():
     else:
         delivery_active = is_open
 
-    # שימו לב: אין כרגע מערכת הזמנות באתר, אז ההודעה כאן מתארת רק את מצב
-    # החנות עצמה (פתוחה/סגורה) ולא רומזת על אפשרות "להזמין" משהו.
     msg = "החנות פתוחה כעת" if is_open else "החנות סגורה כרגע"
     if note_text:
         msg = f"{note_text} | {msg}"
@@ -452,12 +436,10 @@ async def upload_image(file: UploadFile = File(...), sess: dict = Depends(requir
 def _serialize_products(rows):
     data = []
     for p in rows:
-        # בדיקה בטוחה של המערך החוזר ממסד הנתונים
         cat_ids = list(p[10]) if len(p) > 10 and p[10] else []
         if p[6] and p[6] not in cat_ids:
             cat_ids.append(p[6])
         
-        # promotion fields (indices 11-13, may not exist in older queries)
         is_on_sale = p[11] if len(p) > 11 else False
         sale_price = float(p[12]) if len(p) > 12 and p[12] is not None else None
         sale_label = p[13] if len(p) > 13 else None
@@ -508,7 +490,6 @@ def get_main_categories():
 def get_subcategories(category_id: int):
     return _fetch_categories("WHERE c.parent_id = %s", (category_id,))
 
-# --- פונקציית שליפת מוצרים משודרגת עם Subquery מאובטח ---
 @app.get("/api/products")
 def get_products():
     conn = get_conn(); cur = conn.cursor()
@@ -562,6 +543,8 @@ class ProductUpdateBody(BaseModel):
     units_per_package: Optional[int] = None
     image_url: Optional[str] = None
     notes: Optional[str] = None
+    is_on_sale: Optional[bool] = None
+    sale_label: Optional[str] = None
 
 @app.patch("/api/admin/products/{product_id}")
 def admin_update_product(product_id: int, body: ProductUpdateBody, sess: dict = Depends(require_admin)):
@@ -570,13 +553,6 @@ def admin_update_product(product_id: int, body: ProductUpdateBody, sess: dict = 
     
     cat_ids = fields.pop("category_ids", None)
 
-    # תוקן: קודם ה-pop() מוציא את category_ids מ-fields, ואז הבדיקה "if fields"
-    # הייתה נכנסת ל-False בדיוק כשהבקשה מכילה רק category_ids (המקרה של טאב
-    # "מוצרים וקטגוריות" ב-admin.html, ששולח *רק* את זה) - כך שהעדכון של
-    # category_id (הקטגוריה הראשית בטבלת Products) פשוט לא קרה בפועל אף פעם.
-    # התוצאה: שינוי/הסרת קטגוריות בפאנל הניהול עדכן רק את טבלת הקישור
-    # product_categories, בעוד שהעמודה category_id (שקובעת בפועל תחת איזו
-    # קטגוריה המוצר מוצג באתר, ואם הוא "ללא קטגוריה") נשארה עם הערך הישן.
     if cat_ids is not None:
         fields["category_id"] = cat_ids[0] if cat_ids else None
 
@@ -601,6 +577,8 @@ class ProductCreateBody(BaseModel):
     units_per_package: Optional[int] = None
     image_url: Optional[str] = None
     notes: Optional[str] = None
+    is_on_sale: Optional[bool] = False
+    sale_label: Optional[str] = None
 
 @app.post("/api/admin/products")
 def admin_create_product(body: ProductCreateBody, sess: dict = Depends(require_admin)):
@@ -609,11 +587,11 @@ def admin_create_product(body: ProductCreateBody, sess: dict = Depends(require_a
     
     cur.execute(
         """
-        INSERT INTO Products (name, category_id, price, stock_quantity, weight_grams, units_per_package, image_url, notes)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO Products (name, category_id, price, stock_quantity, weight_grams, units_per_package, image_url, notes, is_on_sale, sale_label)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id;
         """,
-        (body.name.strip(), primary_cat, body.price, body.stock_quantity, body.weight_grams, body.units_per_package, body.image_url, body.notes)
+        (body.name.strip(), primary_cat, body.price, body.stock_quantity, body.weight_grams, body.units_per_package, body.image_url, body.notes, body.is_on_sale, body.sale_label)
     )
     product_id = cur.fetchone()[0]
 
@@ -642,7 +620,9 @@ def get_product_detail(product_id: int):
     cur.execute(
         """
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url,
-               p.category_id, p.weight_grams, p.units_per_package, p.notes
+               p.category_id, p.weight_grams, p.units_per_package, p.notes,
+               (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
+               p.is_on_sale, p.sale_price, p.sale_label
         FROM Products p LEFT JOIN Categories c ON p.category_id = c.id
         WHERE p.id = %s;
         """,
@@ -664,7 +644,9 @@ def get_product_detail(product_id: int):
         "category": r[4], "image": r[5] if r[5] else PLACEHOLDER, "category_id": r[6],
         "weight_grams": r[7], "units_per_package": r[8],
         "notes": r[9],
-        "category_ids": cats
+        "category_ids": cats,
+        "is_on_sale": bool(r[11]),
+        "sale_label": r[13]
     }
 
 @app.get("/api/categories/tree")
@@ -677,7 +659,6 @@ def get_categories_tree():
             main["subcategories"] = []
     return mains
 
-# --- פרטי יצירת קשר (ניתנים לעריכה ע"י המנהל, נשמרים בטבלת settings) ---
 CONTACT_DEFAULTS = {
     "contact_phone": "054-9881998",
     "contact_address": "יוני נתניהו 21, גבעת שמואל",
@@ -716,9 +697,6 @@ def update_contact(body: ContactBody, sess: dict = Depends(require_admin)):
     conn.commit(); cur.close(); conn.close()
     return {"ok": True}
 
-
-
-# --- ניהול קטגוריות (CRUD) ---
 class CategoryCreateBody(BaseModel):
     name: str
     parent_id: Optional[int] = None
@@ -760,8 +738,6 @@ def admin_delete_category(category_id: int, sess: dict = Depends(require_admin))
         raise HTTPException(status_code=404, detail="הקטגוריה לא נמצאה")
     return {"ok": True, "deleted": category_id}
 
-
-# --- מוצרים במבצע ---
 @app.get("/api/products/on-sale")
 def get_products_on_sale():
     conn = get_conn(); cur = conn.cursor()
@@ -777,30 +753,3 @@ def get_products_on_sale():
     """)
     data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
     return data
-
-
-# --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
-# בפרודקשן, FastAPI מגיש את כל הקבצים — לא צריך שרת נפרד.
-STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
-
-@app.get("/")
-def serve_index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
-
-@app.get("/admin.html")
-def serve_admin():
-    return FileResponse(os.path.join(STATIC_DIR, "admin.html"))
-
-@app.get("/logo.jpg")
-def serve_logo():
-    path = os.path.join(STATIC_DIR, "logo.jpg")
-    if os.path.exists(path):
-        return FileResponse(path)
-    raise HTTPException(status_code=404)
-
-@app.get("/robots.txt")
-def serve_robots():
-    path = os.path.join(STATIC_DIR, "robots.txt")
-    if os.path.exists(path):
-        return FileResponse(path)
-    raise HTTPException(status_code=404)
