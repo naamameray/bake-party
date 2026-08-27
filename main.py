@@ -753,3 +753,27 @@ def get_products_on_sale():
     """)
     data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
     return data
+# --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
+STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
+
+@app.get("/")
+def serve_index():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+@app.get("/admin.html")
+def serve_admin():
+    return FileResponse(os.path.join(STATIC_DIR, "admin.html"))
+
+@app.get("/logo.jpg")
+def serve_logo():
+    path = os.path.join(STATIC_DIR, "logo.jpg")
+    if os.path.exists(path):
+        return FileResponse(path)
+    raise HTTPException(status_code=404)
+
+@app.get("/robots.txt")
+def serve_robots():
+    path = os.path.join(STATIC_DIR, "robots.txt")
+    if os.path.exists(path):
+        return FileResponse(path)
+    raise HTTPException(status_code=404)
