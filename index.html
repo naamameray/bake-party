@@ -6,15 +6,16 @@
     <title>Bake & Party - אפייה ומסיבות | ממלכת הגלידות מבית פינוקים</title>
     <link rel="icon" type="image/jpeg" href="logo.jpg">
     <meta name="keywords" content="ממלכת הגלידות, פינוקים, גבעת שמואל, אפייה, מסיבות, גלידות, שוקולד, בלונים, חומרי גלם לאפייה, Bake and Party">
-    <meta name="description" content="Bake & Party - חנות אפייה ומסיבות בגבעת שמואל. חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע. שעות פתיחה, יצירת קשר ומשלוחים מעל 200 ₪.">
+    <meta name="description" content="Bake & Party - חנות אפייה ומסיבות בגבעת שמואל. חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע. שעות פתיחה, יצירת קשר ומשלוחים.">
     <meta property="og:title" content="Bake & Party | ממלכת הגלידות מבית פינוקים">
     <meta property="og:description" content="חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע ומסיבה.">
     <meta property="og:image" content="logo.jpg">
     <meta property="og:type" content="website">
+    
     <!-- TEMP: חוסם אינדוקס בגוגל עד שהאתר מוכן להשקה רשמית. -->
-    <!-- להסיר את השורה הזו (ורק אותה) כשמשיקים בפועל! -->
     <meta name="robots" content="noindex, nofollow">
     <!-- /TEMP -->
+    
     <style>
         :root {
             --cream: #FFF9F5; --pink-light: #FFD1DC; --pink-main: #FF85A2;
@@ -66,7 +67,6 @@
             animation: none !important; transition: none !important; scroll-behavior: auto !important; }
         body.a11y-readable, body.a11y-readable * { font-family: Arial, "Segoe UI", sans-serif !important; letter-spacing: 0.4px; line-height: 1.7 !important; }
 
-
         #back-to-top { position: fixed; bottom: 20px; right: 20px; background: var(--pink-main); color: white; border: none; 
             border-radius: 50%; width: 55px; height: 55px; font-size: 24px; cursor: pointer; z-index: 9999; 
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: none; align-items: center; justify-content: center; transition: 0.3s; }
@@ -89,6 +89,7 @@
 
         #status-bar { background-color: var(--pink-main); color: white; text-align: center; padding: 6px 10px; font-weight: bold; font-size: 0.95em; }
 
+        /* --- באנר בבנייה --- */
         #construction-banner { background: #FFF3E0; color: #8a5a12; border-bottom: 2px solid #F5C874;
             text-align: center; padding: 9px 40px 9px 15px; font-size: 0.9em; font-weight: 600; position: relative; }
         #construction-banner .cb-close { position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
@@ -438,6 +439,7 @@
                 <h4>ניווט מהיר</h4>
                 <p><a href="#" onclick="goHome(); window.scrollTo({top:0,behavior:'smooth'}); return false;">דף הבית</a></p>
                 <p><a href="#" onclick="toggleSidebar(); return false;">תפריט וקטגוריות</a></p>
+                <p><a href="https://wolt.com/he/isr/petah-tikva/venue/pinookim-givat-shmuel" target="_blank" rel="noopener">הזמנה באפליקציית Wolt 🛵</a></p>
                 <p><a href="#" id="f-whatsapp" target="_blank" rel="noopener">שליחת הודעה בוואטסאפ</a></p>
             </div>
         </div>
@@ -590,7 +592,7 @@
         function authHeaders(){ return { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' }; }
 
         const A11Y_KEY = 'bp_a11y';
-        const CB_KEY = 'bp_construction_dismissed_v2'; // שינינו את המזהה כדי שהבאנר יחזור להופיע!
+        const CB_KEY = 'bp_construction_dismissed_v4'; // שוב מזהה חדש, כדי שיופיע לך עכשיו גם אם סגרת את הקודם!
         if (localStorage.getItem(CB_KEY)) {
             const cb = document.getElementById('construction-banner');
             if (cb) cb.style.display = 'none';
@@ -930,6 +932,17 @@
             saleBtn.innerHTML = '🎁 מבצעים';
             saleBtn.onclick = openSales;
             bar.appendChild(saleBtn);
+
+            // --- כפתור וולט בתפריט העליון ---
+            const woltBtn = document.createElement('a');
+            woltBtn.className = 'cat-menu-home';
+            woltBtn.style.background = '#00c2e8';
+            woltBtn.style.color = '#fff';
+            woltBtn.style.textDecoration = 'none';
+            woltBtn.href = 'https://wolt.com/he/isr/petah-tikva/venue/pinookim-givat-shmuel';
+            woltBtn.target = '_blank';
+            woltBtn.innerHTML = '🛵 הזמנה בוולט';
+            bar.appendChild(woltBtn);
 
             categoryTree.forEach(main => {
                 const item = document.createElement('div');
@@ -1274,15 +1287,11 @@
                 
                 if (!res.ok) throw new Error('שגיאה בעדכון המוצר');
                 
-                alert('המוצר עודכן בהצלחה! ✓');
                 closeDetail();
-                
-                // --- התיקון: משיכת מוצרים שקטה מבלי לרענן את כל הדף ---
                 const updatedProds = await fetch(`${API}/api/products?_t=${new Date().getTime()}`).then(r => r.json());
                 allProducts = updatedProds;
                 
                 if (currentFilteredProducts) {
-                    // מעדכן את הרשימה המוצגת עכשיו, כך שלא תוקפצי לראש הדף
                     currentFilteredProducts = currentFilteredProducts.map(item => allProducts.find(p => p.id === item.id) || item);
                     renderProducts(currentFilteredProducts);
                 }
