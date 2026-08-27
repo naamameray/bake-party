@@ -4,6 +4,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from datetime import datetime, date, time
+from zoneinfo import ZoneInfo
+
+ISRAEL_TZ = ZoneInfo('Asia/Jerusalem')
 from typing import Optional, List
 from collections import defaultdict
 import hashlib
@@ -259,7 +262,7 @@ def get_store_status():
     row = cur.fetchone()
     override = row[0] if row else "auto"
 
-    now_dt = datetime.now()
+    now_dt = datetime.now(ISRAEL_TZ)
     today_date = now_dt.date()
     now_time = now_dt.time()
     js_weekday = (now_dt.weekday() + 1) % 7 
@@ -317,7 +320,7 @@ def get_public_schedule():
     cur.execute("SELECT day_of_week, day_name, is_closed, opening_time, closing_time FROM weekly_hours ORDER BY day_of_week;")
     weekly = [{"day_of_week": r[0], "day_name": r[1], "is_closed": r[2], "opening_time": r[3], "closing_time": r[4]} for r in cur.fetchall()]
 
-    today_date = datetime.now().date()
+    today_date = datetime.now(ISRAEL_TZ).date()
     cur.execute("SELECT holiday_date, title, is_closed, opening_time, closing_time, note FROM special_days WHERE holiday_date >= %s ORDER BY holiday_date;", (today_date,))
     special = [{"holiday_date": str(r[0]), "title": r[1], "is_closed": r[2], "opening_time": r[3], "closing_time": r[4], "note": r[5] or ""} for r in cur.fetchall()]
     
