@@ -102,7 +102,7 @@
         <header>
             <h1>פאנל ניהול חנות (שעות ומשלוחים)</h1>
             <div class="header-actions">
-                <a href="index.html" class="btn ghost">← חזור לאתר הראשי</a>
+                <a href="/" class="btn ghost">← חזור לאתר הראשי</a>
                 <button class="btn ghost" type="button" id="logout-btn">התנתק</button>
             </div>
         </header>
@@ -170,7 +170,7 @@
                         מוצג באתר הראשי בכלל עד שתשייכי לו קטגוריה.
                     </p>
                     <div class="prod-toolbar">
-                        <input type="text" id="prod-search" placeholder="חיפוש מוצר לפי שם..." oninput="renderProductRows()">
+                        <input type="text" id="prod-search" placeholder="חיפוש מוצר לפי שם..." oninput="clearTimeout(window._searchTimer); window._searchTimer=setTimeout(()=>{prodOffset=0; loadProductPage()}, 400)">
                         <span class="prod-filter-chip active" id="chip-all" onclick="setProdFilter('all')">הכל</span>
                         <span class="prod-filter-chip" id="chip-nocat" onclick="setProdFilter('nocat')">ללא קטגוריה ⚠️</span>
                         <span class="prod-filter-chip" id="chip-onecat" onclick="setProdFilter('onecat')">קטגוריה אחת בלבד</span>
@@ -460,29 +460,45 @@
         let allProductsData = [];
         let allSubcatsFlat = [];
         let prodFilter = 'all';
+        let prodOffset = 0;
+        const PROD_LIMIT = 30;
+        let prodTotal = 0;
 
         async function loadProductsTab() {
+            // טוענים רק את רשימת הקטגוריות (קטנה) + עמוד ראשון של מוצרים
+            if (!allSubcatsFlat.length) {
+                try {
+                    const subRes = await fetch(`${API}/api/admin/subcategories-flat`, { headers: authHeaders() });
+                    if (!subRes.ok) throw new Error();
+                    allSubcatsFlat = await subRes.json();
+                } catch { }
+            }
+            productsLoaded = true;
+            loadProductPage();
+        }
+
+        async function loadProductPage() {
             const listEl = document.getElementById('prod-list');
-            listEl.textContent = 'טוען מוצרים...';
+            listEl.innerHTML = '<p style="color:var(--muted); padding:10px;">טוען מוצרים...</p>';
+            const search = (document.getElementById('prod-search')?.value || '').trim();
+            const onlyUnsorted = prodFilter === 'nocat';
             try {
-                const [prodRes, subRes] = await Promise.all([
-                    fetch(`${API}/api/products`),
-                    fetch(`${API}/api/admin/subcategories-flat`, { headers: authHeaders() })
-                ]);
-                if (!prodRes.ok || !subRes.ok) throw new Error('שגיאה בטעינת נתונים');
-                allProductsData = await prodRes.json();
-                allSubcatsFlat = await subRes.json();
-                productsLoaded = true;
-                renderProductRows();
-            } catch (e) {
-                listEl.textContent = 'שגיאה בטעינת המוצרים. נסי לרענן את הדף.';
+                const url = `${API}/api/admin/products?search=${encodeURIComponent(search)}&only_unsorted=${onlyUnsorted}&limit=${PROD_LIMIT}&offset=${prodOffset}`;
+                const res = await fetch(url, { headers: authHeaders() });
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                prodTotal = data.total;
+                renderProductRows(data.items);
+            } catch {
+                listEl.innerHTML = '<p style="color:var(--muted); padding:10px;">שגיאה בטעינת המוצרים.</p>';
             }
         }
 
         window.setProdFilter = function(f) {
-            prodFilter = f; prodPage = 0;
-            ['all', 'nocat', 'onecat'].forEach(k => document.getElementById(`chip-${k}`).classList.toggle('active', k === f));
-            renderProductRows();
+            prodFilter = f;
+            prodOffset = 0;
+            ['all', 'nocat', 'onecat'].forEach(k => document.getElementById(`chip-${k}`)?.classList.toggle('active', k === f));
+            loadProductPage();
         };
 
         function catOptionsHtml(selectedId) {
@@ -493,37 +509,23 @@
             return html;
         }
 
-        let prodPage = 0;
-        const PROD_PER_PAGE = 30;
-
-        function renderProductRows() {
+        function renderProductRows(products) {
             const listEl = document.getElementById('prod-list');
-            const search = (document.getElementById('prod-search').value || '').trim().toLowerCase();
-
-            let rows = allProductsData.filter(p => !search || p.name.toLowerCase().includes(search));
-            if (prodFilter === 'nocat') rows = rows.filter(p => !p.category_ids || p.category_ids.length === 0);
-            if (prodFilter === 'onecat') rows = rows.filter(p => p.category_ids && p.category_ids.length === 1);
-
-            if (!rows.length) { listEl.innerHTML = '<p style="color:var(--muted); padding:10px;">לא נמצאו מוצרים תואמים.</p>'; return; }
-
-            const totalPages = Math.ceil(rows.length / PROD_PER_PAGE);
-            if (prodPage >= totalPages) prodPage = totalPages - 1;
-            const start = prodPage * PROD_PER_PAGE;
-            const pageRows = rows.slice(start, start + PROD_PER_PAGE);
-
             listEl.innerHTML = '';
 
-            // Pager top
+            if (!products.length) { listEl.innerHTML = '<p style="color:var(--muted); padding:10px;">לא נמצאו מוצרים תואמים.</p>'; return; }
+
+            // דפדוף
+            const from = prodTotal ? prodOffset + 1 : 0;
+            const to = Math.min(prodOffset + PROD_LIMIT, prodTotal);
             const pager = document.createElement('div');
-            pager.style.cssText = 'display:flex; justify-content:center; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap;';
-            pager.innerHTML = \`
-                <button class="chip \${prodPage > 0 ? '' : 'disabled'}" onclick="prodPage--;renderProductRows()" \${prodPage > 0 ? '' : 'disabled'}>→ הקודם</button>
-                <span style="font-weight:bold; color:var(--muted);">\${start+1}–\${Math.min(start+PROD_PER_PAGE, rows.length)} מתוך \${rows.length}</span>
-                <button class="chip \${prodPage < totalPages-1 ? '' : 'disabled'}" onclick="prodPage++;renderProductRows()" \${prodPage < totalPages-1 ? '' : 'disabled'}>הבא ←</button>
-            \`;
+            pager.style.cssText = 'display:flex; justify-content:center; gap:12px; align-items:center; margin-bottom:12px; flex-wrap:wrap;';
+            const prevBtn = prodOffset > 0 ? `<button class="chip" onclick="prodOffset-=PROD_LIMIT; loadProductPage()">→ הקודם</button>` : `<button class="chip" disabled>→ הקודם</button>`;
+            const nextBtn = to < prodTotal ? `<button class="chip" onclick="prodOffset+=PROD_LIMIT; loadProductPage()">הבא ←</button>` : `<button class="chip" disabled>הבא ←</button>`;
+            pager.innerHTML = `${prevBtn} <span style="font-weight:bold; color:var(--muted);">${from}–${to} מתוך ${prodTotal}</span> ${nextBtn}`;
             listEl.appendChild(pager);
 
-            pageRows.forEach(p => {
+            products.forEach(p => {
                 const catIds = p.category_ids || [];
                 const noCat = catIds.length === 0;
                 const cat1 = catIds[0] || '';
@@ -561,17 +563,13 @@
                             body: JSON.stringify({ category_ids })
                         });
                         if (!res.ok) throw new Error();
-                        p.category_ids = category_ids;
                         saveBtn.textContent = '✓ נשמר';
                         saveBtn.classList.add('saved');
                         row.classList.toggle('no-cat', category_ids.length === 0);
-                        
-                        // עדכון הסטטוס בשורה כדי שתעלם מהפילטר אם צריך
                         if (category_ids.length > 0) row.querySelector('.prod-warn')?.remove();
-
                         setTimeout(() => { saveBtn.textContent = 'שמור'; saveBtn.classList.remove('saved'); saveBtn.disabled = false; }, 1500);
                     } catch {
-                        saveBtn.textContent = 'שגיאה, נסי שוב';
+                        saveBtn.textContent = 'שגיאה';
                         saveBtn.disabled = false;
                     }
                 };
