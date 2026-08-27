@@ -516,7 +516,7 @@
         </div>
     </div>
 
-    <!-- מודל דף מוצר / חלון עריכה -->
+    <!-- מודל דף מוצר / חלון עריכה עם גלילה אוטומטית -->
     <div class="modal-overlay" id="detail-modal">
         <div class="modal detail-modal">
             <div class="detail-grid">
@@ -590,7 +590,7 @@
         function authHeaders(){ return { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' }; }
 
         const A11Y_KEY = 'bp_a11y';
-        const CB_KEY = 'bp_construction_dismissed';
+        const CB_KEY = 'bp_construction_dismissed_v2'; // שינינו את המזהה כדי שהבאנר יחזור להופיע!
         if (localStorage.getItem(CB_KEY)) {
             const cb = document.getElementById('construction-banner');
             if (cb) cb.style.display = 'none';
@@ -871,10 +871,12 @@
                 
                 document.getElementById('add-p-msg').textContent = 'המוצר נוסף בהצלחה! ✓';
                 document.getElementById('add-product-form').reset();
-                setTimeout(() => { 
+                setTimeout(async () => { 
                     document.getElementById('add-p-msg').textContent = ''; 
                     document.getElementById('add-product-modal').classList.remove('open');
-                    initApp(); 
+                    
+                    const updatedProds = await fetch(`${API}/api/products?_t=${new Date().getTime()}`).then(r => r.json());
+                    allProducts = updatedProds;
                 }, 1500);
 
             } catch (err) {
@@ -896,7 +898,6 @@
                 document.getElementById('categories-container').style.display = 'none';
                 updateBreadcrumb([{label:'דף ראשי', fn: goHome}, {label: 'מבצעים חמים 🎁'}]);
                 
-                // שינוי ענק! שולפים את המבצעים ישירות מהזיכרון המעודכן שלנו בלי לבקש מהשרת
                 const saleProds = allProducts.filter(p => p.is_on_sale === true);
                 currentFilteredProducts = saleProds;
                 renderProducts(saleProds);
@@ -1275,7 +1276,16 @@
                 
                 alert('המוצר עודכן בהצלחה! ✓');
                 closeDetail();
-                await initApp(); 
+                
+                // --- התיקון: משיכת מוצרים שקטה מבלי לרענן את כל הדף ---
+                const updatedProds = await fetch(`${API}/api/products?_t=${new Date().getTime()}`).then(r => r.json());
+                allProducts = updatedProds;
+                
+                if (currentFilteredProducts) {
+                    // מעדכן את הרשימה המוצגת עכשיו, כך שלא תוקפצי לראש הדף
+                    currentFilteredProducts = currentFilteredProducts.map(item => allProducts.find(p => p.id === item.id) || item);
+                    renderProducts(currentFilteredProducts);
+                }
             } catch (err) {
                 alert(err.message);
             } finally {
