@@ -826,6 +826,7 @@ DEAL_MAP = {
     "6b55": ("6 ב-₪55", None),
     "4b25": ("4 ב-₪25", None),
     "8b40": ("8 ב-₪40", None),
+    "10b27": ("10 ב-₪27", None),
 }
 
 @app.post("/api/admin/quick-deal")
