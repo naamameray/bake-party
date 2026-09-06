@@ -794,6 +794,58 @@ def get_products_on_sale():
     """)
     data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
     return data
+
+# --- תיקון מחירים חד-פעמי (הסרת תוספת 30% של וולט) ---
+@app.post("/api/admin/fix-prices")
+def admin_fix_prices(sess: dict = Depends(require_admin)):
+    """
+    מחלק את כל המחירים ב-1.3 ומעגל ל-0.10 הקרוב (עדיפות לעיגול למעלה).
+    רץ פעם אחת בלבד. מחזיר כמה מוצרים עודכנו.
+    """
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, price FROM Products;")
+    products = cur.fetchall()
+    updated = 0
+    for pid, price in products:
+        real_price = float(price) / 1.3
+        # עיגול ל-0.10 הקרוב, עם עדיפות למעלה
+        import math
+        rounded = math.ceil(real_price * 10) / 10  # ceil מעגל תמיד למעלה
+        cur.execute("UPDATE Products SET price = %s WHERE id = %s;", (rounded, pid))
+        updated += 1
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True, "updated": updated, "message": f"עודכנו {updated} מחירים (חולקו ב-1.3 ועוגלו למעלה)"}
+
+
+# --- שיוך מהיר של מבצע מוכן ---
+class QuickDealBody(BaseModel):
+    product_ids: List[int]
+    deal_type: str  # "6b55" | "4b25" | "8b40" | "clear"
+
+DEAL_MAP = {
+    "6b55": ("6 ב-₪55", None),
+    "4b25": ("4 ב-₪25", None),
+    "8b40": ("8 ב-₪40", None),
+}
+
+@app.post("/api/admin/quick-deal")
+def admin_quick_deal(body: QuickDealBody, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    if body.deal_type == "clear":
+        for pid in body.product_ids:
+            cur.execute("UPDATE Products SET is_on_sale = FALSE, sale_label = NULL, sale_price = NULL WHERE id = %s;", (pid,))
+    elif body.deal_type in DEAL_MAP:
+        label, sale_price = DEAL_MAP[body.deal_type]
+        for pid in body.product_ids:
+            cur.execute("UPDATE Products SET is_on_sale = TRUE, sale_label = %s, sale_price = %s WHERE id = %s;", (label, sale_price, pid))
+    else:
+        raise HTTPException(status_code=400, detail="סוג מבצע לא מוכר")
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True, "updated": len(body.product_ids)}
+
+
+
+
 # --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
 

@@ -162,6 +162,37 @@
             </div>
 
             <div class="tab-page" id="tab-page-products">
+
+                <!-- כלי תיקון מחירים -->
+                <div class="card" id="price-fix-card">
+                    <h2>🔧 תיקון מחירים (חד-פעמי)</h2>
+                    <p style="color:var(--muted); font-size:0.9em;">מחלק את כל המחירים ב-1.3 (הסרת תוספת וולט) ומעגל למעלה ל-0.10 הקרוב. <strong>שימי לב:</strong> פעולה זו משפיעה על כל המוצרים!</p>
+                    <button class="btn" style="max-width:300px;" onclick="fixPrices()">תקני מחירים עכשיו</button>
+                    <p id="price-fix-msg" style="margin-top:8px; font-weight:bold;"></p>
+                </div>
+
+                <!-- כפתורי מבצעים מהירים -->
+                <div class="card">
+                    <h2>🏷️ מבצעים מהירים</h2>
+                    <p style="color:var(--muted); font-size:0.9em;">חפשי מוצר, סמני אותו (✓) ולחצי על כפתור המבצע המתאים. מוצר שאזל מהמלאי יאבד את המבצע אוטומטית.</p>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+                        <input type="text" id="deal-search" placeholder="חיפוש מוצר..." style="flex:1; min-width:180px;" oninput="clearTimeout(window._dsTimer); window._dsTimer=setTimeout(loadDealProducts, 400)">
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+                        <button class="btn" style="background:#E05276; flex:1;" onclick="applyDeal('4b25')">4 ב-₪25</button>
+                        <button class="btn" style="background:#E05276; flex:1;" onclick="applyDeal('6b55')">6 ב-₪55</button>
+                        <button class="btn" style="background:#E05276; flex:1;" onclick="applyDeal('8b40')">8 ב-₪40</button>
+                        <button class="btn" style="background:#888; flex:1;" onclick="applyDeal('clear')">הסר מבצע</button>
+                    </div>
+                    <div style="display:flex; gap:6px; margin-bottom:8px;">
+                        <button class="chip" onclick="selectAllDeals(true)">סמן הכל</button>
+                        <button class="chip" onclick="selectAllDeals(false)">נקה סימון</button>
+                        
+                    </div>
+                    <div id="deal-list" style="max-height:400px; overflow-y:auto;">טוען...</div>
+                    <p id="deal-msg" style="margin-top:8px; font-weight:bold;"></p>
+                </div>
+
                 <div class="card">
                     <h2>שיוך מהיר של מוצרים לקטגוריה שנייה</h2>
                     <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
@@ -579,6 +610,99 @@
         }
 
         if (token()) showAdmin(); else showLogin();
+    
+        // --- תיקון מחירים ---
+        async function fixPrices() {
+            if (!confirm('זה יחלק את כל המחירים ב-1.3 ויעגל למעלה. בטוחה?')) return;
+            const msg = document.getElementById('price-fix-msg');
+            msg.style.color = 'var(--muted)'; msg.textContent = 'מעדכן מחירים...';
+            try {
+                const res = await fetch(`${API}/api/admin/fix-prices`, { method: 'POST', headers: authHeaders() });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'שגיאה');
+                msg.style.color = '#3B9E6A'; msg.textContent = `✓ ${data.message}`;
+                document.getElementById('price-fix-card').style.opacity = '0.5';
+            } catch (e) {
+                msg.style.color = '#E05276'; msg.textContent = 'שגיאה: ' + e.message;
+            }
+        }
+
+        // --- מבצעים מהירים ---
+        let dealProducts = [];
+        async function loadDealProducts() {
+            const search = document.getElementById('deal-search').value.trim();
+            const list = document.getElementById('deal-list');
+            list.innerHTML = 'טוען...';
+            try {
+                const url = `${API}/api/admin/products?search=${encodeURIComponent(search)}&limit=50&offset=0`;
+                const res = await fetch(url, { headers: authHeaders() });
+                const data = await res.json();
+                dealProducts = data.items;
+                renderDealList();
+            } catch { list.innerHTML = 'שגיאה בטעינה'; }
+        }
+
+        function renderDealList() {
+            const list = document.getElementById('deal-list');
+            list.innerHTML = '';
+            dealProducts.forEach(p => {
+                const div = document.createElement('div');
+                div.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #f0e0e8;';
+                const checked = p.is_on_sale ? 'checked' : '';
+                div.innerHTML = `
+                    <input type="checkbox" class="deal-check" data-id="${p.id}" ${checked}>
+                    <span style="flex:1; font-size:0.9em;">${p.name}</span>
+                    <span style="color:var(--muted); font-size:0.85em;">₪${p.price.toFixed(2)}</span>
+                    <span style="color:#E05276; font-weight:bold; font-size:0.8em;">${p.is_on_sale ? p.sale_label || '✓' : ''}</span>
+                `;
+                list.appendChild(div);
+            });
+            if (!dealProducts.length) list.innerHTML = '<p style="color:var(--muted);">לא נמצאו מוצרים.</p>';
+        }
+
+        function selectAllDeals(val) {
+            document.querySelectorAll('.deal-check').forEach(cb => cb.checked = val);
+        }
+
+        async function applyDeal(dealType) {
+            const ids = [...document.querySelectorAll('.deal-check:checked')].map(cb => parseInt(cb.dataset.id));
+            if (!ids.length) { alert('סמני מוצרים קודם'); return; }
+            const msg = document.getElementById('deal-msg');
+            msg.style.color = 'var(--muted)'; msg.textContent = 'מעדכן...';
+            try {
+                const res = await fetch(`${API}/api/admin/quick-deal`, {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ product_ids: ids, deal_type: dealType })
+                });
+                if (!res.ok) throw new Error('שגיאה');
+                const data = await res.json();
+                msg.style.color = '#3B9E6A';
+                msg.textContent = dealType === 'clear' ? `✓ הוסר מבצע מ-${data.updated} מוצרים` : `✓ מבצע הוחל על ${data.updated} מוצרים`;
+                loadDealProducts(); // רענון
+            } catch (e) {
+                msg.style.color = '#E05276'; msg.textContent = 'שגיאה';
+            }
+        }
+
+        async function cleanupDeals() {
+            try {
+                const res = await fetch(`${API}/api/admin/cleanup-deals`, { method: 'POST', headers: authHeaders() });
+                const data = await res.json();
+                const msg = document.getElementById('deal-msg');
+                msg.style.color = '#3B9E6A';
+                msg.textContent = data.cleaned > 0 ? `✓ נוקו מבצעים מ-${data.cleaned} מוצרים שאזלו` : '✓ אין מוצרים אזלו עם מבצע';
+                loadDealProducts();
+            } catch { }
+        }
+
+        // טעינת מוצרים למבצעים כשפותחים את הטאב
+        const origTabClick = document.querySelector('[data-tab="products"]')?.onclick;
+        if (document.querySelector('[data-tab="products"]')) {
+            const origHandler = document.querySelector('[data-tab="products"]').onclick;
+        }
+        setTimeout(() => { if (document.getElementById('deal-list')) loadDealProducts(); }, 2000);
+
+
     </script>
 </body>
 </html>
