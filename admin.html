@@ -82,6 +82,15 @@
             .prod-row, .prod-table-head { grid-template-columns: 40px 1fr 1fr; }
             .prod-table-head span:nth-child(4), .prod-table-head span:nth-child(5) { display:none; }
         }
+    
+        .deal-chip { background: #f5e0e8; color: #E05276; border: 2px solid #f5d0d8; border-radius: 8px;
+            padding: 4px 8px; font-size: 0.78em; font-weight: bold; cursor: pointer; font-family: inherit;
+            min-width: 40px; text-align: center; transition: 0.15s; }
+        .deal-chip:hover { background: #ffd0e0; }
+        .deal-chip.deal-active { background: #E05276; color: #fff; border-color: #E05276; }
+        .deal-chip.deal-clear { background: #eee; color: #888; border-color: #ddd; }
+        .deal-chip.deal-clear.deal-active { background: #888; color: #fff; border-color: #888; }
+
     </style>
 </head>
 <body>
@@ -178,17 +187,7 @@
                     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
                         <input type="text" id="deal-search" placeholder="חיפוש מוצר..." style="flex:1; min-width:180px;" oninput="clearTimeout(window._dsTimer); window._dsTimer=setTimeout(loadDealProducts, 400)">
                     </div>
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
-                        <button class="btn" style="background:#E05276; flex:1;" onclick="applyDeal('4b25')">4 ב-₪25</button>
-                        <button class="btn" style="background:#E05276; flex:1;" onclick="applyDeal('6b55')">6 ב-₪55</button>
-                        <button class="btn" style="background:#E05276; flex:1;" onclick="applyDeal('8b40')">8 ב-₪40</button>
-                        <button class="btn" style="background:#888; flex:1;" onclick="applyDeal('clear')">הסר מבצע</button>
-                    </div>
-                    <div style="display:flex; gap:6px; margin-bottom:8px;">
-                        <button class="chip" onclick="selectAllDeals(true)">סמן הכל</button>
-                        <button class="chip" onclick="selectAllDeals(false)">נקה סימון</button>
-                        
-                    </div>
+                    
                     <div id="deal-list" style="max-height:400px; overflow-y:auto;">טוען...</div>
                     <p id="deal-msg" style="margin-top:8px; font-weight:bold;"></p>
                 </div>
@@ -647,17 +646,39 @@
             list.innerHTML = '';
             dealProducts.forEach(p => {
                 const div = document.createElement('div');
-                div.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #f0e0e8;';
-                const checked = p.is_on_sale ? 'checked' : '';
+                div.style.cssText = 'display:flex; align-items:center; gap:6px; padding:8px 0; border-bottom:1px solid #f0e0e8; flex-wrap:wrap;';
+                const current = p.is_on_sale ? p.sale_label : '';
                 div.innerHTML = `
-                    <input type="checkbox" class="deal-check" data-id="${p.id}" ${checked}>
-                    <span style="flex:1; font-size:0.9em;">${p.name}</span>
-                    <span style="color:var(--muted); font-size:0.85em;">₪${p.price.toFixed(2)}</span>
-                    <span style="color:#E05276; font-weight:bold; font-size:0.8em;">${p.is_on_sale ? p.sale_label || '✓' : ''}</span>
+                    <span style="flex:1; min-width:120px; font-size:0.9em; font-weight:bold;">${p.name}</span>
+                    <span style="color:var(--muted); font-size:0.85em; min-width:55px;">₪${p.price.toFixed(2)}</span>
+                    <button class="deal-chip ${current === '4 ב-₪25' ? 'deal-active' : ''}" onclick="setDeal(${p.id},'4b25',this)">4ב25</button>
+                    <button class="deal-chip ${current === '6 ב-₪55' ? 'deal-active' : ''}" onclick="setDeal(${p.id},'6b55',this)">6ב55</button>
+                    <button class="deal-chip ${current === '8 ב-₪40' ? 'deal-active' : ''}" onclick="setDeal(${p.id},'8b40',this)">8ב40</button>
+                    <button class="deal-chip deal-clear ${!p.is_on_sale ? 'deal-active' : ''}" onclick="setDeal(${p.id},'clear',this)">✕</button>
                 `;
                 list.appendChild(div);
             });
             if (!dealProducts.length) list.innerHTML = '<p style="color:var(--muted);">לא נמצאו מוצרים.</p>';
+        }
+
+        async function setDeal(productId, dealType, btn) {
+            const row = btn.parentElement;
+            row.querySelectorAll('.deal-chip').forEach(b => b.classList.remove('deal-active'));
+            btn.classList.add('deal-active');
+            btn.textContent = '...';
+            try {
+                const res = await fetch(`${API}/api/admin/quick-deal`, {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ product_ids: [productId], deal_type: dealType })
+                });
+                if (!res.ok) throw new Error();
+                const labels = {
+                    '4b25': '4ב25', '6b55': '6ב55', '8b40': '8ב40', 'clear': '✕'
+                };
+                btn.textContent = labels[dealType] || '✓';
+            } catch {
+                btn.textContent = '!'; btn.classList.remove('deal-active');
+            }
         }
 
         function selectAllDeals(val) {
