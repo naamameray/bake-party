@@ -857,14 +857,12 @@ def sitemap():
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT id, name FROM Products WHERE category_id IS NOT NULL ORDER BY id;")
     products = cur.fetchall()
-    cur.execute("SELECT id, name FROM Categories WHERE parent_id IS NULL ORDER BY id;")
-    categories = cur.fetchall()
     cur.close(); conn.close()
-    
+
     base = "https://www.bakeparty.co.il"
     urls = [f"""  <url><loc>{base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>"""]
-    for cid, cname in categories:
-        urls.append(f"""  <url><loc>{base}/product/{cid}</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>""")
+    # רק דפי מוצר אמיתיים. (הקטגוריות אין להן דף URL משלהן, אז לא מכניסים אותן —
+    # אחרת נוצרות כתובות שבורות/כפולות שגוגל מנסה לסרוק ונכשל.)
     for pid, pname in products:
         urls.append(f"""  <url><loc>{base}/product/{pid}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>""")
     
@@ -1132,13 +1130,17 @@ def ai_chat(body: AiChatBody):
 # --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# מונע מהדפדפן (בעיקר בנייד) לשמור גרסה ישנה של ה-HTML במטמון.
+# ככה, מיד אחרי כל פרסום, המבקרים רואים את הגרסה החדשה בלי צורך לנקות cache.
+_NO_CACHE_HTML = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
 @app.get("/")
 def serve_index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers=_NO_CACHE_HTML)
 
 @app.get("/admin.html")
 def serve_admin():
-    return FileResponse(os.path.join(STATIC_DIR, "admin.html"))
+    return FileResponse(os.path.join(STATIC_DIR, "admin.html"), headers=_NO_CACHE_HTML)
 
 @app.get("/logo.jpg")
 def serve_logo():
