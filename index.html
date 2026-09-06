@@ -271,6 +271,14 @@
             .cat-name { font-size: 0.85em; }
         }
     
+    
+        .deal-pick { background: #f5e0e8; color: #E05276; border: 2px solid #f0d0d8; border-radius: 10px;
+            padding: 6px 12px; font-size: 0.85em; font-weight: bold; cursor: pointer; font-family: inherit; transition: 0.15s; }
+        .deal-pick:hover { background: #ffd0e0; }
+        .deal-pick.deal-on { background: #E05276; color: #fff; border-color: #E05276; }
+        .deal-pick.deal-off { background: #eee; color: #888; border-color: #ddd; }
+        .deal-pick.deal-off.deal-on { background: #888; color: #fff; }
+
     </style>
 </head>
 <body>
@@ -1171,10 +1179,17 @@
 
                 const meta = document.getElementById('detail-meta');
                 meta.innerHTML = `
-                    <li><label style="font-size:0.85em;display:flex;align-items:center;gap:5px;color:#d9534f;font-weight:bold;">
-                        <input type="checkbox" id="edit-detail-sale" ${p.is_on_sale ? 'checked' : ''}> המוצר במבצע 🎁
-                    </label></li>
-                    <li><span style="font-size:0.85em;">תווית מבצע</span><input type="text" id="edit-detail-sale-label" value="${p.sale_label || ''}" class="edit-input-sm" style="width:65%;" placeholder="למשל: 4 ב-25₪"></li>
+                    <li style="flex-direction:column; align-items:stretch;">
+                        <span style="font-size:0.85em; font-weight:bold; color:#d9534f; margin-bottom:6px;">🎁 מבצע:</span>
+                        <div style="display:flex; gap:4px; flex-wrap:wrap;" id="deal-buttons-row">
+                            <button type="button" class="deal-pick ${p.sale_label === '4 ב-₪25' ? 'deal-on' : ''}" onclick="pickDeal(this,'4 ב-₪25')">4ב25</button>
+                            <button type="button" class="deal-pick ${p.sale_label === '6 ב-₪55' ? 'deal-on' : ''}" onclick="pickDeal(this,'6 ב-₪55')">6ב55</button>
+                            <button type="button" class="deal-pick ${p.sale_label === '8 ב-₪40' ? 'deal-on' : ''}" onclick="pickDeal(this,'8 ב-₪40')">8ב40</button>
+                            <button type="button" class="deal-pick deal-off ${!p.is_on_sale ? 'deal-on' : ''}" onclick="pickDeal(this,'')">ללא</button>
+                        </div>
+                        <input type="hidden" id="edit-detail-sale" value="${p.is_on_sale ? '1' : ''}">
+                        <input type="hidden" id="edit-detail-sale-label" value="${p.sale_label || ''}">
+                    </li>
                     <li><span style="font-size:0.85em;">קטגוריה 1</span><select id="edit-detail-cat1" class="edit-input-sm" style="width:65%;">${catOptions}</select></li>
                     <li><span style="font-size:0.85em;">קטגוריה 2</span><select id="edit-detail-cat2" class="edit-input-sm" style="width:65%;">${catOptions}</select></li>
                     <li><span>משקל (גרם)</span><input type="number" id="edit-detail-weight" value="${p.weight_grams || ''}" class="edit-input-sm"></li>
@@ -1243,7 +1258,7 @@
             const unitsInput = document.getElementById('edit-detail-units').value;
             const notesInput = document.getElementById('edit-detail-notes').value.trim();
             
-            const isOnSale = document.getElementById('edit-detail-sale').checked;
+            const isOnSale = document.getElementById('edit-detail-sale').value === '1';
             const saleLabel = document.getElementById('edit-detail-sale-label').value.trim();
 
             const cat1 = document.getElementById('edit-detail-cat1').value;
@@ -1421,6 +1436,13 @@
 
         renderSkeletonCategories();
         initApp();
-    </script>
+    
+        window.pickDeal = function(btn, label) {
+            btn.parentElement.querySelectorAll(".deal-pick").forEach(b => b.classList.remove("deal-on"));
+            btn.classList.add("deal-on");
+            document.getElementById("edit-detail-sale").value = label ? "1" : "";
+            document.getElementById("edit-detail-sale-label").value = label;
+        };
+</script>
 </body>
 </html>
