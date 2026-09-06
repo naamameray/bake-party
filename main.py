@@ -961,6 +961,174 @@ def product_seo_page(product_id: int):
     return Response(content=html, media_type="text/html")
 
 
+# ============================================================
+#  🤖 עוזר ה-AI של Bake & Party   (POST /api/ai/chat)
+# ============================================================
+# מה צריך כדי שזה יעבוד בשרת (Railway):
+#   1. להוסיף Variable בשם  ANTHROPIC_API_KEY  עם מפתח מ-console.anthropic.com
+#   2. (אופציונלי) AI_MODEL — לבחירת מודל אחר. ברירת המחדל היא מודל מהיר וזול.
+#   3. requirements.txt כבר כולל את החבילה "anthropic" — Railway יתקין לבד.
+# בלי מפתח ה-endpoint לא קורס: הוא מחזיר הודעה ידידותית שמפנה לטלפון/וואטסאפ.
+
+AI_MODEL = os.environ.get("AI_MODEL", "claude-haiku-4-5-20251001")
+AI_MAX_PRODUCTS = 40          # כמה מוצרים תואמים לצרף להקשר
+AI_MAX_MSG_CHARS = 1500       # אורך הודעה מקסימלי מהמשתמש (הגנה)
+
+AI_SYSTEM_PROMPT = """את/ה העוזר/ת החכם/ה והחמוד/ה של "Bake & Party" (אפייה ומסיבות) —
+חנות משפחתית בגבעת שמואל שמוכרת חומרי גלם לאפייה, אביזרים, קישוטים ומוצרים למסיבות.
+
+התפקיד שלך:
+1. להמליץ ללקוחות מה כדאי להכין ואילו מוצרים *מהחנות שלנו* הכי מתאימים למה שהם רוצים (עוגה, יום הולדת, בר מצווה וכו').
+2. לתת רעיונות למתכונים פשוטים ולציין אילו מוצרים שלנו משתלבים בהם.
+3. להגיד ללקוח *היכן בחנות* (באיזו קטגוריה) למצוא מוצר.
+
+כללים חשובים:
+- ענה/י בעברית, בחום, בקצרה ולעניין. אפשר אימוג'י פה ושם, לא להגזים.
+- הסתמך/י אך ורק על נתוני החנות שמצורפים בהמשך. אל תמציא/י מוצרים, מחירים או מלאי שלא מופיעים בנתונים.
+- אם מוצר לא מופיע בנתונים שקיבלת — אל תבטיח/י שיש אותו. אמור/י שאינך בטוח/ה, והצע/י ליצור קשר טלפוני/וואטסאפ או לבדוק בוולט (הפרטים בהקשר).
+- אם שואלים על "דפי סוכר" — ספר/י שהכלי לבדיקת גודל דף סוכר לפני הדפסה נמצא בפיתוח ויתווסף בקרוב 🙂
+- אל תמציא/י כתובות אתר. השתמש/י רק בקישורים שמופיעים בהקשר.
+"""
+
+
+class AiChatMsg(BaseModel):
+    role: str
+    content: str
+
+
+class AiChatBody(BaseModel):
+    message: str
+    history: Optional[List[AiChatMsg]] = None
+
+
+def _ai_extract_keywords(text, min_len=2, max_words=8):
+    import re
+    words = re.findall(r"[\u0590-\u05FFA-Za-z0-9']{%d,}" % min_len, text or "")
+    seen = []
+    for w in words:
+        if w not in seen:
+            seen.append(w)
+    return seen[:max_words]
+
+
+def _ai_build_context(user_message):
+    """בונה טקסט הקשר: מבנה הקטגוריות + מוצרים שתואמים למילים בהודעה + פרטי קשר."""
+    parts = []
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # מבנה החנות: ראשיות -> תתי-קטגוריות
+        cur.execute("SELECT id, name, parent_id FROM Categories ORDER BY parent_id NULLS FIRST, sort_order, id;")
+        rows = cur.fetchall()
+        mains = [(r[0], r[1]) for r in rows if r[2] is None]
+        subs = defaultdict(list)
+        for r in rows:
+            if r[2] is not None:
+                subs[r[2]].append(r[1])
+        struct_lines = []
+        for mid, mname in mains:
+            if subs.get(mid):
+                struct_lines.append(f"- {mname}: " + ", ".join(subs[mid]))
+            else:
+                struct_lines.append(f"- {mname}")
+        if struct_lines:
+            parts.append("קטגוריות החנות:\n" + "\n".join(struct_lines))
+
+        # מוצרים שתואמים למילים בהודעת המשתמש
+        kws = _ai_extract_keywords(user_message)
+        if kws:
+            like = " OR ".join(["p.name ILIKE %s"] * len(kws))
+            params = [f"%{k}%" for k in kws]
+            cur.execute(
+                f"""
+                SELECT p.name, c.name, p.stock_quantity, p.price
+                FROM Products p LEFT JOIN Categories c ON p.category_id = c.id
+                WHERE {like}
+                ORDER BY p.stock_quantity DESC, p.id
+                LIMIT %s;
+                """,
+                params + [AI_MAX_PRODUCTS],
+            )
+            matched = []
+            for name, cat, stock, price in cur.fetchall():
+                status = "במלאי" if (stock or 0) > 0 else "אזל מהמלאי"
+                matched.append(f"• {name} — קטגוריה: {cat or 'ללא'} — {status} — ₪{float(price):.0f}")
+            if matched:
+                parts.append("מוצרים שנמצאו אצלנו שקשורים לשאלה:\n" + "\n".join(matched))
+            else:
+                parts.append("לא נמצאו מוצרים אצלנו שתואמים ישירות למילים בשאלה.")
+
+        cur.close()
+        conn.close()
+    except Exception as e:
+        parts.append(f"(שגיאה בטעינת נתוני החנות: {e})")
+
+    # פרטי קשר
+    try:
+        c = _get_contact()
+        parts.append(
+            "פרטי קשר לחנות: טלפון {phone} | וואטסאפ https://wa.me/{wa} | "
+            "כתובת {addr} | וולט https://wolt.com/he/isr/petah-tikva/venue/pinookim-givat-shmuel".format(
+                phone=c["phone"], wa=c["whatsapp"], addr=c["address"]
+            )
+        )
+    except Exception:
+        pass
+
+    return "\n\n".join(parts)
+
+
+@app.post("/api/ai/chat")
+def ai_chat(body: AiChatBody):
+    user_message = (body.message or "").strip()[:AI_MAX_MSG_CHARS]
+    if not user_message:
+        return {"reply": "כתבו לי שאלה ואשמח לעזור 🙂", "ok": True}
+
+    fallback = (
+        "מצטער/ת, העוזר החכם עדיין לא מחובר במלואו. בינתיים אפשר ליצור איתנו קשר "
+        "ישירות בטלפון או בוואטסאפ ונשמח לעזור! 🧁"
+    )
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"reply": fallback, "ok": False, "reason": "no_api_key"}
+
+    try:
+        import anthropic
+    except Exception:
+        return {"reply": fallback, "ok": False, "reason": "package_missing"}
+
+    context = _ai_build_context(user_message)
+    system = AI_SYSTEM_PROMPT + "\n\n===== נתוני החנות (לשימושך בלבד) =====\n" + context
+
+    # בונים את שרשור השיחה (עד 8 הודעות אחרונות מההיסטוריה)
+    messages = []
+    if body.history:
+        for m in body.history[-8:]:
+            role = m.role if m.role in ("user", "assistant") else "user"
+            content = (m.content or "").strip()[:AI_MAX_MSG_CHARS]
+            if content:
+                messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model=AI_MODEL,
+            max_tokens=700,
+            system=system,
+            messages=messages,
+        )
+        reply = "".join(block.text for block in resp.content if getattr(block, "type", "") == "text").strip()
+        if not reply:
+            reply = fallback
+        return {"reply": reply, "ok": True}
+    except Exception as e:
+        print(f"[AI] error: {e}")
+        return {"reply": fallback, "ok": False, "reason": "api_error"}
+
+
 # --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
 
