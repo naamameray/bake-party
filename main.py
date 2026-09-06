@@ -846,6 +846,120 @@ def admin_quick_deal(body: QuickDealBody, sess: dict = Depends(require_admin)):
 
 
 
+
+# --- SEO: Sitemap + דפי מוצר לגוגל ---
+from fastapi.responses import Response
+
+@app.get("/sitemap.xml")
+def sitemap():
+    """מפת אתר דינמית — גוגל קורא אותה כדי לדעת אילו דפים קיימים."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, name FROM Products WHERE category_id IS NOT NULL ORDER BY id;")
+    products = cur.fetchall()
+    cur.execute("SELECT id, name FROM Categories WHERE parent_id IS NULL ORDER BY id;")
+    categories = cur.fetchall()
+    cur.close(); conn.close()
+    
+    base = "https://www.bakeparty.co.il"
+    urls = [f"""  <url><loc>{base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>"""]
+    for cid, cname in categories:
+        urls.append(f"""  <url><loc>{base}/product/{cid}</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>""")
+    for pid, pname in products:
+        urls.append(f"""  <url><loc>{base}/product/{pid}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>""")
+    
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+{chr(10).join(urls)}
+</urlset>"""
+    return Response(content=xml, media_type="application/xml")
+
+
+@app.get("/product/{product_id}")
+def product_seo_page(product_id: int):
+    """דף מוצר עם SEO מלא — schema.org, meta tags, Open Graph. גוגל סורק את זה."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, p.notes "
+        "FROM Products p LEFT JOIN Categories c ON p.category_id = c.id WHERE p.id = %s;",
+        (product_id,),
+    )
+    p = cur.fetchone()
+    cur.close(); conn.close()
+    if not p:
+        raise HTTPException(status_code=404, detail="מוצר לא נמצא")
+    
+    name, price, in_stock, category, image, desc = p[1], float(p[2]), p[3] > 0, p[4] or "", p[5] or "", p[6] or ""
+    availability = "https://schema.org/InStock" if in_stock else "https://schema.org/OutOfStock"
+    
+    html = f"""<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{name} | Bake & Party - אפייה ומסיבות</title>
+    <meta name="description" content="{name} - {desc[:120] if desc else category + ' | Bake & Party אפייה ומסיבות בגבעת שמואל'}">
+    <meta property="og:title" content="{name} | Bake & Party">
+    <meta property="og:description" content="{desc[:200] if desc else 'אפייה ומסיבות בגבעת שמואל'}">
+    <meta property="og:image" content="{image}">
+    <meta property="og:type" content="product">
+    <meta property="og:url" content="https://www.bakeparty.co.il/product/{product_id}">
+    <meta property="product:price:amount" content="{price}">
+    <meta property="product:price:currency" content="ILS">
+    <link rel="canonical" href="https://www.bakeparty.co.il/product/{product_id}">
+    <script type="application/ld+json">
+    {{
+        "@context": "https://schema.org",
+        "@type": "Product",
+        "name": "{name}",
+        "image": "{image}",
+        "description": "{desc}",
+        "brand": {{"@type": "Brand", "name": "Bake & Party"}},
+        "offers": {{
+            "@type": "Offer",
+            "price": "{price}",
+            "priceCurrency": "ILS",
+            "availability": "{availability}",
+            "seller": {{
+                "@type": "LocalBusiness",
+                "name": "Bake & Party - ממלכת הגלידות מבית פינוקים",
+                "address": {{
+                    "@type": "PostalAddress",
+                    "streetAddress": "יוני נתניהו 21",
+                    "addressLocality": "גבעת שמואל",
+                    "addressCountry": "IL"
+                }}
+            }}
+        }}
+    }}
+    </script>
+    <style>
+        body {{ font-family: 'Segoe UI', sans-serif; background: #FFF9F5; color: #4A2E35; margin: 0; direction: rtl; }}
+        .container {{ max-width: 700px; margin: 40px auto; padding: 20px; text-align: center; }}
+        .prod-img {{ max-width: 300px; border-radius: 16px; margin: 20px auto; }}
+        .price {{ font-size: 2em; color: #E05276; font-weight: bold; margin: 16px 0; }}
+        .cat {{ color: #9B7B82; margin: 10px 0; }}
+        .desc {{ line-height: 1.7; margin: 16px 0; }}
+        .back {{ display: inline-block; margin-top: 20px; background: #FF85A2; color: #fff; padding: 12px 30px;
+            border-radius: 20px; text-decoration: none; font-weight: bold; }}
+        .back:hover {{ background: #E05276; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" style="text-decoration:none;"><h1 style="color:#E05276;">Bake & Party</h1></a>
+        <p class="cat">{category}</p>
+        <img src="{image}" alt="{name}" class="prod-img" onerror="this.style.display='none'">
+        <h2>{name}</h2>
+        <div class="price">₪{price:.2f}</div>
+        {"<p class='desc'>" + desc + "</p>" if desc else ""}
+        <p>{"✅ במלאי" if in_stock else "❌ אזל מהמלאי"}</p>
+        <a href="/" class="back">→ לכל המוצרים</a>
+    </div>
+</body>
+</html>"""
+    return Response(content=html, media_type="text/html")
+
+
 # --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
 
