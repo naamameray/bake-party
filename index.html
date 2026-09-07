@@ -778,11 +778,14 @@
 
         function aiEscape(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
         function aiLinkify(html) { return html.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>'); }
+        // ממיר **טקסט** (פורמט Markdown שה-AI לפעמים מחזיר) להדגשה אמיתית <strong>.
+        // רץ אחרי aiEscape, כך שזה בטוח (הטקסט המקורי כבר "נוקה" מ-HTML).
+        function aiBoldify(html) { return html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'); }
         function aiAppend(role, text) {
             const body = document.getElementById('ai-body');
             const div = document.createElement('div');
             div.className = 'ai-msg ' + (role === 'user' ? 'user' : 'bot');
-            div.innerHTML = aiLinkify(aiEscape(text));
+            div.innerHTML = aiLinkify(aiBoldify(aiEscape(text)));
             body.appendChild(div);
             body.scrollTop = body.scrollHeight;
             return div;
@@ -1268,15 +1271,13 @@
                 
                 let saleBadge = '';
                 let priceHtml = '';
-                // "(אזל)" מוצג על כל מוצר שאזל — כולל כאלה עם מבצע — בלי לשנות מחיר/מבצע
-                const oosTag = p.in_stock ? '' : ` <span style="font-size:0.72em; color:#999; font-weight:normal;">(אזל)</span>`;
                 if (p.is_on_sale && p.sale_label) {
                     saleBadge = `<span class="sale-star">⭐</span><span class="sale-badge">מבצע: ${p.sale_label}</span>`;
-                    priceHtml = `<div class="price">₪${p.price.toFixed(2)}${oosTag}</div>`;
+                    priceHtml = `<div class="price">₪${p.price.toFixed(2)}</div>`;
                 } else if (p.in_stock) {
                     priceHtml = `<div class="price">₪${p.price.toFixed(2)}</div>`;
                 } else {
-                    priceHtml = `<div class="price" style="color:#aaa;">₪${p.price.toFixed(2)}${oosTag}</div>`;
+                    priceHtml = `<div class="price" style="color:#aaa;">₪${p.price.toFixed(2)} <span style="font-size:0.7em;">(אזל)</span></div>`;
                 }
 
                 card.innerHTML = `
