@@ -964,18 +964,19 @@ def product_seo_page(product_id: int):
 # ============================================================
 #  🤖 עוזר ה-AI של Bake & Party   (POST /api/ai/chat)
 #     מחובר דרך OpenRouter (openrouter.ai) — נותן גישה למגוון מודלים
-#     דרך מפתח אחד. ברירת המחדל היא "openrouter/free", נתב שבוחר
-#     אוטומטית בין המודלים החינמיים הטובים ביותר שם — עלות $0.
+#     דרך מפתח אחד. ברירת המחדל היא "google/gemma-4-31b-it:free" — מודל
+#     חינמי לגמרי ($0) עם תמיכה טובה בעברית (140+ שפות) ו-262K הקשר.
 # ============================================================
 # מה צריך כדי שזה יעבוד בשרת (Railway):
 #   1. להוסיף Variable בשם  OPENROUTER_API_KEY  עם מפתח מ-openrouter.ai/keys
-#   2. (אופציונלי) AI_MODEL — לבחירת מודל אחר מתוך openrouter.ai/models
-#      (למשל "anthropic/claude-haiku-4.5" אם בעתיד תרצו לשדרג לאיכות גבוהה יותר בתשלום).
+#      + לוודא שהופעלה הרשאת "Free model publication" ב-openrouter.ai/settings/privacy
+#        (חובה כדי להשתמש במודלים חינמיים, אחרת הבקשות נדחות).
+#   2. (אופציונלי) AI_MODEL — לבחירת מודל אחר מתוך openrouter.ai/models.
 #   3. requirements.txt כבר כולל את החבילה "requests" — Railway יתקין לבד.
 # בלי מפתח ה-endpoint לא קורס: הוא מחזיר הודעה ידידותית שמפנה לטלפון/וואטסאפ.
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-AI_MODEL = os.environ.get("AI_MODEL", "openrouter/free")
+AI_MODEL = os.environ.get("AI_MODEL", "google/gemma-4-31b-it:free")
 AI_MAX_PRODUCTS = 40          # כמה מוצרים תואמים לצרף להקשר
 AI_MAX_MSG_CHARS = 1500       # אורך הודעה מקסימלי מהמשתמש (הגנה)
 
@@ -1152,20 +1153,8 @@ def ai_chat(body: AiChatBody):
         )
         resp.raise_for_status()
         data = resp.json()
-
-        # חלק מהמודלים (בעיקר החינמיים) מחזירים content = null ושמים את
-        # התשובה בשדה "reasoning" במקום. בנוסף, .get(key, "") מחזיר None אם
-        # השדה קיים עם ערך null — ולכן חייבים "or ''" לפני .strip().
-        choice = (data.get("choices") or [{}])[0] or {}
-        msg = choice.get("message") or {}
-        reply = (msg.get("content") or "").strip()
+        reply = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
         if not reply:
-            reply = (msg.get("reasoning") or "").strip()
-
-        if not reply:
-            # אם OpenRouter החזיר שגיאה מפורשת, נדפיס אותה ללוג כדי שיהיה קל לאבחן
-            if data.get("error"):
-                print(f"[AI] openrouter error: {data.get('error')}")
             reply = fallback
         return {"reply": reply, "ok": True}
     except Exception as e:
