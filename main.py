@@ -1152,8 +1152,20 @@ def ai_chat(body: AiChatBody):
         )
         resp.raise_for_status()
         data = resp.json()
-        reply = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+
+        # חלק מהמודלים (בעיקר החינמיים) מחזירים content = null ושמים את
+        # התשובה בשדה "reasoning" במקום. בנוסף, .get(key, "") מחזיר None אם
+        # השדה קיים עם ערך null — ולכן חייבים "or ''" לפני .strip().
+        choice = (data.get("choices") or [{}])[0] or {}
+        msg = choice.get("message") or {}
+        reply = (msg.get("content") or "").strip()
         if not reply:
+            reply = (msg.get("reasoning") or "").strip()
+
+        if not reply:
+            # אם OpenRouter החזיר שגיאה מפורשת, נדפיס אותה ללוג כדי שיהיה קל לאבחן
+            if data.get("error"):
+                print(f"[AI] openrouter error: {data.get('error')}")
             reply = fallback
         return {"reply": reply, "ok": True}
     except Exception as e:
