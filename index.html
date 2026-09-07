@@ -1268,13 +1268,15 @@
                 
                 let saleBadge = '';
                 let priceHtml = '';
+                // "(אזל)" מוצג על כל מוצר שאזל — כולל כאלה עם מבצע — בלי לשנות מחיר/מבצע
+                const oosTag = p.in_stock ? '' : ` <span style="font-size:0.72em; color:#999; font-weight:normal;">(אזל)</span>`;
                 if (p.is_on_sale && p.sale_label) {
                     saleBadge = `<span class="sale-star">⭐</span><span class="sale-badge">מבצע: ${p.sale_label}</span>`;
-                    priceHtml = `<div class="price">₪${p.price.toFixed(2)}</div>`;
+                    priceHtml = `<div class="price">₪${p.price.toFixed(2)}${oosTag}</div>`;
                 } else if (p.in_stock) {
                     priceHtml = `<div class="price">₪${p.price.toFixed(2)}</div>`;
                 } else {
-                    priceHtml = `<div class="price" style="color:#aaa;">₪${p.price.toFixed(2)} <span style="font-size:0.7em;">(אזל)</span></div>`;
+                    priceHtml = `<div class="price" style="color:#aaa;">₪${p.price.toFixed(2)}${oosTag}</div>`;
                 }
 
                 card.innerHTML = `
