@@ -5,3 +5,5 @@ pandas
 openpyxl
 python-multipart
 anthropic
+requests
+beautifulsoup4

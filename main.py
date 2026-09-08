@@ -1156,6 +1156,122 @@ AI_MODEL = os.environ.get("AI_MODEL", "claude-haiku-4-5-20251001")
 AI_MAX_PRODUCTS = 40          # כמה מוצרים תואמים לצרף להקשר
 AI_MAX_MSG_CHARS = 1500       # אורך הודעה מקסימלי מהמשתמש (הגנה)
 
+# ============================================================
+#  🔍 בדיקת "מה אזל מהמלאי" מול וולט — למנהלים בלבד, דרך הצ'אט
+# ============================================================
+# איך זה עובד: קוראים את דף החנות בוולט (HTML רגיל, וולט מציגים את שמות
+# המוצרים ישירות בעמוד, לא רק ב-JavaScript — כך שזה אפשרי בלי דפדפן
+# אוטומטי כבד). משווים בין שמות המוצרים שאצלנו מסומנים "במלאי" לבין מה
+# שמופיע כרגע בוולט. מוצר שלא נמצאה לו התאמה סבירה — "חשוד" כאזל שם.
+# ⚠️ זו השוואה מבוססת-שמות (heuristic), לא API רשמי של וולט — לא מובטחת
+# ב-100%, וכדאי לבדוק ידנית לפני שסומכים עליה לגמרי, בטח בהתחלה.
+WOLT_VENUE_URL = "https://wolt.com/he/isr/petah-tikva/venue/pinookim-givat-shmuel"
+_wolt_cache = {"names": None, "fetched_at": 0}
+WOLT_CACHE_TTL = 60 * 30  # 30 דקות — כדי לא להעמיס על וולט בכל שאלה
+
+
+def _fetch_wolt_product_names():
+    """שולף את שמות כל המוצרים המוצגים כרגע בכל תתי-הקטגוריות בוולט. משתמש ב-cache."""
+    now = time_module.time()
+    if _wolt_cache["names"] is not None and (now - _wolt_cache["fetched_at"]) < WOLT_CACHE_TTL:
+        return _wolt_cache["names"]
+
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except Exception as e:
+        print(f"[Wolt] missing package: {e}")
+        return None
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; BakePartyBot/1.0)"}
+    names = set()
+    try:
+        resp = requests.get(WOLT_VENUE_URL, headers=headers, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # מוצאים את קישורי כל תתי-הקטגוריות בתפריט (menucategory-N)
+        category_urls = set()
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "/items/menucategory-" in href:
+                category_urls.add(href if href.startswith("http") else "https://wolt.com" + href)
+        if not category_urls:
+            category_urls = {WOLT_VENUE_URL}
+
+        for cat_url in category_urls:
+            try:
+                r = requests.get(cat_url, headers=headers, timeout=15)
+                r.raise_for_status()
+                csoup = BeautifulSoup(r.text, "html.parser")
+                for h in csoup.find_all(["h3", "h4"]):
+                    txt = h.get_text(strip=True)
+                    if txt and len(txt) > 1:
+                        names.add(txt)
+            except Exception as e:
+                print(f"[Wolt] category fetch error ({cat_url}): {e}")
+    except Exception as e:
+        print(f"[Wolt] main fetch error: {e}")
+        return None  # כשל מלא — לא שומרים רשימה ריקה ב-cache בטעות
+
+    names_list = sorted(names)
+    _wolt_cache["names"] = names_list
+    _wolt_cache["fetched_at"] = now
+    return names_list
+
+
+def _normalize_name_tokens(name):
+    """מנקה שם מוצר למילים משמעותיות להשוואה (מסיר מספרים/יחידות/פיסוק)."""
+    import re
+    text = re.sub(r"[\d.,%]+\s*(g|kg|ml|l|יח['\"]?|גרם|מ\"ל|מ״ל|ליטר)?", " ", name, flags=re.IGNORECASE)
+    text = re.sub(r"[^\u0590-\u05FFA-Za-z\s]", " ", text)
+    return {t for t in text.split() if len(t) >= 2}
+
+
+def _find_products_missing_from_wolt():
+    """
+    מחזיר רשימת שמות מוצרים אצלנו (שמסומנים "במלאי") שלא נמצאה להם התאמה
+    סבירה בוולט — "חשודים" כאזלו שם. מחזיר None אם השליפה מוולט נכשלה.
+    """
+    wolt_names = _fetch_wolt_product_names()
+    if wolt_names is None:
+        return None
+
+    wolt_token_sets = [_normalize_name_tokens(n) for n in wolt_names]
+
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT name FROM Products WHERE stock_quantity > 0 ORDER BY name;")
+    our_products = [r[0] for r in cur.fetchall()]
+    cur.close(); conn.close()
+
+    missing = []
+    for prod_name in our_products:
+        our_tokens = _normalize_name_tokens(prod_name)
+        if not our_tokens:
+            continue
+        # דמיון Jaccard (חיתוך חלקי איחוד) — מבחין נכון בין וריאציות של אותו
+        # מוצר (למשל "צבע מאכל אבקה כחול" מול "צבע מאכל אבקה ורוד"), בניגוד
+        # לחישוב יחס-פשוט שהיה "מתבלבל" בין צבעים/טעמים שונים של אותו מוצר.
+        best_similarity = 0
+        for wt in wolt_token_sets:
+            if not wt:
+                continue
+            sim = len(our_tokens & wt) / len(our_tokens | wt)
+            if sim > best_similarity:
+                best_similarity = sim
+        if best_similarity < 0.7:
+            missing.append(prod_name)
+    return missing
+
+
+def _is_wolt_stock_check_request(text):
+    """זיהוי-מילות-מפתח פשוט (לא AI) לבקשת השוואת מלאי מול וולט — מהיר ואמין."""
+    t = text.strip().lower()
+    has_wolt = "וולט" in t or "wolt" in t
+    has_stock_word = any(k in t for k in ["אזל", "מלאי", "השווה", "השוואה", "מה חסר", "לבדוק מול", "בדוק מול"])
+    return has_wolt and has_stock_word
+
+
 AI_SYSTEM_PROMPT = """את/ה העוזר/ת החכם/ה והחמוד/ה של "Bake & Party" (אפייה ומסיבות) —
 חנות משפחתית בגבעת שמואל שמוכרת חומרי גלם לאפייה, אביזרים, קישוטים ומוצרים למסיבות.
 
@@ -1178,6 +1294,13 @@ AI_SYSTEM_PROMPT = """את/ה העוזר/ת החכם/ה והחמוד/ה של "Ba
   • "לכמה אנשים?"
 - שאלה אחת בכל פעם, לא שלוש. אחרי שהלקוח עונה — תן/י המלצה ממוקדת.
 - אם הלקוח כבר היה ספציפי — אל תשאל/י סתם, פשוט תענה/י.
+
+## עזרה בזיהוי מוצר לפי תיאור (לא רק שם)
+לפעמים לקוח זוכר איך מוצר נראה/משמש אבל לא את השם המדויק (למשל "מחפש/ת את הרוטב הוורוד לפונדו שוקולד").
+- ברשימת "מוצרים שנמצאו" בהמשך יש גם שדה "תיאור" לכל מוצר — תמיד תסתכל/י גם עליו, לא רק על השם, כדי לנסות להתאים.
+- אם מצאת/ה התאמה סבירה — הציעי אותה, אבל בנימוס ציין/י שזו ההשערה הכי טובה שלך ("נראה לי שהתכוונת ל...").
+- אם התיאור מעורפל מדי ומצאת/ה כמה אפשרויות — שאל/י שאלה ממוקדת אחת שתעזור להבדיל ביניהן, במקום לנחש.
+- אם לא נמצאה שום התאמה סבירה בנתונים — אמור/י בכנות שלא הצלחת לזהות, והצע/י ליצור קשר טלפוני/וואטסאפ עם התיאור (יעזרו לזהות ידנית).
 
 כללים חשובים:
 - ענה/י בעברית, בחום, בקצרה ולעניין. אפשר אימוג'י פה ושם, לא להגזים.
@@ -1270,14 +1393,18 @@ def _ai_build_context(user_message):
         if struct_lines:
             parts.append("קטגוריות החנות:\n" + "\n".join(struct_lines))
 
-        # מוצרים שתואמים למילים בהודעת המשתמש
+        # מוצרים שתואמים למילים בהודעת המשתמש — מחפשים גם בשם וגם בתיאור/הערות
+        # המוצר (לא רק בשם), כדי שהחיפוש יעבוד גם כשלקוח מתאר מוצר במילים
+        # משלו בלי לזכור את השם המדויק (למשל "הרוטב הוורוד לפונדו שוקולד").
         kws = _ai_extract_keywords(user_message)
         if kws:
-            like = " OR ".join(["p.name ILIKE %s"] * len(kws))
-            params = [f"%{k}%" for k in kws]
+            like = " OR ".join(["(p.name ILIKE %s OR p.notes ILIKE %s)"] * len(kws))
+            params = []
+            for k in kws:
+                params += [f"%{k}%", f"%{k}%"]
             cur.execute(
                 f"""
-                SELECT p.name, c.name, p.stock_quantity, p.price
+                SELECT p.name, c.name, p.stock_quantity, p.price, p.notes
                 FROM Products p LEFT JOIN Categories c ON p.category_id = c.id
                 WHERE {like}
                 ORDER BY p.stock_quantity DESC, p.id
@@ -1286,13 +1413,17 @@ def _ai_build_context(user_message):
                 params + [AI_MAX_PRODUCTS],
             )
             matched = []
-            for name, cat, stock, price in cur.fetchall():
+            for name, cat, stock, price, notes in cur.fetchall():
                 status = "במלאי" if (stock or 0) > 0 else "אזל מהמלאי"
-                matched.append(f"• {name} — קטגוריה: {cat or 'ללא'} — {status} — ₪{float(price):.0f}")
+                line = f"• {name} — קטגוריה: {cat or 'ללא'} — {status} — ₪{float(price):.0f}"
+                if notes:
+                    snippet = notes.strip().replace("\n", " ")[:120]
+                    line += f" — תיאור: {snippet}"
+                matched.append(line)
             if matched:
-                parts.append("מוצרים שנמצאו אצלנו שקשורים לשאלה:\n" + "\n".join(matched))
+                parts.append("מוצרים שנמצאו אצלנו שקשורים לשאלה (כולל התאמה לפי תיאור, לא רק שם):\n" + "\n".join(matched))
             else:
-                parts.append("לא נמצאו מוצרים אצלנו שתואמים ישירות למילים בשאלה.")
+                parts.append("לא נמצאו מוצרים אצלנו שתואמים ישירות למילים בשאלה (לא בשם ולא בתיאור).")
 
         cur.close()
         conn.close()
@@ -1409,15 +1540,40 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
     if not user_message:
         return {"reply": "כתבו לי שאלה ואשמח לעזור 🙂", "ok": True}
 
+    is_admin = sess.get("role") == "admin"
+
     fallback = (
         "מצטער/ת, העוזר החכם עדיין לא מחובר במלואו. בינתיים אפשר ליצור איתנו קשר "
         "ישירות בטלפון או בוואטסאפ ונשמח לעזור! 🧁"
     )
 
-    # בדיקת חסימה/מכסה יומית — לפני שקוראים ל-AI בכלל (חוסך גם עלות)
-    allowed, guard_msg = _ai_check_guard(sess["user_id"])
-    if not allowed:
-        return {"reply": guard_msg, "ok": False, "reason": "guarded"}
+    # קיצור-דרך למנהלים בלבד: בדיקת מלאי מול וולט. מזוהה לפי מילות מפתח
+    # (לא דרך ה-AI) כדי שהתשובה תמיד תכיל את השמות המדויקים מהמסד שלנו —
+    # בלי סיכון שה-AI "ינסח מחדש" או יטעה בשם מוצר.
+    if is_admin and _is_wolt_stock_check_request(user_message):
+        missing = _find_products_missing_from_wolt()
+        if missing is None:
+            return {
+                "reply": "לא הצלחתי לגשת כרגע לעמוד וולט כדי להשוות מלאי. אפשר לנסות שוב בעוד כמה דקות.",
+                "ok": False, "reason": "wolt_fetch_error",
+            }
+        if not missing:
+            reply = "בדקתי מול וולט — לא מצאתי אף מוצר אצלנו שמסומן 'במלאי' וחסר שם. נראה שהכול מסונכרן! 🎉"
+        else:
+            listing = "\n".join(f"• {n}" for n in missing[:50])
+            extra = f"\n\n(מוצג רק 50 הראשונים מתוך {len(missing)})" if len(missing) > 50 else ""
+            reply = (
+                f"בדקתי מול וולט — נמצאו {len(missing)} מוצרים שמסומנים אצלנו כ'במלאי' אבל לא הצלחתי "
+                f"למצוא אותם שם (כנראה אזלו בוולט, או שהשם שונה מעט אצלנו):\n\n{listing}{extra}\n\n"
+                f"⚠️ זו השוואה אוטומטית מבוססת שמות, לא מקור רשמי מוולט — כדאי לוודא ידנית לפני שמעדכנים באתר."
+            )
+        return {"reply": reply, "ok": True}
+
+    # בדיקת חסימה/מכסה יומית — לא חלה על מנהלים בכלל
+    if not is_admin:
+        allowed, guard_msg = _ai_check_guard(sess["user_id"])
+        if not allowed:
+            return {"reply": guard_msg, "ok": False, "reason": "guarded"}
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1471,7 +1627,8 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         if not reply:
             reply = fallback
         _track_faq_topic(topic)
-        _ai_record_usage_and_ontopic(sess["user_id"], on_topic)
+        if not is_admin:
+            _ai_record_usage_and_ontopic(sess["user_id"], on_topic)
         return {"reply": reply, "ok": True}
     except Exception as e:
         print(f"[AI] error: {e}")
