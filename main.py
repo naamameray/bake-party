@@ -655,6 +655,54 @@ def admin_delete_product(product_id: int, sess: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="המוצר לא נמצא")
     return {"ok": True}
 
+@app.post("/api/admin/products/{product_id}/duplicate")
+def admin_duplicate_product(product_id: int, sess: dict = Depends(require_admin)):
+    """
+    משכפל מוצר קיים (כולל תמונה, מחיר, קטגוריות, הערות וכו') למוצר חדש.
+    שימושי למוצרים שקיימים במלא גרסאות (למשל אבקת צבע מאכל בכמה צבעים) —
+    משכפלים פעם אחת, ואז רק משנים שם/גרם/צבע בכל עותק במקום להקליד הכל מחדש.
+    השם החדש מקבל אוטומטית "(עותק)" בסוף כדי שיהיה קל להבחין ולערוך.
+    """
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT name, category_id, price, stock_quantity, weight_grams,
+               units_per_package, image_url, notes, is_on_sale, sale_label
+        FROM Products WHERE id = %s;
+        """,
+        (product_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="המוצר לא נמצא")
+
+    (name, category_id, price, stock_quantity, weight_grams,
+     units_per_package, image_url, notes, is_on_sale, sale_label) = row
+
+    cur.execute(
+        """
+        INSERT INTO Products
+            (name, category_id, price, stock_quantity, weight_grams, units_per_package, image_url, notes, is_on_sale, sale_label)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id;
+        """,
+        (f"{name} (עותק)", category_id, price, stock_quantity, weight_grams,
+         units_per_package, image_url, notes, is_on_sale, sale_label),
+    )
+    new_id = cur.fetchone()[0]
+
+    # מעתיקים גם את כל שיוכי הקטגוריות הנוספים (טבלת הקישור, לא רק הקטגוריה הראשית)
+    cur.execute("SELECT category_id FROM product_categories WHERE product_id = %s;", (product_id,))
+    for (cid,) in cur.fetchall():
+        cur.execute(
+            "INSERT INTO product_categories (product_id, category_id) VALUES (%s, %s) ON CONFLICT DO NOTHING;",
+            (new_id, cid),
+        )
+
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True, "product_id": new_id}
+
 @app.get("/api/products/{product_id}")
 def get_product_detail(product_id: int):
     conn = get_conn(); cur = conn.cursor()

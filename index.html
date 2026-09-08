@@ -1347,8 +1347,9 @@
                         <button class="btn" style="background-color:#4A90E2;" onclick="saveProductDetails(${p.id}, this)">💾 עדכון שינויים</button>
                         <div style="display:flex; gap:10px;">
                             <button class="btn ${stockBtnClass}" style="flex:1; font-size:0.9em; padding:8px;" onclick="updateProductStock(${p.id}, ${newStockValue})">${stockBtnText}</button>
-                            <button class="btn" style="flex:1; font-size:0.9em; background:#d9534f; padding:8px;" onclick="deleteProduct(${p.id}, '${p.name.replace(/'/g, "\\'")}')">🗑️ מחק מוצר</button>
+                            <button class="btn btn-ghost" style="flex:1; font-size:0.9em; padding:8px;" onclick="duplicateProduct(${p.id})">📋 שכפל מוצר</button>
                         </div>
+                        <button class="btn" style="font-size:0.9em; background:#d9534f; padding:8px;" onclick="deleteProduct(${p.id}, '${p.name.replace(/'/g, "\\'")}')">🗑️ מחק מוצר</button>
                         <button class="btn btn-ghost" onclick="closeDetail()">ביטול</button>
                     </div>
                 `;
@@ -1466,6 +1467,21 @@
                 renderProducts(currentFilteredProducts || allProducts);
                 openProductDetail(id); 
             } catch(e) { alert(e.message); }
+        };
+
+        window.duplicateProduct = async function(id) {
+            try {
+                const res = await fetch(`${API}/api/admin/products/${id}/duplicate`, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token() }
+                });
+                if (!res.ok) throw new Error('שגיאה בשכפול המוצר');
+                const data = await res.json();
+                // openProductDetail תמיד שולפת נתונים טריים מהשרת, אז המוצר
+                // המשוכפל ייפתח ישר לעריכה גם בלי שהוא ברשימות המקומיות
+                closeDetail();
+                openProductDetail(data.product_id);
+            } catch (e) { alert('שגיאה בשכפול המוצר. נסי שוב.'); }
         };
 
         window.deleteProduct = async function(id, name) {
