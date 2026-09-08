@@ -857,14 +857,12 @@ def sitemap():
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT id, name FROM Products WHERE category_id IS NOT NULL ORDER BY id;")
     products = cur.fetchall()
-    cur.execute("SELECT id, name FROM Categories WHERE parent_id IS NULL ORDER BY id;")
-    categories = cur.fetchall()
     cur.close(); conn.close()
-    
+
     base = "https://www.bakeparty.co.il"
     urls = [f"""  <url><loc>{base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>"""]
-    for cid, cname in categories:
-        urls.append(f"""  <url><loc>{base}/product/{cid}</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>""")
+    # רק דפי מוצר אמיתיים. (הקטגוריות אין להן דף URL משלהן, אז לא מכניסים אותן —
+    # אחרת נוצרות כתובות שבורות/כפולות שגוגל מנסה לסרוק ונכשל.)
     for pid, pname in products:
         urls.append(f"""  <url><loc>{base}/product/{pid}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>""")
     
@@ -963,20 +961,14 @@ def product_seo_page(product_id: int):
 
 # ============================================================
 #  🤖 עוזר ה-AI של Bake & Party   (POST /api/ai/chat)
-#     מחובר דרך OpenRouter (openrouter.ai) — נותן גישה למגוון מודלים
-#     דרך מפתח אחד. ברירת המחדל היא "google/gemma-4-31b-it:free" — מודל
-#     חינמי לגמרי ($0) עם תמיכה טובה בעברית (140+ שפות) ו-262K הקשר.
 # ============================================================
 # מה צריך כדי שזה יעבוד בשרת (Railway):
-#   1. להוסיף Variable בשם  OPENROUTER_API_KEY  עם מפתח מ-openrouter.ai/keys
-#      + לוודא שהופעלה הרשאת "Free model publication" ב-openrouter.ai/settings/privacy
-#        (חובה כדי להשתמש במודלים חינמיים, אחרת הבקשות נדחות).
-#   2. (אופציונלי) AI_MODEL — לבחירת מודל אחר מתוך openrouter.ai/models.
-#   3. requirements.txt כבר כולל את החבילה "requests" — Railway יתקין לבד.
+#   1. להוסיף Variable בשם  ANTHROPIC_API_KEY  עם מפתח מ-console.anthropic.com
+#   2. (אופציונלי) AI_MODEL — לבחירת מודל אחר. ברירת המחדל היא מודל מהיר וזול.
+#   3. requirements.txt כבר כולל את החבילה "anthropic" — Railway יתקין לבד.
 # בלי מפתח ה-endpoint לא קורס: הוא מחזיר הודעה ידידותית שמפנה לטלפון/וואטסאפ.
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-AI_MODEL = os.environ.get("AI_MODEL", "google/gemma-4-31b-it:free")
+AI_MODEL = os.environ.get("AI_MODEL", "claude-haiku-4-5-20251001")
 AI_MAX_PRODUCTS = 40          # כמה מוצרים תואמים לצרף להקשר
 AI_MAX_MSG_CHARS = 1500       # אורך הודעה מקסימלי מהמשתמש (הגנה)
 
@@ -1112,20 +1104,20 @@ def ai_chat(body: AiChatBody):
         "ישירות בטלפון או בוואטסאפ ונשמח לעזור! 🧁"
     )
 
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return {"reply": fallback, "ok": False, "reason": "no_api_key"}
 
     try:
-        import requests
+        import anthropic
     except Exception:
         return {"reply": fallback, "ok": False, "reason": "package_missing"}
 
     context = _ai_build_context(user_message)
     system = AI_SYSTEM_PROMPT + "\n\n===== נתוני החנות (לשימושך בלבד) =====\n" + context
 
-    # OpenRouter תואם לפורמט OpenAI: system מגיע כהודעה ראשונה בתוך messages
-    messages = [{"role": "system", "content": system}]
+    # בונים את שרשור השיחה (עד 8 הודעות אחרונות מההיסטוריה)
+    messages = []
     if body.history:
         for m in body.history[-8:]:
             role = m.role if m.role in ("user", "assistant") else "user"
@@ -1135,25 +1127,14 @@ def ai_chat(body: AiChatBody):
     messages.append({"role": "user", "content": user_message})
 
     try:
-        resp = requests.post(
-            OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                # שדות מומלצים ע"י OpenRouter לזיהוי האפליקציה (לא חובה, אבל טוב לשמור)
-                "HTTP-Referer": "https://www.bakeparty.co.il",
-                "X-Title": "Bake & Party",
-            },
-            json={
-                "model": AI_MODEL,
-                "max_tokens": 700,
-                "messages": messages,
-            },
-            timeout=30,
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = client.messages.create(
+            model=AI_MODEL,
+            max_tokens=700,
+            system=system,
+            messages=messages,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        reply = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+        reply = "".join(block.text for block in resp.content if getattr(block, "type", "") == "text").strip()
         if not reply:
             reply = fallback
         return {"reply": reply, "ok": True}
@@ -1165,13 +1146,17 @@ def ai_chat(body: AiChatBody):
 # --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# מונע מהדפדפן (בעיקר בנייד) לשמור גרסה ישנה של ה-HTML במטמון.
+# ככה, מיד אחרי כל פרסום, המבקרים רואים את הגרסה החדשה בלי צורך לנקות cache.
+_NO_CACHE_HTML = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
 @app.get("/")
 def serve_index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers=_NO_CACHE_HTML)
 
 @app.get("/admin.html")
 def serve_admin():
-    return FileResponse(os.path.join(STATIC_DIR, "admin.html"))
+    return FileResponse(os.path.join(STATIC_DIR, "admin.html"), headers=_NO_CACHE_HTML)
 
 @app.get("/logo.jpg")
 def serve_logo():
