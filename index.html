@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bake & Party - אפייה ומסיבות | ממלכת הגלידות מבית פינוקים</title>
     <link rel="icon" type="image/jpeg" href="logo.jpg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <meta name="keywords" content="ממלכת הגלידות, פינוקים, גבעת שמואל, אפייה, מסיבות, גלידות, שוקולד, בלונים, חומרי גלם לאפייה, Bake and Party">
     <meta name="description" content="Bake & Party - חנות אפייה ומסיבות בגבעת שמואל. חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע. שעות פתיחה, יצירת קשר ומשלוחים.">
     <meta property="og:title" content="Bake & Party | ממלכת הגלידות מבית פינוקים">
@@ -21,24 +24,24 @@
             --shadow: rgba(255,133,162,0.2); --ok: #3B9E6A;
         }
         * { box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        body { font-family: 'Rubik', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: var(--cream); color: var(--text-color); margin: 0; overflow-x: hidden; transition: background-color 0.3s; }
 
         #a11y-btn { position: fixed; bottom: 20px; left: 20px; background: #005eb8; color: white; border: none; 
-            border-radius: 50%; width: 55px; height: 55px; font-size: 28px; cursor: pointer; z-index: 9999; 
+            border-radius: 50%; width: 55px; height: 55px; font-size: 28px; cursor: pointer; z-index: 500; 
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; transition: 0.3s; }
         #a11y-btn:hover { background: #004494; transform: translateY(-3px); }
 
         /* כפתור ווצאפ צף */
         #wa-btn { position: fixed; bottom: 85px; left: 20px; background: #25D366; color: white; border: none;
-            border-radius: 50%; width: 55px; height: 55px; font-size: 30px; cursor: pointer; z-index: 9999;
+            border-radius: 50%; width: 55px; height: 55px; font-size: 30px; cursor: pointer; z-index: 500;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;
             text-decoration: none; transition: 0.3s; }
         #wa-btn:hover { background: #1da851; transform: translateY(-3px); }
 
         /* כפתור חיפוש צף (צד שמאל, מעל הווצאפ) */
         #search-fab { position: fixed; bottom: 150px; left: 20px; background: var(--pink-main); color: #fff; border: none;
-            border-radius: 50%; width: 55px; height: 55px; font-size: 26px; cursor: pointer; z-index: 9999;
+            border-radius: 50%; width: 55px; height: 55px; font-size: 26px; cursor: pointer; z-index: 500;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; transition: 0.3s; }
         #search-fab:hover { background: var(--pink-dark); transform: translateY(-3px); }
 
@@ -72,7 +75,7 @@
         body.a11y-readable, body.a11y-readable * { font-family: Arial, "Segoe UI", sans-serif !important; letter-spacing: 0.4px; line-height: 1.7 !important; }
 
         #back-to-top { position: fixed; bottom: 20px; right: 20px; background: var(--pink-main); color: white; border: none; 
-            border-radius: 50%; width: 55px; height: 55px; font-size: 24px; cursor: pointer; z-index: 9999; 
+            border-radius: 50%; width: 55px; height: 55px; font-size: 24px; cursor: pointer; z-index: 500; 
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: none; align-items: center; justify-content: center; transition: 0.3s; }
         #back-to-top:hover { background: var(--pink-dark); transform: translateY(-3px); }
 
@@ -112,7 +115,9 @@
         .cat-menu-item.open .cat-menu-trigger .arrow { transform: rotate(180deg); }
         .cat-dropdown { position: absolute; top: 100%; right: 0; margin-top: 6px; min-width: 210px; background: #fff; border: 2px solid var(--pink-light); border-radius: 14px; box-shadow: 0 8px 20px rgba(224,82,118,0.18); padding: 6px; display: none; z-index: 60; }
         .cat-dropdown::before { content: ''; position: absolute; top: -10px; left: 0; right: 0; height: 10px; background: transparent; }
-        .cat-menu-item:hover .cat-dropdown, .cat-menu-item.open .cat-dropdown { display: block; }
+        .cat-menu-item:hover .cat-dropdown { display: none; }
+        @media (hover: hover) { .cat-menu-item:hover .cat-dropdown { display: block; } }
+        .cat-menu-item.open .cat-dropdown { display: block; }
         .cat-dropdown button { display: block; width: 100%; text-align: right; background: none; border: none; font-family: inherit; font-size: 0.9em; color: var(--text-color); padding: 8px 12px; border-radius: 10px; cursor: pointer; white-space: nowrap; }
         .cat-dropdown button:hover { background: var(--pink-light); color: var(--pink-dark); }
         .cat-dropdown .dd-all { font-weight: bold; color: var(--pink-dark); border-bottom: 1px solid var(--pink-light); border-radius: 0; margin-bottom: 4px; }
@@ -294,6 +299,15 @@
             .categories-container { grid-template-columns: repeat(3, 1fr) !important; gap: 16px !important; }
             .circle-img { width: 100px !important; height: 100px !important; }
             .cat-name { font-size: 0.85em; }
+
+            /* כפתורים צפים קטנים יותר בנייד, כדי שיתפסו פחות מקום ולא יפריעו */
+            #a11y-btn, #wa-btn, #search-fab, #back-to-top {
+                width: 44px !important; height: 44px !important; font-size: 20px !important;
+            }
+            #a11y-btn { bottom: 14px !important; }
+            #wa-btn { bottom: 66px !important; }
+            #search-fab { bottom: 118px !important; }
+            #back-to-top { bottom: 14px !important; }
         }
     
     
