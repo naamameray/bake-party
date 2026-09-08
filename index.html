@@ -5,9 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bake & Party - אפייה ומסיבות | ממלכת הגלידות מבית פינוקים</title>
     <link rel="icon" type="image/jpeg" href="logo.jpg">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <meta name="keywords" content="ממלכת הגלידות, פינוקים, גבעת שמואל, אפייה, מסיבות, גלידות, שוקולד, בלונים, חומרי גלם לאפייה, Bake and Party">
     <meta name="description" content="Bake & Party - חנות אפייה ומסיבות בגבעת שמואל. חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע. שעות פתיחה, יצירת קשר ומשלוחים.">
     <meta property="og:title" content="Bake & Party | ממלכת הגלידות מבית פינוקים">
@@ -24,24 +21,24 @@
             --shadow: rgba(255,133,162,0.2); --ok: #3B9E6A;
         }
         * { box-sizing: border-box; }
-        body { font-family: 'Rubik', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: var(--cream); color: var(--text-color); margin: 0; overflow-x: hidden; transition: background-color 0.3s; }
 
         #a11y-btn { position: fixed; bottom: 20px; left: 20px; background: #005eb8; color: white; border: none; 
-            border-radius: 50%; width: 55px; height: 55px; font-size: 28px; cursor: pointer; z-index: 500; 
+            border-radius: 50%; width: 55px; height: 55px; font-size: 28px; cursor: pointer; z-index: 9999; 
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; transition: 0.3s; }
         #a11y-btn:hover { background: #004494; transform: translateY(-3px); }
 
         /* כפתור ווצאפ צף */
         #wa-btn { position: fixed; bottom: 85px; left: 20px; background: #25D366; color: white; border: none;
-            border-radius: 50%; width: 55px; height: 55px; font-size: 30px; cursor: pointer; z-index: 500;
+            border-radius: 50%; width: 55px; height: 55px; font-size: 30px; cursor: pointer; z-index: 9999;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;
             text-decoration: none; transition: 0.3s; }
         #wa-btn:hover { background: #1da851; transform: translateY(-3px); }
 
         /* כפתור חיפוש צף (צד שמאל, מעל הווצאפ) */
         #search-fab { position: fixed; bottom: 150px; left: 20px; background: var(--pink-main); color: #fff; border: none;
-            border-radius: 50%; width: 55px; height: 55px; font-size: 26px; cursor: pointer; z-index: 500;
+            border-radius: 50%; width: 55px; height: 55px; font-size: 26px; cursor: pointer; z-index: 9999;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; transition: 0.3s; }
         #search-fab:hover { background: var(--pink-dark); transform: translateY(-3px); }
 
@@ -75,7 +72,7 @@
         body.a11y-readable, body.a11y-readable * { font-family: Arial, "Segoe UI", sans-serif !important; letter-spacing: 0.4px; line-height: 1.7 !important; }
 
         #back-to-top { position: fixed; bottom: 20px; right: 20px; background: var(--pink-main); color: white; border: none; 
-            border-radius: 50%; width: 55px; height: 55px; font-size: 24px; cursor: pointer; z-index: 500; 
+            border-radius: 50%; width: 55px; height: 55px; font-size: 24px; cursor: pointer; z-index: 9999; 
             box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: none; align-items: center; justify-content: center; transition: 0.3s; }
         #back-to-top:hover { background: var(--pink-dark); transform: translateY(-3px); }
 
@@ -115,9 +112,7 @@
         .cat-menu-item.open .cat-menu-trigger .arrow { transform: rotate(180deg); }
         .cat-dropdown { position: absolute; top: 100%; right: 0; margin-top: 6px; min-width: 210px; background: #fff; border: 2px solid var(--pink-light); border-radius: 14px; box-shadow: 0 8px 20px rgba(224,82,118,0.18); padding: 6px; display: none; z-index: 60; }
         .cat-dropdown::before { content: ''; position: absolute; top: -10px; left: 0; right: 0; height: 10px; background: transparent; }
-        .cat-menu-item:hover .cat-dropdown { display: none; }
-        @media (hover: hover) { .cat-menu-item:hover .cat-dropdown { display: block; } }
-        .cat-menu-item.open .cat-dropdown { display: block; }
+        .cat-menu-item:hover .cat-dropdown, .cat-menu-item.open .cat-dropdown { display: block; }
         .cat-dropdown button { display: block; width: 100%; text-align: right; background: none; border: none; font-family: inherit; font-size: 0.9em; color: var(--text-color); padding: 8px 12px; border-radius: 10px; cursor: pointer; white-space: nowrap; }
         .cat-dropdown button:hover { background: var(--pink-light); color: var(--pink-dark); }
         .cat-dropdown .dd-all { font-weight: bold; color: var(--pink-dark); border-bottom: 1px solid var(--pink-light); border-radius: 0; margin-bottom: 4px; }
@@ -169,6 +164,7 @@
 
         /* --- רצועת יתרונות (למה לקנות אצלנו) --- */
         #features-section { max-width: 1100px; margin: 10px auto 40px; padding: 0 20px; display: none; }
+        #faq-section { display: none; }
         .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 20px; }
         .feature-card { background: #fff; border: 2px solid var(--pink-light); border-radius: 18px; padding: 22px 16px;
             text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.02); transition: transform 0.2s, box-shadow 0.2s; }
@@ -189,6 +185,20 @@
         .footer-brand img { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; }
         .footer-brand strong { color: var(--pink-dark); font-size: 1.15em; }
         .footer-hours-list { list-style: none; padding: 0; margin: 0; font-size: 0.88em; }
+
+        /* --- שאלות ותשובות נפוצות --- */
+        #faq-section { margin: 50px 0; }
+        #faq-section h3 { text-align: center; color: var(--pink-dark); font-size: 1.6em; margin-bottom: 6px; }
+        #faq-section .faq-sub { text-align: center; color: var(--muted); margin: 0 0 26px; font-size: 0.95em; }
+        .faq-list { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+        .faq-item { background: #fff; border: 2px solid var(--pink-light); border-radius: 16px; padding: 4px 20px; transition: border-color 0.2s; }
+        .faq-item[open] { border-color: var(--pink-main); box-shadow: 0 6px 16px var(--shadow); }
+        .faq-item summary { list-style: none; cursor: pointer; padding: 16px 0; font-weight: 700; color: var(--text-color);
+            display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .faq-item summary::-webkit-details-marker { display: none; }
+        .faq-item summary .faq-arrow { color: var(--pink-main); font-size: 0.85em; transition: transform 0.2s; flex-shrink: 0; }
+        .faq-item[open] summary .faq-arrow { transform: rotate(180deg); }
+        .faq-item p { margin: 0 0 18px; color: var(--muted); line-height: 1.7; font-size: 0.95em; }
         .footer-hours-list li { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px dashed rgba(74,46,53,0.12); }
         .footer-bottom { max-width: 1200px; margin: 22px auto 0; padding-top: 16px; border-top: 1px solid rgba(74,46,53,0.15);
             text-align: center; font-size: 0.85em; color: var(--muted); }
@@ -253,6 +263,11 @@
         .ai-msg.user { align-self: flex-start; background: var(--pink-main); color: #fff; border-bottom-right-radius: 4px; }
         .ai-msg.bot { align-self: flex-end; background: #fff; color: var(--text-color); border: 2px solid var(--pink-light); border-bottom-left-radius: 4px; }
         .ai-msg.bot a { color: var(--pink-dark); font-weight: bold; }
+        /* הודעת מערכת (חסימה/מכסה/שגיאה) — נראית שונה בכוונה מתשובה רגילה של ה-AI */
+        .ai-msg.system { align-self: center; max-width: 92%; background: #FFF3E0; color: #8a5a1f;
+            border: 2px solid #F5D9A8; border-radius: 14px; text-align: center; font-size: 0.9em;
+            display: flex; align-items: center; gap: 8px; justify-content: center; }
+        .ai-msg.system .sys-icon { font-size: 1.3em; flex-shrink: 0; }
         .ai-typing { align-self: flex-end; color: var(--muted); font-size: 0.9em; padding: 4px 8px; }
         .ai-suggestions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px; background: var(--cream); border-top: 1px solid var(--pink-light); }
         .ai-chip { background: #fff; border: 2px solid var(--pink-light); color: var(--pink-dark); border-radius: 14px; padding: 6px 12px; font-size: 0.82em; cursor: pointer; font-family: inherit; }
@@ -299,15 +314,6 @@
             .categories-container { grid-template-columns: repeat(3, 1fr) !important; gap: 16px !important; }
             .circle-img { width: 100px !important; height: 100px !important; }
             .cat-name { font-size: 0.85em; }
-
-            /* כפתורים צפים קטנים יותר בנייד, כדי שיתפסו פחות מקום ולא יפריעו */
-            #a11y-btn, #wa-btn, #search-fab, #back-to-top {
-                width: 44px !important; height: 44px !important; font-size: 20px !important;
-            }
-            #a11y-btn { bottom: 14px !important; }
-            #wa-btn { bottom: 66px !important; }
-            #search-fab { bottom: 118px !important; }
-            #back-to-top { bottom: 14px !important; }
         }
     
     
@@ -459,6 +465,12 @@
                 אנחנו ממוקמים בגבעת שמואל ושמחים לקבל גם לקוחות שמעדיפים להגיע ולבחור בעצמם, וגם כאלה שמעדיפים
                 ליצור קשר טלפוני או בוואטסאפ ולקבל עזרה בבחירה. חנות משפחתית, בגישה אישית וחמה – ממש כמו שאפייה טובה אמורה להרגיש.
             </p>
+        </section>
+
+        <section id="faq-section">
+            <h3>שאלות ותשובות נפוצות</h3>
+            <p class="faq-sub">הדברים ששואלים אותנו הכי הרבה — אם השאלה שלכם לא כאן, מוזמנים לפנות אלינו בטלפון או בוואטסאפ 🙂</p>
+            <div class="faq-list" id="faq-list"></div>
         </section>
 
         <div id="products-container" class="products-grid"></div>
@@ -781,6 +793,12 @@
 
         function openAI() {
             const sb = document.getElementById('sidebar');
+            // הצ'אט זמין רק למשתמשים רשומים ומחוברים
+            if (!currentUser) {
+                alert('העוזר החכם זמין רק למשתמשים רשומים 🙂\nמוזמן/ת להתחבר או להירשם בחינם ולנסות!');
+                openAuth('login'); // openAuth כבר סוגר את הסיידבר בעצמו
+                return;
+            }
             if (sb.classList.contains('open')) toggleSidebar();
             document.getElementById('ai-modal').classList.add('open');
             if (aiHistory.length === 0) {
@@ -800,6 +818,17 @@
             const div = document.createElement('div');
             div.className = 'ai-msg ' + (role === 'user' ? 'user' : 'bot');
             div.innerHTML = aiLinkify(aiBoldify(aiEscape(text)));
+            body.appendChild(div);
+            body.scrollTop = body.scrollHeight;
+            return div;
+        }
+        // הודעת מערכת קבועה (חסימה זמנית, מכסה יומית, שגיאת תקשורת וכו') —
+        // נראית שונה בכוונה מתשובה רגילה של ה-AI, כדי שיהיה ברור שזו לא תשובה על השאלה.
+        function aiAppendSystem(text, icon) {
+            const body = document.getElementById('ai-body');
+            const div = document.createElement('div');
+            div.className = 'ai-msg system';
+            div.innerHTML = `<span class="sys-icon">${icon || '⚠️'}</span><span>${aiEscape(text)}</span>`;
             body.appendChild(div);
             body.scrollTop = body.scrollHeight;
             return div;
@@ -826,17 +855,29 @@
             try {
                 const res = await fetch(`${API}/api/ai/chat`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token() },
                     body: JSON.stringify({ message: text, history: aiHistory.slice(0, -1).slice(-8) })
                 });
-                const data = await res.json();
                 typing.remove();
+                if (res.status === 401) {
+                    // ההתחברות פגה תוקף באמצע השיחה — מנחים לחזור ולהתחבר
+                    aiAppendSystem('נראה שההתחברות פגה תוקף. כדאי להתחבר שוב כדי להמשיך לשוחח 🙂', '🔑');
+                    return;
+                }
+                const data = await res.json();
                 const reply = (data && data.reply) ? data.reply : 'סליחה, לא הצלחתי לענות כרגע. נסו שוב בעוד רגע 🙏';
-                aiAppend('bot', reply);
-                aiHistory.push({ role: 'assistant', content: reply });
+                if (data && data.ok === false) {
+                    // חסימה זמנית / מכסה יומית / שגיאת מערכת — לא תשובה אמיתית של ה-AI,
+                    // ולכן לא נכנסת להיסטוריית השיחה (כדי לא "לבלבל" הודעות עתידיות).
+                    const icon = data.reason === 'guarded' ? '🔒' : '⚠️';
+                    aiAppendSystem(reply, icon);
+                } else {
+                    aiAppend('bot', reply);
+                    aiHistory.push({ role: 'assistant', content: reply });
+                }
             } catch (e) {
                 typing.remove();
-                aiAppend('bot', 'אופס, יש כרגע בעיית תקשורת עם השרת. נסו שוב עוד רגע 🙏');
+                aiAppendSystem('יש כרגע בעיית תקשורת עם השרת. נסו שוב עוד רגע 🙏', '⚠️');
             } finally {
                 aiBusy = false;
                 document.getElementById('ai-send').disabled = false;
@@ -936,6 +977,7 @@
                 ]);
                 allCategories = cats; allProducts = prods;
                 loadCategoryMenu();
+                loadFaq();
                 
                 if (view === 'products') {
                     if (currentSub) openSub(currentSub);
@@ -944,6 +986,27 @@
                 }
                 else loadMainCategories();
             } catch (err) { console.error("שגיאה בטעינת נתונים:", err); }
+        }
+
+        // טוען שאלות ותשובות מפורסמות מהשרת ומרנדר כאקורדיון.
+        // הרשימה עשויה להתעדכן עם הזמן — חלק מהשאלות עולות אוטומטית
+        // אחרי שנשאלות מספיק פעמים בצ'אט של ה-AI.
+        async function loadFaq() {
+            const wrap = document.getElementById('faq-list');
+            const section = document.getElementById('faq-section');
+            if (!wrap || !section) return;
+            try {
+                const items = await fetch(`${API}/api/faq?_t=${new Date().getTime()}`).then(r => r.json());
+                if (!items || !items.length) { section.style.display = 'none'; return; }
+                wrap.innerHTML = items.map(item => `
+                    <details class="faq-item">
+                        <summary>${aiEscape(item.question)}<span class="faq-arrow">▾</span></summary>
+                        <p>${aiEscape(item.answer)}</p>
+                    </details>
+                `).join('');
+            } catch (e) {
+                section.style.display = 'none';
+            }
         }
 
         function logout() {
@@ -1037,6 +1100,7 @@
         window.openSales = function() {
             document.getElementById('about-section').style.display = 'none';
             document.getElementById('features-section').style.display = 'none';
+            document.getElementById('faq-section').style.display = 'none';
             fadeOutContent();
             setTimeout(() => {
                 view = 'products'; currentMain = null; currentSub = null;
@@ -1171,6 +1235,7 @@
                 document.getElementById('categories-container').style.display = 'grid';
                 document.getElementById('about-section').style.display = 'block';
                 document.getElementById('features-section').style.display = 'block';
+                document.getElementById('faq-section').style.display = 'block';
                 renderCategoryCircles(allCategories, true, null);
                 updateBreadcrumb([{label: 'דף ראשי'}]);
                 fadeInContent();
@@ -1181,6 +1246,7 @@
             currentMain = main; currentSub = null;
             document.getElementById('about-section').style.display = 'none';
             document.getElementById('features-section').style.display = 'none';
+            document.getElementById('faq-section').style.display = 'none';
             fadeOutContent();
             setTimeout(() => {
                 if (main.has_children) {
@@ -1209,6 +1275,7 @@
             currentSub = sub;
             document.getElementById('about-section').style.display = 'none';
             document.getElementById('features-section').style.display = 'none';
+            document.getElementById('faq-section').style.display = 'none';
             const prods = allProducts.filter(p => p.category_id === sub.id || (p.category_ids && p.category_ids.includes(sub.id)));
             const crumbs = [{label:'דף ראשי', fn: goHome}];
             if (currentMain) crumbs.push({label: currentMain.name, fn: () => openMain(currentMain)});
@@ -1261,6 +1328,7 @@
         function showProducts(prods, title, crumbs) {
             document.getElementById('about-section').style.display = 'none';
             document.getElementById('features-section').style.display = 'none';
+            document.getElementById('faq-section').style.display = 'none';
             fadeOutContent();
             setTimeout(() => {
                 view = 'products'; currentFilteredProducts = prods;

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 from zoneinfo import ZoneInfo
 
 ISRAEL_TZ = ZoneInfo('Asia/Jerusalem')
@@ -87,6 +87,19 @@ try:
     """)
     for col in ("phone", "address", "name"):
         init_cur.execute(f"ALTER TABLE users ALTER COLUMN {col} DROP NOT NULL;")
+
+    # --- הגנה על צ'אט ה-AI: חסימה זמנית על הודעות לא-קשורות ברצף + מגבלת שימוש יומית ---
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_offtopic_streak INTEGER NOT NULL DEFAULT 0;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_blocked_until TIMESTAMP;")
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_usage (
+            user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            usage_date    DATE NOT NULL,
+            message_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, usage_date)
+        );
+    """)
+
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (key VARCHAR(50) PRIMARY KEY, value TEXT);
     """)
@@ -94,6 +107,60 @@ try:
         INSERT INTO settings (key, value) VALUES ('opening_time','09:00'),('closing_time','18:00'),
         ('delivery_override','auto') ON CONFLICT (key) DO NOTHING;
     """)
+
+    # --- שאלות ותשובות נפוצות (FAQ) — כולל מנגנון "מתגלה אוטומטית מהצ'אט" ---
+    # topic_key: תגית קבועה שה-AI מסווג אליה כל שאלה בצ'אט (ראו _ai_build_context/ai_chat).
+    # ברגע שנושא מסוים נשאל FAQ_AUTO_PUBLISH_THRESHOLD פעמים, הוא עולה אוטומטית לאתר.
+    # שאלה/תשובה כתובות מראש ידנית (לא טקסט גולמי מהצ'אט) — כדי לשמור על ניסוח מדויק ומבוקר.
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS faq_items (
+            id          SERIAL PRIMARY KEY,
+            topic_key   VARCHAR(50) UNIQUE,
+            question    TEXT NOT NULL,
+            answer      TEXT NOT NULL,
+            hit_count   INTEGER NOT NULL DEFAULT 0,
+            published   BOOLEAN NOT NULL DEFAULT FALSE,
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            created_at  TIMESTAMP DEFAULT NOW(),
+            updated_at  TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    _faq_seed = [
+        ("ordering", "איך מזמינים? יש אפשרות להזמין דרך האתר?",
+         "כרגע אין באתר מערכת הזמנות עצמאית — האתר מציג לכם מוצרים, מחירים ושעות פתיחה, ואת ההזמנה עצמה סוגרים בשיחת טלפון או הודעת וואטסאפ. אפשר גם להזמין דרך אפליקציית Wolt.",
+         True, 1),
+        ("delivery", "יש לכם משלוחים? מעל כמה סכום?",
+         "כן, יש משלוחים בתיאום טלפוני או בוואטסאפ, החל מהזמנות מעל 200 ₪. המשלוח מחולק אצלכם לאחר שעות הסגירה.",
+         True, 2),
+        ("hours", "מה שעות הפעילות שלכם?",
+         "השעות המעודכנות תמיד מופיעות בתפריט הצדדי באתר (☰ ← \"שעות פעילות\") — כולל הסטטוס המדויק אם אנחנו פתוחים עכשיו, כי לפעמים יש ימים מיוחדים עם שעות שונות.",
+         True, 3),
+        ("location", "איפה אתם נמצאים? אפשר להגיע ולבחור בעצמי?",
+         "אנחנו חנות פיזית בגבעת שמואל, ושמחים לקבל גם לקוחות שמעדיפים להגיע ולבחור בעצמם, וגם כאלה שמעדיפים לקבל עזרה בבחירה דרך הטלפון או הוואטסאפ. הכתובת המדויקת מופיעה בתפריט הצדדי תחת \"צור קשר\".",
+         True, 4),
+        ("recommendation", "אפשר לקבל המלצה מה צריך לקנות לעוגה/מסיבה?",
+         "בהחלט — יש לנו עוזר/ת AI בצ'אט שיכול/ה להמליץ מה מתאים ולאיזו קטגוריה בחנות לפנות (זמין למשתמשים רשומים, מהתפריט הצדדי ← \"שאל/י את ה-AI שלנו\"). אפשר גם פשוט להתקשר או לשלוח הודעה ונשמח לעזור באופן אישי.",
+         True, 5),
+        ("sugar_sheets", "יש אפשרות לבדוק גודל דף סוכר לפני שמדפיסים?",
+         "כלי כזה נמצא כרגע בפיתוח ויתווסף לאתר בקרוב. בינתיים אפשר לפנות אלינו ישירות ונעזור עם המידע הדרוש.",
+         True, 6),
+        # שלושת אלה עדיין לא מוצגים באתר — יעלו אוטומטית ברגע שישאלו עליהם מספיק פעמים בצ'אט
+        ("prices", "איך אפשר לדעת מחירים? יש מחירון?",
+         "המחיר של כל מוצר מופיע ישירות על כרטיס המוצר באתר. אם יש שאלה על מוצר ספציפי שלא מצאתם, אפשר להתקשר או לשלוח הודעת וואטסאפ ונבדוק עבורכם.",
+         False, 7),
+        ("availability", "איך אני יודע/ת אם מוצר מסוים נמצא במלאי?",
+         "מוצר שאזל מהמלאי מסומן בבירור באתר ליד המחיר שלו. לפני שמגיעים במיוחד למוצר מסוים, כדאי גם להתקשר או לשלוח הודעה לוודא זמינות בפועל.",
+         False, 8),
+        ("contact", "איך יוצרים איתכם קשר?",
+         "הכי נוח בטלפון או בוואטסאפ — הפרטים המלאים מופיעים בתפריט הצדדי באתר (☰ ← \"צור קשר\").",
+         False, 9),
+    ]
+    for topic_key, question, answer, published, sort_order in _faq_seed:
+        init_cur.execute(
+            "INSERT INTO faq_items (topic_key, question, answer, published, sort_order) "
+            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (topic_key) DO NOTHING;",
+            (topic_key, question, answer, published, sort_order),
+        )
 
     admin_email = os.environ.get("ADMIN_EMAIL")
     admin_pass = os.environ.get("ADMIN_PASSWORD")
@@ -786,6 +853,75 @@ def update_contact(body: ContactBody, sess: dict = Depends(require_admin)):
     conn.commit(); cur.close(); conn.close()
     return {"ok": True}
 
+# --- שאלות ותשובות נפוצות (FAQ) ---
+
+@app.get("/api/faq")
+def get_faq():
+    """שאלות ותשובות מפורסמות בלבד — לתצוגה בדף הבית."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, question, answer FROM faq_items WHERE published = TRUE ORDER BY sort_order, id;")
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return [{"id": r[0], "question": r[1], "answer": r[2]} for r in rows]
+
+@app.get("/api/admin/faq")
+def admin_list_faq(sess: dict = Depends(require_admin)):
+    """כל הפריטים כולל כאלה שעדיין לא פורסמו, עם מונה השאלות מהצ'אט."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT id, topic_key, question, answer, hit_count, published, sort_order
+        FROM faq_items ORDER BY published DESC, hit_count DESC, sort_order, id;
+    """)
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return [
+        {"id": r[0], "topic_key": r[1], "question": r[2], "answer": r[3],
+         "hit_count": r[4], "published": r[5], "sort_order": r[6]}
+        for r in rows
+    ]
+
+class FaqCreateBody(BaseModel):
+    question: str
+    answer: str
+    published: bool = True
+    sort_order: int = 100
+
+@app.post("/api/admin/faq")
+def admin_create_faq(body: FaqCreateBody, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO faq_items (question, answer, published, sort_order) VALUES (%s, %s, %s, %s) RETURNING id;",
+        (body.question.strip(), body.answer.strip(), body.published, body.sort_order),
+    )
+    new_id = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True, "id": new_id}
+
+class FaqUpdateBody(BaseModel):
+    question: Optional[str] = None
+    answer: Optional[str] = None
+    published: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+@app.patch("/api/admin/faq/{faq_id}")
+def admin_update_faq(faq_id: int, body: FaqUpdateBody, sess: dict = Depends(require_admin)):
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        return {"ok": True}
+    conn = get_conn(); cur = conn.cursor()
+    sets = ", ".join(f"{k} = %s" for k in fields)
+    cur.execute(f"UPDATE faq_items SET {sets}, updated_at = NOW() WHERE id = %s;", list(fields.values()) + [faq_id])
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True}
+
+@app.delete("/api/admin/faq/{faq_id}")
+def admin_delete_faq(faq_id: int, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM faq_items WHERE id = %s RETURNING id;", (faq_id,))
+    deleted = cur.fetchone()
+    conn.commit(); cur.close(); conn.close()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="הפריט לא נמצא")
+    return {"ok": True}
+
 class CategoryCreateBody(BaseModel):
     name: str
     parent_id: Optional[int] = None
@@ -1050,7 +1186,44 @@ AI_SYSTEM_PROMPT = """את/ה העוזר/ת החכם/ה והחמוד/ה של "Ba
 - אם שואלים על "דפי סוכר" — ספר/י שהכלי לבדיקת גודל דף סוכר לפני הדפסה נמצא בפיתוח ויתווסף בקרוב 🙂
 - אל תמציא/י כתובות אתר. השתמש/י רק בקישורים שמופיעים בהקשר.
 - סיים/י כל תשובה במשפט קצר אחד שמזמין את הצעד הבא.
+
+## התמקדות בנושאי החנות בלבד — חשוב מאוד
+את/ה כאן *רק* בשביל נושאים שקשורים לחנות: מוצרים, מתכונים, אפייה, מסיבות, קטגוריות, שעות, משלוחים, יצירת קשר.
+- ברכות/נימוסים ("היי", "תודה", "מה שלומך") — לגיטימי לגמרי, ענה/י בחום כרגיל.
+- אם השאלה **לגמרי לא קשורה** לחנות (למשל: פוליטיקה, עזרה בתכנות, שאלות אישיות על מישהו, כל דבר שאין לו שום קשר לאפייה/מסיבות/החנות) —
+  אל תענה/י על השאלה עצמה. הסבר/י בנימוס: "מצטער/ת, אני יכול/ה לעזור רק בנושאים שקשורים לחנות שלנו 🧁 יש לך שאלה על מוצרים, מתכונים או משהו למסיבה?"
+
+## סיווג נושא (topic) — לצורך מעקב שאלות נפוצות
+בנוסף לתשובה, סווג/י את שאלת הלקוח *האחרונה* לאחד מהנושאים הקבועים האלה בלבד:
+- ordering — איך מזמינים / הזמנה דרך האתר
+- delivery — משלוחים, עלות מינימלית למשלוח
+- hours — שעות פתיחה/סגירה
+- location — מיקום החנות, הגעה עצמאית
+- recommendation — המלצה מה לקנות לאירוע/מתכון
+- sugar_sheets — דפי סוכר להדפסה
+- prices — מחירים/מחירון כללי
+- availability — האם מוצר מסוים במלאי
+- contact — איך יוצרים קשר
+- other — כל דבר אחר, כולל ברכות/נימוסים או שאלות לא-קשורות לחנות
+
+## סימון "קשור לחנות" (on_topic)
+סמן/י true אם השאלה קשורה לחנות (כולל ברכות/נימוסים), ו-false רק אם היא **לגמרי לא קשורה** לחנות (ראה סעיף למעלה).
+
+## פורמט תשובה — קריטי
+החזר/י תמיד **אך ורק** אובייקט JSON תקין, בלי טקסט נוסף, בלי ```, בפורמט המדויק הזה:
+{"reply": "<התשובה המלאה ללקוח, בעברית>", "topic": "<אחד מהמפתחות למעלה, באנגלית>", "on_topic": <true או false>}
 """
+
+FAQ_TOPIC_KEYS = {
+    "ordering", "delivery", "hours", "location", "recommendation",
+    "sugar_sheets", "prices", "availability", "contact",
+}
+FAQ_AUTO_PUBLISH_THRESHOLD = 5
+
+# --- הגנה מפני שימוש לרעה בצ'אט ---
+AI_DAILY_LIMIT = int(os.environ.get("AI_DAILY_LIMIT", "30"))          # הודעות מקסימום ליום למשתמש
+AI_OFFTOPIC_BLOCK_THRESHOLD = 5                                       # כמה הודעות לא-קשורות ברצף עד חסימה
+AI_BLOCK_HOURS = 24                                                   # לכמה שעות החסימה תקפה
 
 
 class AiChatMsg(BaseModel):
@@ -1141,8 +1314,97 @@ def _ai_build_context(user_message):
     return "\n\n".join(parts)
 
 
+def _track_faq_topic(topic_key):
+    """
+    כל פעם ששאלה בצ'אט מסווגת לנושא קבוע, סופרים אותה. ברגע שנושא מסוים
+    חוצה את FAQ_AUTO_PUBLISH_THRESHOLD פעמים, הוא עולה אוטומטית לדף הבית
+    (published=TRUE) — עם השאלה/תשובה שכבר כתובות מראש בטבלה, לא טקסט
+    גולמי מהצ'אט. עוטפים בטיפול שגיאות כדי שתקלה כאן לעולם לא תפיל את הצ'אט.
+    """
+    if not topic_key or topic_key not in FAQ_TOPIC_KEYS:
+        return
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute(
+            "UPDATE faq_items SET hit_count = hit_count + 1, updated_at = NOW() "
+            "WHERE topic_key = %s RETURNING hit_count, published;",
+            (topic_key,),
+        )
+        row = cur.fetchone()
+        if row:
+            hit_count, published = row
+            if hit_count >= FAQ_AUTO_PUBLISH_THRESHOLD and not published:
+                cur.execute("UPDATE faq_items SET published = TRUE WHERE topic_key = %s;", (topic_key,))
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"[FAQ] tracking error: {e}")
+
+
+def _ai_check_guard(user_id):
+    """
+    בודק לפני קריאה ל-AI: האם המשתמש חסום זמנית (בגלל הודעות לא-קשורות ברצף),
+    או שחרג ממכסת ההודעות היומית. מחזיר (allowed: bool, message: str|None).
+    """
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT ai_blocked_until FROM users WHERE id = %s;", (user_id,))
+        row = cur.fetchone()
+        if row and row[0] and row[0] > datetime.now():
+            remaining_h = max(1, int((row[0] - datetime.now()).total_seconds() // 3600) + 1)
+            return False, (
+                f"הצ'אט חסום זמנית בעקבות כמה הודעות לא-קשורות לחנות ברצף. "
+                f"אפשר לנסות שוב בעוד כ-{remaining_h} שעות, או לפנות אלינו ישירות בטלפון/וואטסאפ 🙏"
+            )
+
+        today = date.today()
+        cur.execute("SELECT message_count FROM ai_usage WHERE user_id = %s AND usage_date = %s;", (user_id, today))
+        row = cur.fetchone()
+        if row and row[0] >= AI_DAILY_LIMIT:
+            return False, (
+                "הגעת למכסת ההודעות היומית לצ'אט החכם 🙂 אפשר להמשיך מחר, "
+                "או בינתיים ליצור איתנו קשר ישירות בטלפון/וואטסאפ."
+            )
+        return True, None
+    finally:
+        cur.close(); conn.close()
+
+
+def _ai_record_usage_and_ontopic(user_id, on_topic):
+    """
+    רץ אחרי כל הודעה מוצלחת: סופר אותה במכסה היומית, ומעדכן את רצף
+    ההודעות הלא-קשורות (מאפס ברגע שיש הודעה קשורה, מגדיל אחרת) — וחוסם
+    זמנית אם הרצף חוצה את הסף.
+    """
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        today = date.today()
+        cur.execute(
+            "INSERT INTO ai_usage (user_id, usage_date, message_count) VALUES (%s, %s, 1) "
+            "ON CONFLICT (user_id, usage_date) DO UPDATE SET message_count = ai_usage.message_count + 1;",
+            (user_id, today),
+        )
+        if on_topic is False:
+            cur.execute(
+                "UPDATE users SET ai_offtopic_streak = ai_offtopic_streak + 1 WHERE id = %s RETURNING ai_offtopic_streak;",
+                (user_id,),
+            )
+            streak = cur.fetchone()[0]
+            if streak >= AI_OFFTOPIC_BLOCK_THRESHOLD:
+                cur.execute(
+                    "UPDATE users SET ai_blocked_until = %s, ai_offtopic_streak = 0 WHERE id = %s;",
+                    (datetime.now() + timedelta(hours=AI_BLOCK_HOURS), user_id),
+                )
+        elif on_topic is True:
+            cur.execute("UPDATE users SET ai_offtopic_streak = 0 WHERE id = %s;", (user_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"[AI] usage/guard tracking error: {e}")
+    finally:
+        cur.close(); conn.close()
+
+
 @app.post("/api/ai/chat")
-def ai_chat(body: AiChatBody):
+def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
     user_message = (body.message or "").strip()[:AI_MAX_MSG_CHARS]
     if not user_message:
         return {"reply": "כתבו לי שאלה ואשמח לעזור 🙂", "ok": True}
@@ -1151,6 +1413,11 @@ def ai_chat(body: AiChatBody):
         "מצטער/ת, העוזר החכם עדיין לא מחובר במלואו. בינתיים אפשר ליצור איתנו קשר "
         "ישירות בטלפון או בוואטסאפ ונשמח לעזור! 🧁"
     )
+
+    # בדיקת חסימה/מכסה יומית — לפני שקוראים ל-AI בכלל (חוסך גם עלות)
+    allowed, guard_msg = _ai_check_guard(sess["user_id"])
+    if not allowed:
+        return {"reply": guard_msg, "ok": False, "reason": "guarded"}
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1182,9 +1449,29 @@ def ai_chat(body: AiChatBody):
             system=system,
             messages=messages,
         )
-        reply = "".join(block.text for block in resp.content if getattr(block, "type", "") == "text").strip()
+        raw = "".join(block.text for block in resp.content if getattr(block, "type", "") == "text").strip()
+
+        # מנסים לפרש כ-JSON מובנה {"reply", "topic", "on_topic"}. אם המודל
+        # (בעיקר מודלים חינמיים) לא הצליח לשמור על הפורמט — נופלים בעדינות
+        # לטקסט הגולמי כתשובה רגילה, בלי לשבור את הצ'אט, ובלי סיווג/הגנה
+        # לאותה הודעה בודדת (עדיף לפספס הגנה אחת מאשר לשבור את החוויה).
+        reply, topic, on_topic = None, None, None
+        try:
+            import json, re
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
+            parsed = json.loads(cleaned)
+            reply = (parsed.get("reply") or "").strip()
+            topic = (parsed.get("topic") or "").strip().lower()
+            on_topic = parsed.get("on_topic")
+            if not isinstance(on_topic, bool):
+                on_topic = None
+        except Exception:
+            reply = raw
+
         if not reply:
             reply = fallback
+        _track_faq_topic(topic)
+        _ai_record_usage_and_ontopic(sess["user_id"], on_topic)
         return {"reply": reply, "ok": True}
     except Exception as e:
         print(f"[AI] error: {e}")

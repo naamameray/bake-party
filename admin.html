@@ -67,6 +67,19 @@
         .prod-row { display: grid; grid-template-columns: 50px 1.6fr 1fr 1fr 90px; gap: 12px; align-items: center; background: #fffafa; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--pink-light); margin-bottom: 8px; }
         .prod-row.no-cat { border-color: #d9534f; background: #fff3f2; }
         .prod-row img { width: 42px; height: 42px; object-fit: contain; border-radius: 8px; background: #fff; border: 1px solid var(--pink-light); }
+
+        /* --- טאב שאלות ותשובות --- */
+        .faq-admin-item { background: #fffafa; border: 1px solid var(--pink-light); border-radius: 12px; padding: 14px; margin-bottom: 10px; }
+        .faq-admin-item.pending { border-color: #e0a800; background: #fffbf0; }
+        .faq-admin-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+        .faq-admin-badges { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+        .faq-badge { font-size: 0.75em; font-weight: bold; padding: 3px 9px; border-radius: 10px; white-space: nowrap; }
+        .faq-badge.published { background: #e6f5ec; color: var(--ok); }
+        .faq-badge.pending { background: #fff3cd; color: #856404; }
+        .faq-badge.hits { background: var(--pink-light); color: var(--pink-dark); }
+        .faq-admin-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+        .faq-admin-actions button { font-size: 0.8em; padding: 5px 10px; width: auto; }
+        .faq-admin-item textarea, .faq-admin-item input[type="text"] { margin-bottom: 6px; }
         .prod-name { font-weight: 600; font-size: 0.92em; }
         .prod-warn { display: inline-block; margin-top: 3px; font-size: 0.78em; color: #d9534f; font-weight: bold; }
         .prod-cat-select { width: 100%; font-size: 0.85em; padding: 6px 8px; }
@@ -123,6 +136,7 @@
             <button class="tab-btn active" type="button" id="tab-btn-hours" onclick="switchTab('hours')">🕒 שעות ומשלוחים</button>
             <button class="tab-btn" type="button" id="tab-btn-products" onclick="switchTab('products')">🏷️ מוצרים</button>
             <button class="tab-btn" type="button" id="tab-btn-categories" onclick="switchTab('categories')">📁 ניהול קטגוריות</button>
+            <button class="tab-btn" type="button" id="tab-btn-faq" onclick="switchTab('faq')">💬 שאלות ותשובות</button>
         </div>
 
         <div class="container">
@@ -211,6 +225,30 @@
                     </p>
                     <button class="btn" style="margin-bottom: 15px;" onclick="addCategoryPrompt(null)">+ קטגוריה ראשית חדשה</button>
                     <div id="cat-tree-list">טוען קטגוריות...</div>
+                </div>
+            </div>
+
+            <div class="tab-page" id="tab-page-faq">
+                <div class="card">
+                    <h2>שאלות ותשובות נפוצות</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        השאלות שמוצגות כרגע בדף הבית של האתר, ועוד כמה שעדיין "ממתינות" — נספרות אוטומטית לפי כמה
+                        פעמים נשאלו בצ'אט של ה-AI. ברגע ששאלה נשאלת <strong>5 פעמים</strong>, היא עולה לבד לאתר —
+                        אפשר גם לפרסם/להסתיר ידנית, לערוך את הניסוח, למחוק, או להוסיף שאלה חדשה משלך.
+                    </p>
+                    <button class="btn" style="max-width:260px; margin-bottom:15px;" onclick="openFaqAddForm()">+ הוספת שאלה ותשובה</button>
+                    <div id="faq-add-form" style="display:none; margin-bottom:20px; background:var(--cream); border:2px solid var(--pink-light); border-radius:14px; padding:14px;">
+                        <label>שאלה</label>
+                        <input type="text" id="faq-new-question" placeholder="למשל: האם יש חניה ליד החנות?">
+                        <label>תשובה</label>
+                        <textarea id="faq-new-answer" placeholder="התשובה המלאה שתוצג ללקוחות" style="min-height:80px;"></textarea>
+                        <div style="display:flex; gap:10px; margin-top:10px;">
+                            <button class="btn" style="max-width:180px;" onclick="submitFaqAdd()">שמירה ופרסום</button>
+                            <button class="btn" style="max-width:120px; background:var(--muted);" onclick="closeFaqAddForm()">ביטול</button>
+                        </div>
+                        <p id="faq-add-msg" style="font-weight:bold; margin-top:8px;"></p>
+                    </div>
+                    <div id="faq-admin-list">טוען שאלות ותשובות...</div>
                 </div>
             </div>
 
@@ -377,13 +415,16 @@
             document.getElementById('tab-btn-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-btn-products').classList.toggle('active', name === 'products');
             document.getElementById('tab-btn-categories').classList.toggle('active', name === 'categories');
+            document.getElementById('tab-btn-faq').classList.toggle('active', name === 'faq');
             
             document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
             document.getElementById('tab-page-categories').classList.toggle('active', name === 'categories');
+            document.getElementById('tab-page-faq').classList.toggle('active', name === 'faq');
             
             if (name === 'products' && !productsLoaded) loadProductsTab();
             if (name === 'categories' && !categoriesLoaded) loadCategoriesTab();
+            if (name === 'faq') loadFaqTab();
         };
 
         // --- טאב ניהול קטגוריות ---
@@ -714,6 +755,120 @@
         }
         setTimeout(() => { if (document.getElementById('deal-list')) loadDealProducts(); }, 2000);
 
+        // ===================== טאב שאלות ותשובות (FAQ) =====================
+        async function loadFaqTab() {
+            const wrap = document.getElementById('faq-admin-list');
+            wrap.innerHTML = 'טוען שאלות ותשובות...';
+            try {
+                const res = await fetch(`${API}/api/admin/faq`, { headers: authHeaders() });
+                if (!res.ok) throw new Error();
+                const items = await res.json();
+                renderFaqAdminList(items);
+            } catch {
+                wrap.innerHTML = '<p style="color:var(--muted);">שגיאה בטעינת השאלות והתשובות.</p>';
+            }
+        }
+
+        function renderFaqAdminList(items) {
+            const wrap = document.getElementById('faq-admin-list');
+            wrap.innerHTML = '';
+            if (!items.length) { wrap.innerHTML = '<p style="color:var(--muted);">אין עדיין שאלות ותשובות.</p>'; return; }
+
+            items.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'faq-admin-item' + (!item.published && item.hit_count > 0 ? ' pending' : '');
+                const publishedBadge = item.published
+                    ? `<span class="faq-badge published">✓ מוצג באתר</span>`
+                    : `<span class="faq-badge pending">ממתין לפרסום</span>`;
+                const hitsBadge = item.topic_key
+                    ? `<span class="faq-badge hits">נשאל/ה ${item.hit_count} פעמים${!item.published ? ` (מתפרסם/ת אוטומטית ב-5)` : ''}</span>`
+                    : '';
+
+                div.innerHTML = `
+                    <div class="faq-admin-head">
+                        <div class="faq-admin-badges">${publishedBadge}${hitsBadge}</div>
+                        <div class="faq-admin-actions">
+                            <button class="btn" style="background:${item.published ? 'var(--muted)' : 'var(--ok)'};" onclick="toggleFaqPublish(${item.id}, ${!item.published})">${item.published ? 'הסתר מהאתר' : 'פרסם עכשיו'}</button>
+                            <button class="btn" style="background:#d9534f;" onclick="deleteFaqItem(${item.id})">מחק</button>
+                        </div>
+                    </div>
+                    <label style="font-size:0.85em;">שאלה</label>
+                    <input type="text" class="faq-q-input" value="${item.question.replace(/"/g, '&quot;')}">
+                    <label style="font-size:0.85em;">תשובה</label>
+                    <textarea class="faq-a-input" style="min-height:70px;">${item.answer}</textarea>
+                    <button class="btn" style="max-width:140px; margin-top:6px;" onclick="saveFaqEdit(${item.id}, this)">שמור עריכה</button>
+                `;
+                wrap.appendChild(div);
+            });
+        }
+
+        async function toggleFaqPublish(id, newState) {
+            try {
+                const res = await fetch(`${API}/api/admin/faq/${id}`, {
+                    method: 'PATCH', headers: authHeaders(),
+                    body: JSON.stringify({ published: newState })
+                });
+                if (!res.ok) throw new Error();
+                loadFaqTab();
+            } catch { alert('שגיאה בעדכון הפרסום.'); }
+        }
+
+        async function saveFaqEdit(id, btn) {
+            const item = btn.closest('.faq-admin-item');
+            const question = item.querySelector('.faq-q-input').value.trim();
+            const answer = item.querySelector('.faq-a-input').value.trim();
+            if (!question || !answer) { alert('צריך גם שאלה וגם תשובה.'); return; }
+            btn.textContent = 'שומר...'; btn.disabled = true;
+            try {
+                const res = await fetch(`${API}/api/admin/faq/${id}`, {
+                    method: 'PATCH', headers: authHeaders(),
+                    body: JSON.stringify({ question, answer })
+                });
+                if (!res.ok) throw new Error();
+                btn.textContent = '✓ נשמר';
+                setTimeout(() => { btn.textContent = 'שמור עריכה'; btn.disabled = false; }, 1200);
+            } catch {
+                btn.textContent = 'שגיאה'; btn.disabled = false;
+            }
+        }
+
+        async function deleteFaqItem(id) {
+            if (!confirm('למחוק את השאלה הזו לצמיתות?')) return;
+            try {
+                const res = await fetch(`${API}/api/admin/faq/${id}`, { method: 'DELETE', headers: authHeaders() });
+                if (!res.ok) throw new Error();
+                loadFaqTab();
+            } catch { alert('שגיאה במחיקה.'); }
+        }
+
+        window.openFaqAddForm = function() {
+            document.getElementById('faq-add-form').style.display = 'block';
+            document.getElementById('faq-new-question').focus();
+        };
+        window.closeFaqAddForm = function() {
+            document.getElementById('faq-add-form').style.display = 'none';
+            document.getElementById('faq-new-question').value = '';
+            document.getElementById('faq-new-answer').value = '';
+            document.getElementById('faq-add-msg').textContent = '';
+        };
+        window.submitFaqAdd = async function() {
+            const question = document.getElementById('faq-new-question').value.trim();
+            const answer = document.getElementById('faq-new-answer').value.trim();
+            const msg = document.getElementById('faq-add-msg');
+            if (!question || !answer) { msg.style.color = '#d9534f'; msg.textContent = 'צריך למלא גם שאלה וגם תשובה.'; return; }
+            msg.style.color = 'var(--muted)'; msg.textContent = 'שומר...';
+            try {
+                const res = await fetch(`${API}/api/admin/faq`, {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ question, answer, published: true })
+                });
+                if (!res.ok) throw new Error();
+                closeFaqAddForm();
+                loadFaqTab();
+            } catch {
+                msg.style.color = '#d9534f'; msg.textContent = 'שגיאה בשמירה, נסי שוב.';
+            }
+        };
 
     </script>
 </body>
