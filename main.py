@@ -1196,29 +1196,54 @@ def _best_name_match(target_tokens, candidates_with_tokens):
 def compare_stock_with_wolt_file(file_path):
     """
     משווה בין קובץ האקסל שהורד מוולט (גיליון 'offers', עמודות name +
-    inventory_mode) לבין המוצרים שלנו. מחזיר dict עם שתי רשימות:
+    inventory_mode) לבין המוצרים שלנו. מחזיר dict עם שלוש רשימות:
     - to_mark_out_of_stock: אצלנו "במלאי", בוולט forced_out_of_stock
     - to_mark_back_in_stock: אצלנו "אזל", בוולט כן זמין
-    כל פריט: {"our_id", "our_name", "wolt_name", "similarity"}
+    - new_products_not_in_our_site: קיים בוולט, לא נמצא אצלנו בכלל
+      (בלי קשר לסטטוס המלאי שלנו — פשוט לא קיים בטבלת Products שלנו)
+    כל פריט: {"our_id", "our_name", "wolt_name", "similarity"} (לשתי הראשונות)
+    או {"wolt_name", "price", "available"} (לשלישית, אין "אצלנו" בכלל).
+
+    זורק ValueError עם הודעה ברורה בעברית אם הקובץ מהסוג הלא נכון —
+    יש כמה סוגי ייצוא שונים בוולט, ורק אחד מהם (זה עם גיליון "offers"
+    ועמודת "inventory_mode") מתאים לבדיקת מלאי.
     """
     import pandas as pd
 
-    df = pd.read_excel(file_path, sheet_name="offers")
-    wolt_items = []  # (name, tokens, is_out_of_stock)
+    try:
+        df = pd.read_excel(file_path, sheet_name="offers")
+    except ValueError:
+        raise ValueError(
+            "זה לא קובץ הזמינות הנכון — חסר גיליון בשם 'offers'. "
+            "בוולט יש כמה סוגי ייצוא שונים; ודאי שהורדת את הדוח שכולל את נתוני המלאי "
+            "(אותו סוג קובץ ששימש בזמנו את import_data.py), לא דוח אחר כמו סדר הצגת מוצרים."
+        )
+
+    if "inventory_mode" not in df.columns or "name" not in df.columns:
+        raise ValueError(
+            "הקובץ נפתח בהצלחה, אבל חסרות בו עמודות חיוניות (name / inventory_mode). "
+            "כנראה שזה סוג ייצוא אחר מוולט — צריך את הדוח עם נתוני זמינות המלאי."
+        )
+
+    wolt_items = []  # (name, tokens, is_out_of_stock, price)
     for _, row in df.iterrows():
         name = str(row.get("name", "")).strip()
         if not name or name.lower() == "nan":
             continue
         is_out = str(row.get("inventory_mode", "")) == "forced_out_of_stock"
-        wolt_items.append((name, _normalize_name_tokens(name), is_out))
+        price = row.get("price")
+        price = float(price) if pd.notna(price) else None
+        wolt_items.append((name, _normalize_name_tokens(name), is_out, price))
 
-    wolt_available = [(n, t) for n, t, out in wolt_items if not out]
-    wolt_out_of_stock = [(n, t) for n, t, out in wolt_items if out]
+    wolt_available = [(n, t) for n, t, out, p in wolt_items if not out]
+    wolt_out_of_stock = [(n, t) for n, t, out, p in wolt_items if out]
 
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT id, name, stock_quantity FROM Products ORDER BY name;")
     our_products = cur.fetchall()
     cur.close(); conn.close()
+
+    our_tokens_all = [_normalize_name_tokens(name) for _, name, _ in our_products]
 
     SIM_THRESHOLD = 0.7
     to_mark_out, to_mark_back = [], []
@@ -1250,7 +1275,25 @@ def compare_stock_with_wolt_file(file_path):
                         "wolt_name": match_name, "similarity": round(sim, 2),
                     })
 
-    return {"to_mark_out_of_stock": to_mark_out, "to_mark_back_in_stock": to_mark_back}
+    # מוצרים שקיימים בוולט אבל אין להם שום התאמה אצלנו בכלל (לא "אזל", ממש חסרים)
+    our_candidates = list(zip([name for _, name, _ in our_products], our_tokens_all))
+    new_products = []
+    for name, tokens, is_out, price in wolt_items:
+        if not tokens:
+            continue
+        _, best_sim = _best_name_match(tokens, our_candidates)
+        if best_sim < SIM_THRESHOLD:
+            new_products.append({
+                "wolt_name": name,
+                "price": price,
+                "available": not is_out,
+            })
+
+    return {
+        "to_mark_out_of_stock": to_mark_out,
+        "to_mark_back_in_stock": to_mark_back,
+        "new_products_not_in_our_site": new_products,
+    }
 
 
 @app.post("/api/admin/wolt-stock-check")
@@ -1267,8 +1310,11 @@ async def admin_wolt_stock_check(file: UploadFile = File(...), sess: dict = Depe
             f.write(await file.read())
         result = compare_stock_with_wolt_file(tmp_path)
         return result
+    except ValueError as e:
+        # שגיאות ולידציה ברורות (סוג קובץ לא נכון) — ההודעה כבר מנוסחת בעברית ומוכנה להצגה
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"שגיאה בקריאת הקובץ: {e}")
+        raise HTTPException(status_code=400, detail=f"שגיאה לא צפויה בקריאת הקובץ: {e}")
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)

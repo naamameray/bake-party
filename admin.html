@@ -212,10 +212,10 @@
                 <div class="card">
                     <h2>🔍 השוואת מלאי מול וולט</h2>
                     <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
-                        העלי את קובץ האקסל שהורדת מוולט (אותו קובץ שמשמש את import_data.py) — נשווה בין מה שוולט
-                        מסמנים כאזל אצלם לבין מה שמסומן אצלנו, בשני הכיוונים: מוצרים שאזלו בוולט אבל אצלנו עדיין
-                        "במלאי", וגם מוצרים שחזרו למלאי בוולט אבל אצלנו עדיין מסומנים "אזל". <strong>שום דבר לא
-                        מתעדכן אוטומטית</strong> — תמיד יש כפתור בדיקה/אישור ידני לכל מוצר.
+                        העלי את קובץ האקסל שהורדת מוולט (אותו קובץ שמשמש את import_data.py) — נשווה בשלושה מובנים:
+                        מוצרים שאזלו בוולט אבל אצלנו עדיין "במלאי", מוצרים שחזרו למלאי בוולט אבל אצלנו עדיין
+                        מסומנים "אזל", וגם מוצרים <strong>שקיימים בוולט אבל לא אצלנו בכלל</strong> (מוצרים חדשים).
+                        <strong>שום דבר לא מתעדכן אוטומטית</strong> — תמיד יש כפתור בדיקה/אישור ידני לכל מוצר.
                     </p>
                     <input type="file" id="wolt-check-file" accept=".xlsx">
                     <button class="btn" style="max-width:220px; margin-top:10px;" onclick="runWoltStockCheck()">בדיקה מול הקובץ</button>
@@ -704,13 +704,14 @@
 
                 const outCount = data.to_mark_out_of_stock.length;
                 const backCount = data.to_mark_back_in_stock.length;
-                if (outCount === 0 && backCount === 0) {
+                const newCount = (data.new_products_not_in_our_site || []).length;
+                if (outCount === 0 && backCount === 0 && newCount === 0) {
                     msg.style.color = '#3B9E6A';
                     msg.textContent = '✓ הכול מסונכרן! לא נמצאו הבדלים בין וולט לאתר שלנו.';
                     return;
                 }
                 msg.style.color = 'var(--muted)';
-                msg.textContent = `נמצאו ${outCount} מוצרים לסמן כאזל, ו-${backCount} מוצרים להחזיר למלאי.`;
+                msg.textContent = `נמצאו ${outCount} מוצרים לסמן כאזל, ${backCount} להחזיר למלאי, ו-${newCount} מוצרים חדשים שלא קיימים אצלנו בכלל.`;
 
                 let html = '';
                 if (outCount > 0) {
@@ -724,6 +725,13 @@
                     html += `<div class="wolt-check-group"><h3>⬆️ אצלנו "אזל", בוולט זמין — להחזיר למלאי</h3>`;
                     data.to_mark_back_in_stock.forEach(item => {
                         html += woltCheckItemHtml(item, 100, 'החזר למלאי');
+                    });
+                    html += `</div>`;
+                }
+                if (newCount > 0) {
+                    html += `<div class="wolt-check-group"><h3>🆕 קיימים בוולט אבל לא אצלנו בכלל — כדאי לשקול להוסיף</h3>`;
+                    data.new_products_not_in_our_site.forEach(item => {
+                        html += woltNewProductHtml(item);
                     });
                     html += `</div>`;
                 }
@@ -741,6 +749,20 @@
                         <div class="wci-match">התאמה בוולט: "${item.wolt_name}" (${Math.round(item.similarity * 100)}% דמיון)</div>
                     </div>
                     <button class="btn" onclick="applyWoltStockChange(${item.our_id}, ${newStock}, this)">${btnLabel}</button>
+                </div>`;
+        }
+
+        function woltNewProductHtml(item) {
+            // אין כפתור פעולה — הוספת מוצר חדש דורשת קטגוריה/תמונה וכו', לכן רק מציגים
+            // כדי שתחליטי ותוסיפי ידנית דרך "מוצר חדש" אם רלוונטי.
+            const priceStr = item.price != null ? `₪${item.price.toFixed(2)}` : 'מחיר לא ידוע';
+            const availStr = item.available ? 'זמין בוולט' : 'אזל גם בוולט';
+            return `
+                <div class="wolt-check-item">
+                    <div class="wci-info">
+                        <div class="wci-name">${item.wolt_name}</div>
+                        <div class="wci-match">${priceStr} · ${availStr}</div>
+                    </div>
                 </div>`;
         }
 
