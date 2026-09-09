@@ -1195,10 +1195,17 @@ def _best_name_match(target_tokens, candidates_with_tokens):
 
 def compare_stock_with_wolt_file(file_path):
     """
-    משווה בין קובץ האקסל שהורד מוולט (גיליון 'offers', עמודות name +
-    inventory_mode) לבין המוצרים שלנו. מחזיר dict עם שלוש רשימות:
-    - to_mark_out_of_stock: אצלנו "במלאי", בוולט forced_out_of_stock
-    - to_mark_back_in_stock: אצלנו "אזל", בוולט כן זמין
+    משווה בין קובץ האקסל שהורד מוולט (גיליון 'offers') לבין המוצרים שלנו.
+    "לא זמין בוולט" נקבע לפי **שני** סימנים ביחד (או-אחד-מהם מספיק):
+      - inventory_mode == 'forced_out_of_stock'  (אזל זמנית מהמלאי)
+      - enabled == False  (מוצר מושבת/לא פעיל בוולט לגמרי — יכול להיות
+        לא מסומן forced_out_of_stock בכלל, אבל עדיין לא ניתן לרכישה שם)
+    בלי לבדוק גם את enabled, מוצרים מושבתים-אבל-לא-"אזל-רשמית" היו "נעלמים"
+    מהבדיקה ונראים בטעות כזמינים.
+
+    מחזיר dict עם שלוש רשימות:
+    - to_mark_out_of_stock: אצלנו "במלאי", בוולט לא זמין (אזל או מושבת)
+    - to_mark_back_in_stock: אצלנו "אזל", בוולט כן זמין ופעיל
     - new_products_not_in_our_site: קיים בוולט, לא נמצא אצלנו בכלל
       (בלי קשר לסטטוס המלאי שלנו — פשוט לא קיים בטבלת Products שלנו)
     כל פריט: {"our_id", "our_name", "wolt_name", "similarity"} (לשתי הראשונות)
@@ -1225,12 +1232,16 @@ def compare_stock_with_wolt_file(file_path):
             "כנראה שזה סוג ייצוא אחר מוולט — צריך את הדוח עם נתוני זמינות המלאי."
         )
 
+    has_enabled_col = "enabled" in df.columns
+
     wolt_items = []  # (name, tokens, is_out_of_stock, price)
     for _, row in df.iterrows():
         name = str(row.get("name", "")).strip()
         if not name or name.lower() == "nan":
             continue
-        is_out = str(row.get("inventory_mode", "")) == "forced_out_of_stock"
+        is_forced_out = str(row.get("inventory_mode", "")) == "forced_out_of_stock"
+        is_disabled = has_enabled_col and (row.get("enabled") is False)
+        is_out = is_forced_out or is_disabled
         price = row.get("price")
         price = float(price) if pd.notna(price) else None
         wolt_items.append((name, _normalize_name_tokens(name), is_out, price))
