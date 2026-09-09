@@ -1157,68 +1157,21 @@ AI_MAX_PRODUCTS = 40          # כמה מוצרים תואמים לצרף להק
 AI_MAX_MSG_CHARS = 1500       # אורך הודעה מקסימלי מהמשתמש (הגנה)
 
 # ============================================================
-#  🔍 בדיקת "מה אזל מהמלאי" מול וולט — למנהלים בלבד, דרך הצ'אט
+#  🔍 בדיקת "מה אזל/חזר למלאי" מול וולט — למנהלים בלבד, admin.html
 # ============================================================
-# איך זה עובד: קוראים את דף החנות בוולט (HTML רגיל, וולט מציגים את שמות
-# המוצרים ישירות בעמוד, לא רק ב-JavaScript — כך שזה אפשרי בלי דפדפן
-# אוטומטי כבד). משווים בין שמות המוצרים שאצלנו מסומנים "במלאי" לבין מה
-# שמופיע כרגע בוולט. מוצר שלא נמצאה לו התאמה סבירה — "חשוד" כאזל שם.
-# ⚠️ זו השוואה מבוססת-שמות (heuristic), לא API רשמי של וולט — לא מובטחת
-# ב-100%, וכדאי לבדוק ידנית לפני שסומכים עליה לגמרי, בטח בהתחלה.
-WOLT_VENUE_URL = "https://wolt.com/he/isr/petah-tikva/venue/pinookim-givat-shmuel"
-_wolt_cache = {"names": None, "fetched_at": 0}
-WOLT_CACHE_TTL = 60 * 30  # 30 דקות — כדי לא להעמיס על וולט בכל שאלה
-
-
-def _fetch_wolt_product_names():
-    """שולף את שמות כל המוצרים המוצגים כרגע בכל תתי-הקטגוריות בוולט. משתמש ב-cache."""
-    now = time_module.time()
-    if _wolt_cache["names"] is not None and (now - _wolt_cache["fetched_at"]) < WOLT_CACHE_TTL:
-        return _wolt_cache["names"]
-
-    try:
-        import requests
-        from bs4 import BeautifulSoup
-    except Exception as e:
-        print(f"[Wolt] missing package: {e}")
-        return None
-
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; BakePartyBot/1.0)"}
-    names = set()
-    try:
-        resp = requests.get(WOLT_VENUE_URL, headers=headers, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # מוצאים את קישורי כל תתי-הקטגוריות בתפריט (menucategory-N)
-        category_urls = set()
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if "/items/menucategory-" in href:
-                category_urls.add(href if href.startswith("http") else "https://wolt.com" + href)
-        if not category_urls:
-            category_urls = {WOLT_VENUE_URL}
-
-        for cat_url in category_urls:
-            try:
-                r = requests.get(cat_url, headers=headers, timeout=15)
-                r.raise_for_status()
-                csoup = BeautifulSoup(r.text, "html.parser")
-                for h in csoup.find_all(["h3", "h4"]):
-                    txt = h.get_text(strip=True)
-                    if txt and len(txt) > 1:
-                        names.add(txt)
-            except Exception as e:
-                print(f"[Wolt] category fetch error ({cat_url}): {e}")
-    except Exception as e:
-        print(f"[Wolt] main fetch error: {e}")
-        return None  # כשל מלא — לא שומרים רשימה ריקה ב-cache בטעות
-
-    names_list = sorted(names)
-    _wolt_cache["names"] = names_list
-    _wolt_cache["fetched_at"] = now
-    return names_list
-
+# הגרסה הקודמת קראה את דף וולט החי (scraping) — התבררה כלא אמינה, כי וולט
+# טוענים חלק מהמוצרים רק תוך כדי גלילה (JavaScript), וקריאת HTML רגיל לא
+# תופסת את כל הקטלוג. גרם לדיווחי-שווא על מוצרים שבפועל כן היו במלאי.
+#
+# הגרסה הזו משתמשת במקור אמת אמיתי מוולט: **אותו קובץ אקסל** שכבר מורידים
+# מוולט ומשמש את import_data.py. בעמודה "inventory_mode" וולט עצמם מסמנים
+# forced_out_of_stock לכל מוצר שאזל אצלם — בלי צורך "לנחש" מקריאת אתר.
+#
+# ההשוואה דו-כיוונית:
+#   1. מוצר שאצלנו "במלאי" אבל בקובץ וולט מסומן forced_out_of_stock
+#      → כנראה אזל בוולט, כדאי לסמן גם אצלנו.
+#   2. מוצר שאצלנו "אזל" אבל בקובץ וולט הוא כן זמין
+#      → כנראה חזר למלאי, כדאי להחזיר גם אצלנו.
 
 def _normalize_name_tokens(name):
     """מנקה שם מוצר למילים משמעותיות להשוואה (מסיר מספרים/יחידות/פיסוק)."""
@@ -1228,48 +1181,97 @@ def _normalize_name_tokens(name):
     return {t for t in text.split() if len(t) >= 2}
 
 
-def _find_products_missing_from_wolt():
-    """
-    מחזיר רשימת שמות מוצרים אצלנו (שמסומנים "במלאי") שלא נמצאה להם התאמה
-    סבירה בוולט — "חשודים" כאזלו שם. מחזיר None אם השליפה מוולט נכשלה.
-    """
-    wolt_names = _fetch_wolt_product_names()
-    if wolt_names is None:
-        return None
+def _best_name_match(target_tokens, candidates_with_tokens):
+    """מוצא את ההתאמה הכי טובה (Jaccard) מתוך רשימת (name, tokens). מחזיר (name, similarity) או (None, 0)."""
+    best_name, best_sim = None, 0
+    for cand_name, cand_tokens in candidates_with_tokens:
+        if not cand_tokens or not target_tokens:
+            continue
+        sim = len(target_tokens & cand_tokens) / len(target_tokens | cand_tokens)
+        if sim > best_sim:
+            best_name, best_sim = cand_name, sim
+    return best_name, best_sim
 
-    wolt_token_sets = [_normalize_name_tokens(n) for n in wolt_names]
+
+def compare_stock_with_wolt_file(file_path):
+    """
+    משווה בין קובץ האקסל שהורד מוולט (גיליון 'offers', עמודות name +
+    inventory_mode) לבין המוצרים שלנו. מחזיר dict עם שתי רשימות:
+    - to_mark_out_of_stock: אצלנו "במלאי", בוולט forced_out_of_stock
+    - to_mark_back_in_stock: אצלנו "אזל", בוולט כן זמין
+    כל פריט: {"our_id", "our_name", "wolt_name", "similarity"}
+    """
+    import pandas as pd
+
+    df = pd.read_excel(file_path, sheet_name="offers")
+    wolt_items = []  # (name, tokens, is_out_of_stock)
+    for _, row in df.iterrows():
+        name = str(row.get("name", "")).strip()
+        if not name or name.lower() == "nan":
+            continue
+        is_out = str(row.get("inventory_mode", "")) == "forced_out_of_stock"
+        wolt_items.append((name, _normalize_name_tokens(name), is_out))
+
+    wolt_available = [(n, t) for n, t, out in wolt_items if not out]
+    wolt_out_of_stock = [(n, t) for n, t, out in wolt_items if out]
 
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT name FROM Products WHERE stock_quantity > 0 ORDER BY name;")
-    our_products = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT id, name, stock_quantity FROM Products ORDER BY name;")
+    our_products = cur.fetchall()
     cur.close(); conn.close()
 
-    missing = []
-    for prod_name in our_products:
+    SIM_THRESHOLD = 0.7
+    to_mark_out, to_mark_back = [], []
+
+    for prod_id, prod_name, stock in our_products:
         our_tokens = _normalize_name_tokens(prod_name)
         if not our_tokens:
             continue
-        # דמיון Jaccard (חיתוך חלקי איחוד) — מבחין נכון בין וריאציות של אותו
-        # מוצר (למשל "צבע מאכל אבקה כחול" מול "צבע מאכל אבקה ורוד"), בניגוד
-        # לחישוב יחס-פשוט שהיה "מתבלבל" בין צבעים/טעמים שונים של אותו מוצר.
-        best_similarity = 0
-        for wt in wolt_token_sets:
-            if not wt:
-                continue
-            sim = len(our_tokens & wt) / len(our_tokens | wt)
-            if sim > best_similarity:
-                best_similarity = sim
-        if best_similarity < 0.7:
-            missing.append(prod_name)
-    return missing
+
+        if (stock or 0) > 0:
+            # אצלנו במלאי — האם וולט מסמנים אותו כאזל?
+            match_name, sim = _best_name_match(our_tokens, wolt_out_of_stock)
+            if sim >= SIM_THRESHOLD:
+                # לוודא שאין התאמה טובה יותר ברשימת הזמינים (אם יש התנגשות שם)
+                avail_match, avail_sim = _best_name_match(our_tokens, wolt_available)
+                if avail_sim < sim:
+                    to_mark_out.append({
+                        "our_id": prod_id, "our_name": prod_name,
+                        "wolt_name": match_name, "similarity": round(sim, 2),
+                    })
+        else:
+            # אצלנו אזל — האם וולט מסמנים אותו כזמין?
+            match_name, sim = _best_name_match(our_tokens, wolt_available)
+            if sim >= SIM_THRESHOLD:
+                out_match, out_sim = _best_name_match(our_tokens, wolt_out_of_stock)
+                if out_sim < sim:
+                    to_mark_back.append({
+                        "our_id": prod_id, "our_name": prod_name,
+                        "wolt_name": match_name, "similarity": round(sim, 2),
+                    })
+
+    return {"to_mark_out_of_stock": to_mark_out, "to_mark_back_in_stock": to_mark_back}
 
 
-def _is_wolt_stock_check_request(text):
-    """זיהוי-מילות-מפתח פשוט (לא AI) לבקשת השוואת מלאי מול וולט — מהיר ואמין."""
-    t = text.strip().lower()
-    has_wolt = "וולט" in t or "wolt" in t
-    has_stock_word = any(k in t for k in ["אזל", "מלאי", "השווה", "השוואה", "מה חסר", "לבדוק מול", "בדוק מול"])
-    return has_wolt and has_stock_word
+@app.post("/api/admin/wolt-stock-check")
+async def admin_wolt_stock_check(file: UploadFile = File(...), sess: dict = Depends(require_admin)):
+    """
+    מקבל את קובץ האקסל שהורד מוולט (אותו קובץ ש-import_data.py משתמש בו)
+    ומחזיר השוואה דו-כיוונית מול המלאי שלנו. לא נוגע במסד הנתונים —
+    רק מחזיר הצעות; העדכון בפועל נעשה דרך admin.html בלחיצת כפתור נפרדת
+    (משתמש ב-endpoint הקיים של עדכון מוצר).
+    """
+    tmp_path = f"/tmp/wolt_check_{uuid.uuid4().hex}.xlsx"
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(await file.read())
+        result = compare_stock_with_wolt_file(tmp_path)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"שגיאה בקריאת הקובץ: {e}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 AI_SYSTEM_PROMPT = """את/ה העוזר/ת החכם/ה והחמוד/ה של "Bake & Party" (אפייה ומסיבות) —
@@ -1307,6 +1309,7 @@ AI_SYSTEM_PROMPT = """את/ה העוזר/ת החכם/ה והחמוד/ה של "Ba
 - הסתמך/י אך ורק על נתוני החנות שמצורפים בהמשך. אל תמציא/י מוצרים, מחירים או מלאי שלא מופיעים בנתונים.
 - אם מוצר לא מופיע בנתונים שקיבלת — אל תבטיח/י שיש אותו. אמור/י שאינך בטוח/ה, והצע/י ליצור קשר טלפוני/וואטסאפ או לבדוק בוולט (הפרטים בהקשר).
 - אם שואלים על "דפי סוכר" — ספר/י שהכלי לבדיקת גודל דף סוכר לפני הדפסה נמצא בפיתוח ויתווסף בקרוב 🙂
+- אם מנהל/ת שואל/ת על השוואת מלאי מול וולט — הפנה/י לכלי הייעודי בפאנל הניהול (admin.html), שם אפשר להעלות את קובץ האקסל של וולט ולקבל השוואה מדויקת. לא בצ'אט.
 - אל תמציא/י כתובות אתר. השתמש/י רק בקישורים שמופיעים בהקשר.
 - סיים/י כל תשובה במשפט קצר אחד שמזמין את הצעד הבא.
 
@@ -1546,28 +1549,6 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         "מצטער/ת, העוזר החכם עדיין לא מחובר במלואו. בינתיים אפשר ליצור איתנו קשר "
         "ישירות בטלפון או בוואטסאפ ונשמח לעזור! 🧁"
     )
-
-    # קיצור-דרך למנהלים בלבד: בדיקת מלאי מול וולט. מזוהה לפי מילות מפתח
-    # (לא דרך ה-AI) כדי שהתשובה תמיד תכיל את השמות המדויקים מהמסד שלנו —
-    # בלי סיכון שה-AI "ינסח מחדש" או יטעה בשם מוצר.
-    if is_admin and _is_wolt_stock_check_request(user_message):
-        missing = _find_products_missing_from_wolt()
-        if missing is None:
-            return {
-                "reply": "לא הצלחתי לגשת כרגע לעמוד וולט כדי להשוות מלאי. אפשר לנסות שוב בעוד כמה דקות.",
-                "ok": False, "reason": "wolt_fetch_error",
-            }
-        if not missing:
-            reply = "בדקתי מול וולט — לא מצאתי אף מוצר אצלנו שמסומן 'במלאי' וחסר שם. נראה שהכול מסונכרן! 🎉"
-        else:
-            listing = "\n".join(f"• {n}" for n in missing[:50])
-            extra = f"\n\n(מוצג רק 50 הראשונים מתוך {len(missing)})" if len(missing) > 50 else ""
-            reply = (
-                f"בדקתי מול וולט — נמצאו {len(missing)} מוצרים שמסומנים אצלנו כ'במלאי' אבל לא הצלחתי "
-                f"למצוא אותם שם (כנראה אזלו בוולט, או שהשם שונה מעט אצלנו):\n\n{listing}{extra}\n\n"
-                f"⚠️ זו השוואה אוטומטית מבוססת שמות, לא מקור רשמי מוולט — כדאי לוודא ידנית לפני שמעדכנים באתר."
-            )
-        return {"reply": reply, "ok": True}
 
     # בדיקת חסימה/מכסה יומית — לא חלה על מנהלים בכלל
     if not is_admin:

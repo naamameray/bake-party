@@ -80,6 +80,17 @@
         .faq-admin-actions { display: flex; gap: 6px; flex-wrap: wrap; }
         .faq-admin-actions button { font-size: 0.8em; padding: 5px 10px; width: auto; }
         .faq-admin-item textarea, .faq-admin-item input[type="text"] { margin-bottom: 6px; }
+
+        /* --- כלי השוואת מלאי מול וולט --- */
+        .wolt-check-group { margin-top: 16px; }
+        .wolt-check-group h3 { font-size: 1em; color: var(--pink-dark); margin-bottom: 8px; }
+        .wolt-check-item { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+            background: #fffafa; border: 1px solid var(--pink-light); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; flex-wrap: wrap; }
+        .wolt-check-item .wci-info { flex: 1; min-width: 200px; }
+        .wolt-check-item .wci-name { font-weight: 600; font-size: 0.92em; }
+        .wolt-check-item .wci-match { font-size: 0.8em; color: var(--muted); }
+        .wolt-check-item button { width: auto; font-size: 0.82em; padding: 6px 12px; }
+        .wolt-check-item.done { opacity: 0.5; }
         .prod-name { font-weight: 600; font-size: 0.92em; }
         .prod-warn { display: inline-block; margin-top: 3px; font-size: 0.78em; color: #d9534f; font-weight: bold; }
         .prod-cat-select { width: 100%; font-size: 0.85em; padding: 6px 8px; }
@@ -195,6 +206,21 @@
                     <p style="color:var(--muted); font-size:0.9em;">מחלק את כל המחירים ב-1.3 (הסרת תוספת וולט) ומעגל למעלה ל-0.10 הקרוב. <strong>שימי לב:</strong> פעולה זו משפיעה על כל המוצרים!</p>
                     <button class="btn" style="max-width:300px;" onclick="fixPrices()">תקני מחירים עכשיו</button>
                     <p id="price-fix-msg" style="margin-top:8px; font-weight:bold;"></p>
+                </div>
+
+                <!-- כלי השוואת מלאי מול וולט -->
+                <div class="card">
+                    <h2>🔍 השוואת מלאי מול וולט</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        העלי את קובץ האקסל שהורדת מוולט (אותו קובץ שמשמש את import_data.py) — נשווה בין מה שוולט
+                        מסמנים כאזל אצלם לבין מה שמסומן אצלנו, בשני הכיוונים: מוצרים שאזלו בוולט אבל אצלנו עדיין
+                        "במלאי", וגם מוצרים שחזרו למלאי בוולט אבל אצלנו עדיין מסומנים "אזל". <strong>שום דבר לא
+                        מתעדכן אוטומטית</strong> — תמיד יש כפתור בדיקה/אישור ידני לכל מוצר.
+                    </p>
+                    <input type="file" id="wolt-check-file" accept=".xlsx">
+                    <button class="btn" style="max-width:220px; margin-top:10px;" onclick="runWoltStockCheck()">בדיקה מול הקובץ</button>
+                    <p id="wolt-check-msg" style="margin-top:8px; font-weight:bold;"></p>
+                    <div id="wolt-check-results"></div>
                 </div>
 
                 <div class="card">
@@ -655,6 +681,81 @@
                 document.getElementById('price-fix-card').style.opacity = '0.5';
             } catch (e) {
                 msg.style.color = '#E05276'; msg.textContent = 'שגיאה: ' + e.message;
+            }
+        }
+
+        // --- כלי השוואת מלאי מול וולט ---
+        async function runWoltStockCheck() {
+            const fileInput = document.getElementById('wolt-check-file');
+            const msg = document.getElementById('wolt-check-msg');
+            const results = document.getElementById('wolt-check-results');
+            if (!fileInput.files.length) { msg.style.color = '#E05276'; msg.textContent = 'צריך לבחור קודם קובץ אקסל.'; return; }
+
+            msg.style.color = 'var(--muted)'; msg.textContent = 'קוראת ומשווה... זה יכול לקחת כמה שניות.';
+            results.innerHTML = '';
+            try {
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+                const res = await fetch(`${API}/api/admin/wolt-stock-check`, {
+                    method: 'POST', headers: { 'Authorization': 'Bearer ' + token() }, body: formData
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'שגיאה בקריאת הקובץ');
+
+                const outCount = data.to_mark_out_of_stock.length;
+                const backCount = data.to_mark_back_in_stock.length;
+                if (outCount === 0 && backCount === 0) {
+                    msg.style.color = '#3B9E6A';
+                    msg.textContent = '✓ הכול מסונכרן! לא נמצאו הבדלים בין וולט לאתר שלנו.';
+                    return;
+                }
+                msg.style.color = 'var(--muted)';
+                msg.textContent = `נמצאו ${outCount} מוצרים לסמן כאזל, ו-${backCount} מוצרים להחזיר למלאי.`;
+
+                let html = '';
+                if (outCount > 0) {
+                    html += `<div class="wolt-check-group"><h3>⬇️ אצלנו "במלאי", בוולט אזל — לסמן כאזל</h3>`;
+                    data.to_mark_out_of_stock.forEach(item => {
+                        html += woltCheckItemHtml(item, 0, 'סמן כאזל');
+                    });
+                    html += `</div>`;
+                }
+                if (backCount > 0) {
+                    html += `<div class="wolt-check-group"><h3>⬆️ אצלנו "אזל", בוולט זמין — להחזיר למלאי</h3>`;
+                    data.to_mark_back_in_stock.forEach(item => {
+                        html += woltCheckItemHtml(item, 100, 'החזר למלאי');
+                    });
+                    html += `</div>`;
+                }
+                results.innerHTML = html;
+            } catch (e) {
+                msg.style.color = '#E05276'; msg.textContent = 'שגיאה: ' + e.message;
+            }
+        }
+
+        function woltCheckItemHtml(item, newStock, btnLabel) {
+            return `
+                <div class="wolt-check-item" id="wci-${item.our_id}">
+                    <div class="wci-info">
+                        <div class="wci-name">${item.our_name}</div>
+                        <div class="wci-match">התאמה בוולט: "${item.wolt_name}" (${Math.round(item.similarity * 100)}% דמיון)</div>
+                    </div>
+                    <button class="btn" onclick="applyWoltStockChange(${item.our_id}, ${newStock}, this)">${btnLabel}</button>
+                </div>`;
+        }
+
+        async function applyWoltStockChange(productId, newStock, btn) {
+            btn.disabled = true; btn.textContent = 'מעדכן...';
+            try {
+                const res = await fetch(`${API}/api/admin/products/${productId}`, {
+                    method: 'PATCH', headers: authHeaders(),
+                    body: JSON.stringify({ stock_quantity: newStock })
+                });
+                if (!res.ok) throw new Error();
+                document.getElementById(`wci-${productId}`).classList.add('done');
+                btn.textContent = '✓ עודכן';
+            } catch {
+                btn.textContent = 'שגיאה'; btn.disabled = false;
             }
         }
 
