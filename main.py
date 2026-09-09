@@ -1234,7 +1234,7 @@ def compare_stock_with_wolt_file(file_path):
 
     has_enabled_col = "enabled" in df.columns
 
-    wolt_items = []  # (name, tokens, is_out_of_stock, price)
+    wolt_items = []  # (name, tokens, is_out_of_stock, price, image_url, weight_grams)
     for _, row in df.iterrows():
         name = str(row.get("name", "")).strip()
         if not name or name.lower() == "nan":
@@ -1244,10 +1244,15 @@ def compare_stock_with_wolt_file(file_path):
         is_out = is_forced_out or is_disabled
         price = row.get("price")
         price = float(price) if pd.notna(price) else None
-        wolt_items.append((name, _normalize_name_tokens(name), is_out, price))
+        # וולט לפעמים מחזירים כמה תמונות מופרדות בפסיק — לוקחים את הראשונה (כמו ב-import_data.py)
+        raw_images = row.get("images")
+        image_url = str(raw_images).split(",")[0].strip() if pd.notna(raw_images) else None
+        weight = row.get("weight_in_grams")
+        weight = int(weight) if pd.notna(weight) else None
+        wolt_items.append((name, _normalize_name_tokens(name), is_out, price, image_url, weight))
 
-    wolt_available = [(n, t) for n, t, out, p in wolt_items if not out]
-    wolt_out_of_stock = [(n, t) for n, t, out, p in wolt_items if out]
+    wolt_available = [(n, t) for n, t, out, p, im, w in wolt_items if not out]
+    wolt_out_of_stock = [(n, t) for n, t, out, p, im, w in wolt_items if out]
 
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT id, name, stock_quantity FROM Products ORDER BY name;")
@@ -1289,7 +1294,7 @@ def compare_stock_with_wolt_file(file_path):
     # מוצרים שקיימים בוולט אבל אין להם שום התאמה אצלנו בכלל (לא "אזל", ממש חסרים)
     our_candidates = list(zip([name for _, name, _ in our_products], our_tokens_all))
     new_products = []
-    for name, tokens, is_out, price in wolt_items:
+    for name, tokens, is_out, price, image_url, weight in wolt_items:
         if not tokens:
             continue
         _, best_sim = _best_name_match(tokens, our_candidates)
@@ -1298,6 +1303,8 @@ def compare_stock_with_wolt_file(file_path):
                 "wolt_name": name,
                 "price": price,
                 "available": not is_out,
+                "image_url": image_url,
+                "weight_grams": weight,
             })
 
     return {

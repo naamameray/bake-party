@@ -91,6 +91,10 @@
         .wolt-check-item .wci-match { font-size: 0.8em; color: var(--muted); }
         .wolt-check-item button { width: auto; font-size: 0.82em; padding: 6px 12px; }
         .wolt-check-item.done { opacity: 0.5; }
+        .wolt-new-form { background: var(--cream); border: 2px solid var(--pink-light); border-radius: 12px;
+            padding: 12px 14px; margin: -4px 0 12px; }
+        .wolt-new-form label { display: block; font-weight: 600; margin-top: 6px; }
+        .wolt-new-form input[type="checkbox"] { width: auto !important; }
         .prod-name { font-weight: 600; font-size: 0.92em; }
         .prod-warn { display: inline-block; margin-top: 3px; font-size: 0.78em; color: #d9534f; font-weight: bold; }
         .prod-cat-select { width: 100%; font-size: 0.85em; padding: 6px 8px; }
@@ -730,8 +734,16 @@
                 }
                 if (newCount > 0) {
                     html += `<div class="wolt-check-group"><h3>🆕 קיימים בוולט אבל לא אצלנו בכלל — כדאי לשקול להוסיף</h3>`;
-                    data.new_products_not_in_our_site.forEach(item => {
-                        html += woltNewProductHtml(item);
+                    window._woltNewProducts = data.new_products_not_in_our_site;
+                    // ודאי שרשימת הקטגוריות טעונה, כדי שהטופס יוכל להציג אותן בבחירה
+                    if (!allSubcatsFlat.length) {
+                        try {
+                            const subRes = await fetch(`${API}/api/admin/subcategories-flat`, { headers: authHeaders() });
+                            if (subRes.ok) allSubcatsFlat = await subRes.json();
+                        } catch { }
+                    }
+                    data.new_products_not_in_our_site.forEach((item, idx) => {
+                        html += woltNewProductHtml(item, idx);
                     });
                     html += `</div>`;
                 }
@@ -752,18 +764,87 @@
                 </div>`;
         }
 
-        function woltNewProductHtml(item) {
-            // אין כפתור פעולה — הוספת מוצר חדש דורשת קטגוריה/תמונה וכו', לכן רק מציגים
-            // כדי שתחליטי ותוסיפי ידנית דרך "מוצר חדש" אם רלוונטי.
-            const priceStr = item.price != null ? `₪${item.price.toFixed(2)}` : 'מחיר לא ידוע';
+        window._woltNewProducts = [];
+
+        function woltNewProductHtml(item, idx) {
+            const priceStr = item.price != null ? `₪${item.price.toFixed(2)}` : 'לא ידוע';
             const availStr = item.available ? 'זמין בוולט' : 'אזל גם בוולט';
+            const imgPreview = item.image_url
+                ? `<img src="${item.image_url}" style="width:44px; height:44px; object-fit:contain; border-radius:8px; border:1px solid var(--pink-light); margin-left:10px;">`
+                : '';
             return `
-                <div class="wolt-check-item">
+                <div class="wolt-check-item" id="wcn-${idx}">
+                    ${imgPreview}
                     <div class="wci-info">
                         <div class="wci-name">${item.wolt_name}</div>
                         <div class="wci-match">${priceStr} · ${availStr}</div>
                     </div>
+                    <button class="btn" onclick="toggleWoltNewForm(${idx})">✏️ עריכה ואישור</button>
+                </div>
+                <div class="wolt-new-form" id="wcn-form-${idx}" style="display:none;">
+                    <label style="font-size:0.85em;">שם המוצר</label>
+                    <input type="text" id="wcn-name-${idx}" value="${(item.wolt_name || '').replace(/"/g, '&quot;')}">
+                    <div style="display:flex; gap:10px;">
+                        <div style="flex:1;">
+                            <label style="font-size:0.85em;">מחיר (₪)</label>
+                            <input type="number" step="0.01" id="wcn-price-${idx}" value="${item.price != null ? item.price : ''}">
+                        </div>
+                        <div style="flex:1;">
+                            <label style="font-size:0.85em;">משקל (גרם, אופציונלי)</label>
+                            <input type="number" id="wcn-weight-${idx}" value="${item.weight_grams != null ? item.weight_grams : ''}">
+                        </div>
+                    </div>
+                    <label style="font-size:0.85em;">קטגוריה (חובה כדי שהמוצר יוצג באתר)</label>
+                    <select id="wcn-cat-${idx}" class="prod-cat-select">${catOptionsHtml('')}</select>
+                    <label style="font-size:0.85em;">
+                        <input type="checkbox" id="wcn-stock-${idx}" ${item.available ? 'checked' : ''} style="width:auto; display:inline-block;">
+                        במלאי אצלנו
+                    </label>
+                    <div style="display:flex; gap:10px; margin-top:8px;">
+                        <button class="btn" style="max-width:160px;" onclick="submitWoltNewProduct(${idx})">➕ הוסף מוצר</button>
+                        <button class="btn" style="max-width:100px; background:var(--muted);" onclick="toggleWoltNewForm(${idx})">ביטול</button>
+                    </div>
+                    <p id="wcn-msg-${idx}" style="font-weight:bold; margin-top:6px;"></p>
                 </div>`;
+        }
+
+        function toggleWoltNewForm(idx) {
+            const form = document.getElementById(`wcn-form-${idx}`);
+            form.style.display = form.style.display === 'none' ? 'block' : 'none';
+        }
+
+        async function submitWoltNewProduct(idx) {
+            const item = window._woltNewProducts[idx];
+            const name = document.getElementById(`wcn-name-${idx}`).value.trim();
+            const priceVal = document.getElementById(`wcn-price-${idx}`).value;
+            const weightVal = document.getElementById(`wcn-weight-${idx}`).value;
+            const catId = document.getElementById(`wcn-cat-${idx}`).value;
+            const inStock = document.getElementById(`wcn-stock-${idx}`).checked;
+            const msg = document.getElementById(`wcn-msg-${idx}`);
+
+            if (!name || !priceVal) { msg.style.color = '#E05276'; msg.textContent = 'צריך שם ומחיר.'; return; }
+            if (!catId) { msg.style.color = '#E05276'; msg.textContent = 'בלי קטגוריה המוצר לא יוצג באתר — בחרי קטגוריה.'; return; }
+
+            msg.style.color = 'var(--muted)'; msg.textContent = 'מוסיפה...';
+            try {
+                const res = await fetch(`${API}/api/admin/products`, {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({
+                        name: name,
+                        price: parseFloat(priceVal),
+                        category_ids: [parseInt(catId)],
+                        stock_quantity: inStock ? 100 : 0,
+                        weight_grams: weightVal ? parseInt(weightVal) : null,
+                        image_url: item.image_url || null,
+                    })
+                });
+                if (!res.ok) throw new Error();
+                document.getElementById(`wcn-${idx}`).classList.add('done');
+                document.getElementById(`wcn-form-${idx}`).style.display = 'none';
+                msg.style.color = '#3B9E6A'; msg.textContent = '✓ נוסף בהצלחה!';
+            } catch {
+                msg.style.color = '#E05276'; msg.textContent = 'שגיאה בהוספה, נסי שוב.';
+            }
         }
 
         async function applyWoltStockChange(productId, newStock, btn) {
