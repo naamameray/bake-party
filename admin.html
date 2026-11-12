@@ -1252,21 +1252,23 @@
                         </div>
                         <div class="faq-admin-badges">${badges}</div>
                     </div>
-                    <div class="faq-admin-actions">
+                    ${u.role === 'customer' ? '<div style="color:var(--muted); font-size:0.82em;">🔒 לקוח: לקריאה בלבד</div>' : `<div class="faq-admin-actions">
                         <select class="st-role-sel" style="width:auto; font-size:0.85em; padding:5px 8px;">
-                            ${['customer','employee','admin'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE_LABELS[r]}</option>`).join('')}
+                            ${['employee','admin'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE_LABELS[r]}</option>`).join('')}
                         </select>
                         <button class="btn ghost st-edit-btn" type="button">עריכת פרטים</button>
                         <button class="btn ghost st-reset-btn" type="button">איפוס סיסמה</button>
                         <button class="btn st-active-btn" type="button" style="background:${u.active ? '#d9534f' : 'var(--ok)'};">${u.active ? 'השבתה' : 'הפעלה'}</button>
-                    </div>`;
-                div.querySelector('.st-role-sel').onchange = e => updateUser(u.id, { role: e.target.value }, e.target);
-                div.querySelector('.st-edit-btn').onclick = () => editUserDetails(u);
-                div.querySelector('.st-reset-btn').onclick = () => resetUserPassword(u);
-                div.querySelector('.st-active-btn').onclick = () => {
-                    if (u.active && !confirm(`להשבית את ${u.name || u.email}? הוא ינותק מיד ולא יוכל להתחבר.`)) return;
-                    updateUser(u.id, { active: !u.active });
-                };
+                    </div>`}`;
+                if (u.role !== 'customer') {
+                    div.querySelector('.st-role-sel').onchange = e => updateUser(u.id, { role: e.target.value }, e.target);
+                    div.querySelector('.st-edit-btn').onclick = () => editUserDetails(u);
+                    div.querySelector('.st-reset-btn').onclick = () => resetUserPassword(u);
+                    div.querySelector('.st-active-btn').onclick = () => {
+                        if (u.active && !confirm(`להשבית את ${u.name || u.email}? הוא ינותק מיד ולא יוכל להתחבר.`)) return;
+                        updateUser(u.id, { active: !u.active });
+                    };
+                }
                 list.appendChild(div);
             });
         }

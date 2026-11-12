@@ -541,7 +541,7 @@ def admin_create_staff(body: StaffCreateBody, sess: dict = Depends(require_admin
     existing = cur.fetchone()
     if existing:
         cur.close(); conn.close()
-        raise HTTPException(status_code=409, detail="האימייל כבר קיים במערכת. אפשר לשנות את התפקיד שלו ברשימה (בחרי 'כולם' או 'לקוחות').")
+        raise HTTPException(status_code=409, detail="האימייל כבר קיים במערכת. לקוחות הם לקריאה בלבד, ולכן כדי להפוך אותו לעובד יש ליצור לו משתמש צוות עם אימייל אחר.")
     cur.execute(
         "INSERT INTO users (name, email, phone, password_hash, role, must_change_password) VALUES (%s,%s,%s,%s,%s,TRUE) RETURNING id;",
         (name, email, (body.phone or "").strip() or None, hash_password(temp), body.role),
@@ -566,6 +566,10 @@ def admin_update_user(user_id: int, body: UserUpdateBody, sess: dict = Depends(r
         cur.close(); conn.close()
         raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
     old_name, old_phone, old_role, old_active = cur_row
+    if old_role == "customer":
+        # לקוחות הם לקריאה בלבד: אי אפשר לשנות להם פרטים, תפקיד או סטטוס, כדי לא לפגוע בלקוח בטעות
+        cur.close(); conn.close()
+        raise HTTPException(status_code=403, detail="לקוחות הם לקריאה בלבד. אי אפשר לשנות את הפרטים שלהם.")
     new_role = body.role if body.role is not None else old_role
     new_active = body.active if body.active is not None else old_active
     if new_role not in ROLES:
@@ -601,6 +605,11 @@ def admin_update_user(user_id: int, body: UserUpdateBody, sess: dict = Depends(r
 def admin_reset_password(user_id: int, sess: dict = Depends(require_admin)):
     temp = _temp_password()
     conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT role FROM users WHERE id = %s;", (user_id,))
+    _r = cur.fetchone()
+    if _r and _r[0] == "customer":
+        cur.close(); conn.close()
+        raise HTTPException(status_code=403, detail="לקוחות הם לקריאה בלבד. אי אפשר לאפס להם סיסמה.")
     cur.execute("UPDATE users SET password_hash = %s, must_change_password = TRUE, failed_logins = 0, locked_until = NULL "
                 "WHERE id = %s RETURNING id;", (hash_password(temp), user_id))
     if not cur.fetchone():
