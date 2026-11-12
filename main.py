@@ -100,6 +100,23 @@ try:
         );
     """)
 
+    # --- יומן שיחות עם ה-AI: מה נשאל, מה נענה, ומי שאל (לצפייה במנהל) ---
+    # נשמרים גם ניסיונות שנכשלו (עם סיבת הכשל) — כך אפשר לאבחן תקלות בלי לחפור בלוגים.
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_chat_log (
+            id          SERIAL PRIMARY KEY,
+            user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            message     TEXT NOT NULL,
+            reply       TEXT,
+            topic       VARCHAR(50),
+            on_topic    BOOLEAN,
+            status      VARCHAR(30) NOT NULL DEFAULT 'ok',
+            error_text  TEXT,
+            created_at  TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_log_created ON ai_chat_log(created_at DESC);")
+
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (key VARCHAR(50) PRIMARY KEY, value TEXT);
     """)
@@ -1601,6 +1618,50 @@ def _ai_record_usage_and_ontopic(user_id, on_topic):
         cur.close(); conn.close()
 
 
+def _ai_log_chat(user_id, message, reply, topic=None, on_topic=None, status="ok", error_text=None):
+    """שומר שורה ביומן השיחות. לעולם לא שובר את הצ'אט אם השמירה נכשלת."""
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO ai_chat_log (user_id, message, reply, topic, on_topic, status, error_text) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s);",
+                (user_id, message, reply, topic or None, on_topic, status, (error_text or None) and str(error_text)[:800]),
+            )
+            conn.commit()
+        finally:
+            cur.close(); conn.close()
+    except Exception as e:
+        print(f"[AI] chat-log error: {e}")
+
+
+@app.get("/api/admin/ai-log")
+def admin_ai_log(limit: int = 200, only_failed: bool = False, sess: dict = Depends(require_admin)):
+    """השאלות האחרונות ששאלו את ה-AI (חדשות ראשונות), כולל שם/אימייל השואל וסטטוס."""
+    limit = max(1, min(limit, 500))
+    conn = get_conn(); cur = conn.cursor()
+    where = "WHERE l.status <> 'ok'" if only_failed else ""
+    cur.execute(f"""
+        SELECT l.id, l.created_at, u.name, u.email, l.message, l.reply, l.topic, l.on_topic, l.status, l.error_text
+        FROM ai_chat_log l LEFT JOIN users u ON u.id = l.user_id
+        {where}
+        ORDER BY l.id DESC LIMIT %s;
+    """, (limit,))
+    rows = cur.fetchall()
+    cur.execute("SELECT COUNT(*), COUNT(*) FILTER (WHERE status <> 'ok') FROM ai_chat_log;")
+    total, failed = cur.fetchone()
+    cur.close(); conn.close()
+    return {
+        "total": total, "failed": failed,
+        "items": [
+            {"id": r[0], "created_at": r[1].strftime("%d/%m/%Y %H:%M") if r[1] else "",
+             "user_name": r[2], "user_email": r[3], "message": r[4], "reply": r[5],
+             "topic": r[6], "on_topic": r[7], "status": r[8], "error_text": r[9]}
+            for r in rows
+        ],
+    }
+
+
 @app.post("/api/ai/chat")
 def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
     user_message = (body.message or "").strip()[:AI_MAX_MSG_CHARS]
@@ -1618,15 +1679,20 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
     if not is_admin:
         allowed, guard_msg = _ai_check_guard(sess["user_id"])
         if not allowed:
+            _ai_log_chat(sess["user_id"], user_message, guard_msg, status="guarded")
             return {"reply": guard_msg, "ok": False, "reason": "guarded"}
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
+        _ai_log_chat(sess["user_id"], user_message, fallback, status="no_api_key",
+                     error_text="ANTHROPIC_API_KEY לא מוגדר בשרת (Railway → Variables)")
         return {"reply": fallback, "ok": False, "reason": "no_api_key"}
 
     try:
         import anthropic
-    except Exception:
+    except Exception as e:
+        _ai_log_chat(sess["user_id"], user_message, fallback, status="package_missing",
+                     error_text=f"חבילת anthropic לא מותקנת: {e}")
         return {"reply": fallback, "ok": False, "reason": "package_missing"}
 
     context = _ai_build_context(user_message)
@@ -1672,11 +1738,13 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         if not reply:
             reply = fallback
         _track_faq_topic(topic)
+        _ai_log_chat(sess["user_id"], user_message, reply, topic=topic, on_topic=on_topic, status="ok")
         if not is_admin:
             _ai_record_usage_and_ontopic(sess["user_id"], on_topic)
         return {"reply": reply, "ok": True}
     except Exception as e:
         print(f"[AI] error: {e}")
+        _ai_log_chat(sess["user_id"], user_message, fallback, status="api_error", error_text=f"{type(e).__name__}: {e}")
         return {"reply": fallback, "ok": False, "reason": "api_error"}
 
 

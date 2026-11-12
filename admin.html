@@ -152,6 +152,7 @@
             <button class="tab-btn" type="button" id="tab-btn-products" onclick="switchTab('products')">🏷️ מוצרים</button>
             <button class="tab-btn" type="button" id="tab-btn-categories" onclick="switchTab('categories')">📁 ניהול קטגוריות</button>
             <button class="tab-btn" type="button" id="tab-btn-faq" onclick="switchTab('faq')">💬 שאלות ותשובות</button>
+            <button class="tab-btn" type="button" id="tab-btn-ailog" onclick="switchTab('ailog')">🤖 שיחות עם ה-AI</button>
         </div>
 
         <div class="container">
@@ -255,6 +256,24 @@
                     </p>
                     <button class="btn" style="margin-bottom: 15px;" onclick="addCategoryPrompt(null)">+ קטגוריה ראשית חדשה</button>
                     <div id="cat-tree-list">טוען קטגוריות...</div>
+                </div>
+            </div>
+
+            <div class="tab-page" id="tab-page-ailog">
+                <div class="card">
+                    <h2>שיחות עם ה-AI</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        כל מה שמשתמשים רשומים שאלו את העוזר החכם, והתשובה שקיבלו (החדשות למעלה).
+                        שורות באדום הן ניסיונות שנכשלו — בהן מופיעה הסיבה המדויקת (למשל מפתח חסר או בעיה בחשבון Anthropic).
+                    </p>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+                        <button class="btn" style="max-width:160px;" onclick="loadAiLogTab()">🔄 רענון</button>
+                        <label style="display:flex; gap:6px; align-items:center; margin:0; font-weight:normal;">
+                            <input type="checkbox" id="ailog-only-failed" onchange="loadAiLogTab()" style="width:auto; margin:0;"> רק כשלונות
+                        </label>
+                        <span id="ailog-summary" style="color:var(--muted); font-size:0.9em;"></span>
+                    </div>
+                    <div id="ailog-list">טוען...</div>
                 </div>
             </div>
 
@@ -446,15 +465,18 @@
             document.getElementById('tab-btn-products').classList.toggle('active', name === 'products');
             document.getElementById('tab-btn-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-btn-faq').classList.toggle('active', name === 'faq');
+            document.getElementById('tab-btn-ailog').classList.toggle('active', name === 'ailog');
             
             document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
             document.getElementById('tab-page-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-page-faq').classList.toggle('active', name === 'faq');
+            document.getElementById('tab-page-ailog').classList.toggle('active', name === 'ailog');
             
             if (name === 'products' && !productsLoaded) loadProductsTab();
             if (name === 'categories' && !categoriesLoaded) loadCategoriesTab();
             if (name === 'faq') loadFaqTab();
+            if (name === 'ailog') loadAiLogTab();
         };
 
         // --- טאב ניהול קטגוריות ---
@@ -958,6 +980,46 @@
             const origHandler = document.querySelector('[data-tab="products"]').onclick;
         }
         setTimeout(() => { if (document.getElementById('deal-list')) loadDealProducts(); }, 2000);
+
+        // ===================== טאב שיחות עם ה-AI =====================
+        function escHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+        async function loadAiLogTab() {
+            const wrap = document.getElementById('ailog-list');
+            const sum = document.getElementById('ailog-summary');
+            const onlyFailed = document.getElementById('ailog-only-failed').checked;
+            wrap.innerHTML = 'טוען...';
+            try {
+                const res = await fetch(`${API}/api/admin/ai-log?limit=200&only_failed=${onlyFailed}`, { headers: authHeaders() });
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                sum.textContent = `סה"כ ${data.total} הודעות · ${data.failed} כשלונות`;
+                if (!data.items.length) { wrap.innerHTML = '<p style="color:var(--muted);">אין עדיין הודעות להצגה.</p>'; return; }
+                wrap.innerHTML = data.items.map(it => {
+                    const bad = it.status !== 'ok';
+                    const who = escHtml(it.user_name || '') + (it.user_email ? ` (${escHtml(it.user_email)})` : '') || 'משתמש לא ידוע';
+                    const tags = [
+                        it.topic ? `<span class="faq-badge hits">${escHtml(it.topic)}</span>` : '',
+                        it.on_topic === false ? `<span class="faq-badge pending">לא קשור לחנות</span>` : '',
+                        bad ? `<span class="faq-badge" style="background:#fde8e8;color:#b00020;">${escHtml(it.status)}</span>` : ''
+                    ].join(' ');
+                    return `<div class="faq-admin-item" style="${bad ? 'border-color:#e57373;background:#fff5f5;' : ''}">
+                        <div class="faq-admin-head">
+                            <div style="font-size:0.85em;color:var(--muted);">${escHtml(it.created_at)} · ${who}</div>
+                            <div class="faq-admin-badges">${tags}</div>
+                        </div>
+                        <div style="font-weight:bold;margin-bottom:6px;white-space:pre-wrap;">❓ ${escHtml(it.message)}</div>
+                        ${bad && it.error_text ? `<div style="color:#b00020;font-size:0.85em;margin-bottom:6px;direction:ltr;text-align:left;white-space:pre-wrap;">${escHtml(it.error_text)}</div>` : ''}
+                        <details><summary style="cursor:pointer;color:var(--pink-dark);font-size:0.85em;">הצג תשובה</summary>
+                            <div style="margin-top:6px;white-space:pre-wrap;font-size:0.9em;">${escHtml(it.reply || '')}</div>
+                        </details>
+                    </div>`;
+                }).join('');
+            } catch {
+                wrap.innerHTML = '<p style="color:var(--muted);">שגיאה בטעינת יומן השיחות.</p>';
+            }
+        }
 
         // ===================== טאב שאלות ותשובות (FAQ) =====================
         async function loadFaqTab() {
