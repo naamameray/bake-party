@@ -223,6 +223,34 @@
 
             <div class="tab-page" id="tab-page-products">
 
+                <!-- ייבוא מוצרים מוולט -->
+                <div class="card">
+                    <h2>📥 ייבוא מוצרים מאקסל של וולט</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        מעלים את קובץ ה-xlsx שהורדת מוולט. קודם רואים <strong>תצוגה מקדימה</strong> (שום דבר לא משתנה), ורק אחרי אישור המוצרים נכנסים לאתר.
+                        <strong>לא מוחקים ולא משנים</strong> שום מוצר שכבר קיים (מחיר, תמונה, קטגוריה, מבצע), מוסיפים רק חדשים וקטגוריות חסרות.
+                        מוצר שמופיע בכמה קטגוריות נכנס פעם אחת עם כל הקטגוריות שלו. קטגוריות ההדמיה של וולט ("חדש בחנות", "מוצרים מובילים") לא מיובאות.
+                    </p>
+                    <div class="special-form">
+                        <div><label>קובץ אקסל</label><input type="file" id="wi-file" accept=".xlsx"></div>
+                        <div><label>חישוב מחיר</label>
+                            <select id="wi-divide">
+                                <option value="1">מחיר וולט ÷ 1.3 (הסרת תוספת 30%)</option>
+                                <option value="0">אותו מחיר כמו בוולט</option>
+                            </select></div>
+                        <div><label>עיגול</label>
+                            <select id="wi-round">
+                                <option value="nine">למספר שנגמר ב-.9 (10.52 ← 10.9)</option>
+                                <option value="tenth">ל-10 אגורות כלפי מעלה</option>
+                                <option value="none">בלי עיגול</option>
+                            </select></div>
+                    </div>
+                    <label style="font-weight:400; margin:8px 0;"><input type="checkbox" id="wi-update" style="width:auto;"> לעדכן גם מחיר של מוצרים שכבר קיימים (לפי שם). לא מומלץ אם תיקנת מחירים ידנית.</label>
+                    <button class="btn" type="button" onclick="wiRun('preview')">תצוגה מקדימה</button>
+                    <button class="btn" type="button" id="wi-apply" style="display:none; background:var(--ok);" onclick="wiRun('apply')">אישור וייבוא לאתר</button>
+                    <div id="wi-out" style="margin-top:12px;"></div>
+                </div>
+
                 <!-- כלי השוואת מלאי מול וולט -->
                 <div class="card">
                     <h2>🔍 השוואת מלאי מול וולט</h2>
@@ -1133,6 +1161,31 @@
         setTimeout(() => { if (document.getElementById('deal-list')) loadDealProducts(); }, 2000);
 
         // ===================== טאב שיחות עם ה-AI =====================
+        // ===================== ייבוא מוצרים מוולט =====================
+        async function wiRun(mode) {
+            const f = document.getElementById('wi-file').files[0];
+            const out = document.getElementById('wi-out');
+            if (!f) { out.textContent = 'בחרי קודם קובץ אקסל.'; return; }
+            if (mode === 'apply' && !confirm('לייבא את המוצרים לאתר? הפעולה מוסיפה מוצרים וקטגוריות חדשים ולא מוחקת כלום.')) return;
+            const q = new URLSearchParams({ mode, divide: document.getElementById('wi-divide').value === '1', rounding: document.getElementById('wi-round').value, update_prices: document.getElementById('wi-update').checked });
+            const fd = new FormData(); fd.append('file', f);
+            out.textContent = mode === 'apply' ? 'מייבאת... זה יכול לקחת כדקה.' : 'בודקת את הקובץ...';
+            document.getElementById('wi-apply').style.display = 'none';
+            try {
+                const res = await fetch(`${API}/api/admin/import-wolt?${q}`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token() }, body: fd });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                const rows = [['מוצרים בקובץ (אחרי איחוד כפילויות)', d.products_in_file], ['מוצרים חדשים שייכנסו', d.added], ['כבר קיימים באתר (לא ייגעו)', d.skipped_existing],
+                    ['קטגוריות חדשות', d.categories_created], ['קטגוריות שכבר קיימות', d.categories_matched], ['מוצרים בכמה קטגוריות', d.multi_category], ['חדשים בלי קטגוריה (יופיעו בלשונית "ללא קטגוריה")', d.uncategorized]];
+                if (d.prices_updated) rows.push(['מחירים שעודכנו', d.prices_updated]);
+                out.innerHTML = `<div style="font-weight:700; color:${mode === 'apply' ? 'var(--ok)' : 'var(--pink-dark)'}; margin-bottom:6px;">${mode === 'apply' ? '✓ הייבוא הסתיים' : 'תצוגה מקדימה (עדיין לא נשמר)'}</div>` +
+                    rows.map(r => `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #f6e3e8; padding:5px 0;"><span>${r[0]}</span><strong>${r[1]}</strong></div>`).join('') +
+                    (d.samples && d.samples.length ? `<div style="margin-top:10px; font-size:0.85em; color:var(--muted);">דוגמאות למחיר:</div>` + d.samples.slice(0, 8).map(x => `<div style="font-size:0.85em; display:flex; justify-content:space-between;"><span>${escHtml(x.name)}</span><span style="direction:ltr;">₪${x.wolt_price} ← <strong>₪${x.price}</strong></span></div>`).join('') : '');
+                if (mode === 'preview' && d.added > 0) document.getElementById('wi-apply').style.display = 'inline-block';
+                if (mode === 'apply') { productsLoaded = false; categoriesLoaded = false; }
+            } catch (e) { out.innerHTML = `<span style="color:#d9534f;">${escHtml(e.message)}</span>`; }
+        }
+
         // ===================== שעות ושכר =====================
         let payUserId = null;
         const fmtMinA = m => Math.floor(m/60) + ':' + String(m%60).padStart(2,'0');

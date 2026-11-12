@@ -1618,6 +1618,194 @@ def get_products_on_sale():
     data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
     return data
 
+# --- ייבוא מוצרים מאקסל של וולט (תצוגה מקדימה ואז אישור) ---
+# לא מוחק כלום: מוסיף מוצרים וקטגוריות חדשים בלבד. מוצר שכבר קיים (לפי שם) נשאר כמו שהוא.
+_WOLT_PSEUDO_CATS = {"חדש בחנות", "חדש_בחנות", "מוצרים מובילים", "מוצרים_מובילים",
+                     "חדש בחנות ומוצרים מובילים", "חדש_בחנות_ומוצרים_מובילים"}
+
+def _wolt_price(raw, divide: bool, rounding: str):
+    import math
+    v = float(raw)
+    if divide:
+        v = v / 1.3
+    v = round(v, 2)
+    if rounding == "nine":      # ה-x.9 הקרוב כלפי מעלה (10.52 -> 10.9)
+        v = max(0, math.ceil(round(v - 0.9, 2))) + 0.9
+    elif rounding == "tenth":   # עד 10 אגורות כלפי מעלה
+        v = math.ceil(round(v * 10, 6)) / 10
+    return round(v, 2)
+
+def _norm_name(n):
+    return " ".join(str(n).split()).strip().lower()
+
+@app.post("/api/admin/import-wolt")
+async def admin_import_wolt(
+    file: UploadFile = File(...),
+    mode: str = "preview",
+    divide: bool = True,
+    rounding: str = "nine",
+    update_prices: bool = False,
+    sess: dict = Depends(require_admin),
+):
+    import pandas as pd, io
+    if mode not in ("preview", "apply") or rounding not in ("nine", "tenth", "none"):
+        raise HTTPException(status_code=400, detail="פרמטר לא תקין")
+    raw = await file.read()
+    if len(raw) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="הקובץ גדול מדי")
+    try:
+        df_cat = pd.read_excel(io.BytesIO(raw), sheet_name="categories")
+        df_off = pd.read_excel(io.BytesIO(raw), sheet_name="offers")
+        for col in ("name", "subcategories"):
+            assert col in df_cat.columns
+        for col in ("name", "price", "category_id"):
+            assert col in df_off.columns
+    except Exception:
+        raise HTTPException(status_code=400, detail="זה לא נראה כמו קובץ הייצוא של וולט (חסרים הגיליונות categories ו-offers).")
+
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        # ---------- קטגוריות ----------
+        # בקובץ חדש יותר של וולט אין עמודת id בגיליון הקטגוריות. לכן מזהים לפי שם:
+        # שם קטגוריה לכל id נלקח מהגיליון (אם יש id) או מעמודת category_id של המוצרים ("שם::id").
+        sheet_names = [str(n).strip() for n in df_cat["name"] if pd.notna(n)]
+        id_to_name = {}
+        if "id" in df_cat.columns:
+            for _, r in df_cat.iterrows():
+                if pd.notna(r["id"]):
+                    id_to_name[str(r["id"]).strip()] = str(r["name"]).strip()
+        for v in df_off["category_id"].dropna():
+            for part in str(v).split(","):
+                nm, _, wid = part.strip().rpartition("::")
+                wid = wid.strip()
+                if wid and wid not in id_to_name:
+                    nm = nm.strip().replace("_", " ")
+                    id_to_name[wid] = nm
+        parent_of, order_in = {}, {}
+        for _, r in df_cat.iterrows():
+            if pd.notna(r["subcategories"]):
+                for i, sub in enumerate(str(r["subcategories"]).split(",")):
+                    child = id_to_name.get(sub.strip())
+                    if child and child != str(r["name"]).strip():
+                        parent_of[child] = str(r["name"]).strip(); order_in[child] = i
+        pseudo_names = {n for n in set(sheet_names) | set(id_to_name.values()) if n.replace("_", " ") in {x.replace("_", " ") for x in _WOLT_PSEUDO_CATS}}
+        node_names = [n for n in dict.fromkeys(sheet_names + list(id_to_name.values())) if n not in pseudo_names]
+        wid_by_name = {}
+        for wid, nm in id_to_name.items():
+            wid_by_name.setdefault(nm, wid)
+
+        name_to_db, cats_created, cats_matched = {}, 0, 0
+        remaining = list(node_names)
+        guard = 0
+        while remaining and guard < 20:
+            guard += 1
+            still = []
+            for nm in remaining:
+                pn = parent_of.get(nm)
+                if pn in pseudo_names:
+                    pn = None
+                if pn is not None and pn not in name_to_db:
+                    if pn in node_names:
+                        still.append(nm); continue
+                    pn = None
+                parent_db = name_to_db.get(pn) if pn else None
+                wid = wid_by_name.get(nm)
+                row = None
+                if wid:
+                    cur.execute("SELECT id FROM Categories WHERE wolt_id = %s;", (wid,))
+                    row = cur.fetchone()
+                if not row:
+                    cur.execute("SELECT id, wolt_id FROM Categories WHERE lower(trim(name)) = lower(%s) "
+                                "AND parent_id IS NOT DISTINCT FROM %s LIMIT 1;", (nm, parent_db))
+                    row = cur.fetchone()
+                    if row and row[1] is None and wid:
+                        cur.execute("UPDATE Categories SET wolt_id = %s WHERE id = %s AND NOT EXISTS (SELECT 1 FROM Categories WHERE wolt_id = %s);", (wid, row[0], wid))
+                if row:
+                    name_to_db[nm] = row[0]; cats_matched += 1
+                else:
+                    cur.execute("INSERT INTO Categories (wolt_id, name, parent_id, sort_order) VALUES (%s,%s,%s,%s) RETURNING id;",
+                                (wid, nm, parent_db, order_in.get(nm, 999)))
+                    name_to_db[nm] = cur.fetchone()[0]; cats_created += 1
+            remaining = still
+
+        # ---------- מוצרים: איחוד כפילויות (אותו שם ואותו מחיר) ----------
+        merged = {}
+        for _, r in df_off.iterrows():
+            if pd.isna(r["name"]) or pd.isna(r["price"]):
+                continue
+            nm = " ".join(str(r["name"]).split())
+            key = (_norm_name(nm), round(float(r["price"]), 2))
+            ids = []
+            for c in ([] if pd.isna(r["category_id"]) else str(r["category_id"]).split(",")):
+                wid = c.strip().split("::")[-1].strip()
+                cname = id_to_name.get(wid)
+                if cname and cname in name_to_db and name_to_db[cname] not in ids:
+                    ids.append(name_to_db[cname])
+            m = merged.get(key)
+            if not m:
+                def num(col):
+                    return int(r[col]) if col in r.index and pd.notna(r[col]) else None
+                img = str(r["images"]).split(",")[0].strip() if "images" in r.index and pd.notna(r["images"]) else None
+                merged[key] = {
+                    "name": nm, "wolt_price": float(r["price"]), "cats": ids,
+                    "stock": 0 if str(r.get("inventory_mode")) == "forced_out_of_stock" else 100,
+                    "weight": num("weight_in_grams"), "units": num("number_of_units"),
+                    "image": img or None,
+                    "notes": str(r["description"]) if "description" in r.index and pd.notna(r["description"]) else None,
+                }
+            else:
+                for c in ids:
+                    if c not in m["cats"]:
+                        m["cats"].append(c)
+
+        cur.execute("SELECT id, name FROM Products;")
+        existing = {}
+        for pid, pn in cur.fetchall():
+            existing.setdefault(_norm_name(pn), pid)
+
+        added = skipped = updated = uncategorized = multi = 0
+        samples = []
+        for (nk, _), m in merged.items():
+            price = _wolt_price(m["wolt_price"], divide, rounding)
+            if nk in existing:   # existing = מה שהיה באתר לפני הייבוא
+                skipped += 1
+                if update_prices:
+                    cur.execute("UPDATE Products SET price = %s WHERE id = %s;", (price, existing[nk])); updated += 1
+                continue
+            primary = m["cats"][0] if m["cats"] else None
+            cur.execute(
+                "INSERT INTO Products (name, category_id, price, stock_quantity, weight_grams, units_per_package, image_url, notes) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id;",
+                (m["name"], primary, price, m["stock"], m["weight"], m["units"], m["image"], m["notes"]))
+            new_id = cur.fetchone()[0]
+            for cid in m["cats"]:
+                cur.execute("INSERT INTO product_categories (product_id, category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING;", (new_id, cid))
+            added += 1
+            uncategorized += 0 if m["cats"] else 1
+            multi += 1 if len(m["cats"]) > 1 else 0
+            if len(samples) < 12:
+                samples.append({"name": m["name"], "wolt_price": m["wolt_price"], "price": price, "categories": len(m["cats"])})
+
+        if mode == "apply":
+            conn.commit()
+        else:
+            conn.rollback()
+    except HTTPException:
+        conn.rollback(); raise
+    except Exception as e:
+        conn.rollback()
+        print(f"[IMPORT-WOLT] failed: {e}")
+        raise HTTPException(status_code=500, detail="הייבוא נכשל ולא שונה כלום באתר.")
+    finally:
+        cur.close(); conn.close()
+    result = {"mode": mode, "products_in_file": len(merged), "added": added, "skipped_existing": skipped,
+              "prices_updated": updated, "categories_created": cats_created, "categories_matched": cats_matched,
+              "uncategorized": uncategorized, "multi_category": multi, "samples": samples}
+    if mode == "apply":
+        _audit(sess, "wolt_import", "products", None, {k: v for k, v in result.items() if k != "samples"})
+    return result
+
+
 # --- שיוך מהיר של מבצע מוכן ---
 class QuickDealBody(BaseModel):
     product_ids: List[int]
