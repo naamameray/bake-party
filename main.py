@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
+import json
 from zoneinfo import ZoneInfo
 
 ISRAEL_TZ = ZoneInfo('Asia/Jerusalem')
@@ -154,6 +155,21 @@ try:
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_shifts_user_in ON shifts(user_id, clock_in DESC);")
     # עובד אחד לא יכול להיות עם שתי משמרות פתוחות במקביל (מוגן גם ברמת המסד)
     init_cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uniq_open_shift_per_user ON shifts(user_id) WHERE clock_out IS NULL;")
+
+    # --- התראות (Web Push). שולחים ללקוחות רק אם notify_consent = TRUE (אישור מפורש מהלקוח) ---
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_consent BOOLEAN NOT NULL DEFAULT FALSE;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_consent_at TIMESTAMPTZ;")
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id         SERIAL PRIMARY KEY,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            endpoint   TEXT NOT NULL UNIQUE,
+            p256dh     TEXT NOT NULL,
+            auth       TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);")
 
     # --- הגנה על צ'אט ה-AI: חסימה זמנית על הודעות לא-קשורות ברצף + מגבלת שימוש יומית ---
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_offtopic_streak INTEGER NOT NULL DEFAULT 0;")
@@ -1618,6 +1634,180 @@ def get_products_on_sale():
     data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
     return data
 
+# ===================== התראות (Web Push) =====================
+# עקרונות:
+#  - לקוח מקבל התראה רק אם לחץ "אשר התראות" (notify_consent) וגם נתן הרשאה בדפדפן. בלי זה אף פעם לא נשלח כלום.
+#  - אחרי ביטול: המנוי נמחק והאישור מתאפס מיד.
+#  - הודעה אחת מרוכזת על מוצרים חדשים (לא הודעה לכל מוצר), לכל היותר אחת ל-12 שעות, רק בין 09:00 ל-20:00 וגם לא בשבת.
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "https://www.bakeparty.co.il")
+PUSH_MIN_INTERVAL_HOURS = 12
+
+def _push_configured():
+    return bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
+
+def _send_push_rows(rows, title, body, url="/"):
+    """rows: [(sub_id, endpoint, p256dh, auth)]. שולח, ומוחק מנויים שכבר לא תקפים. מחזיר כמה נשלחו."""
+    if not _push_configured() or not rows:
+        return 0
+    from pywebpush import webpush, WebPushException
+    payload = json.dumps({"title": title, "body": body, "url": url}, ensure_ascii=False)
+    sent, dead = 0, []
+    for sub_id, endpoint, p256dh, auth in rows:
+        try:
+            webpush(subscription_info={"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}},
+                    data=payload, vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims={"sub": VAPID_SUBJECT}, ttl=60 * 60 * 24)
+            sent += 1
+        except WebPushException as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (404, 410):
+                dead.append(sub_id)
+            else:
+                print(f"[PUSH] failed ({code}): {e}")
+        except Exception as e:
+            print(f"[PUSH] error: {e}")
+    if dead:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("DELETE FROM push_subscriptions WHERE id = ANY(%s);", (dead,))
+        conn.commit(); cur.close(); conn.close()
+    return sent
+
+def push_to_consenting_customers(title, body, url="/"):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
+                   JOIN users u ON u.id = ps.user_id
+                   WHERE u.notify_consent = TRUE AND u.active = TRUE;""")
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return _send_push_rows(rows, title, body, url)
+
+def push_to_staff(title, body, url="/staff.html"):
+    """לצוות (עובדים ומנהלים פעילים שהפעילו התראות במכשיר). ישמש להזמנות חדשות."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
+                   JOIN users u ON u.id = ps.user_id
+                   WHERE u.role IN ('employee', 'admin') AND u.active = TRUE;""")
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return _send_push_rows(rows, title, body, url)
+
+def _setting_get(cur, key):
+    cur.execute("SELECT value FROM settings WHERE key = %s;", (key,)); r = cur.fetchone()
+    return r[0] if r else None
+
+def _setting_set(cur, key, val):
+    cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;", (key, val))
+
+def run_new_products_digest(now=None):
+    """בודק אם יש מוצרים חדשים שעוד לא הוכרזו, ואם כן שולח הודעה אחת מרוכזת. מחזיר מילון תוצאה (לבדיקות)."""
+    now = now or datetime.now(ISRAEL_TZ)
+    if not _push_configured():
+        return {"skipped": "not_configured"}
+    if not (9 <= now.hour < 20) or now.weekday() == 5:      # weekday 5 = שבת
+        return {"skipped": "quiet_hours"}
+    conn = get_conn(); cur = conn.cursor()
+    cursor_s = _setting_get(cur, "push_new_cursor"); last_s = _setting_get(cur, "push_new_last_sent")
+    if cursor_s is None:                                    # הפעלה ראשונה: לא מכריזים על מה שכבר קיים
+        cur.execute("SELECT NOW()::timestamp;")
+        _setting_set(cur, "push_new_cursor", cur.fetchone()[0].isoformat())
+        conn.commit(); cur.close(); conn.close()
+        return {"skipped": "initialized"}
+    if last_s and (datetime.now(timezone.utc) - datetime.fromisoformat(last_s)).total_seconds() < PUSH_MIN_INTERVAL_HOURS * 3600:
+        cur.close(); conn.close(); return {"skipped": "too_soon"}
+    # מוצרים חדשים וזמינים. השהיה של 30 דקות כדי שעבודת הוספה ארוכה תיספר כהודעה אחת
+    cur.execute("""SELECT COUNT(*), MAX(created_at) FROM Products
+                   WHERE created_at IS NOT NULL AND stock_quantity > 0
+                     AND created_at > %s::timestamp
+                     AND created_at <= NOW()::timestamp - INTERVAL '30 minutes';""", (cursor_s,))
+    count, newest = cur.fetchone()
+    if not count:
+        cur.close(); conn.close(); return {"skipped": "nothing_new"}
+    conn.close()
+    title = "Bake & Party 🎉"
+    body = ("עלה מוצר חדש בחנות! כדאי להציץ ב\"חדש בחנות\"" if count == 1
+            else "איזה כיף, עלו מוצרים חדשים! כדאי להציץ ב\"חדש בחנות\"")
+    sent = push_to_consenting_customers(title, body, "/#new-section")
+    conn = get_conn(); cur = conn.cursor()
+    _setting_set(cur, "push_new_cursor", newest.isoformat())
+    _setting_set(cur, "push_new_last_sent", datetime.now(timezone.utc).isoformat())
+    conn.commit(); cur.close(); conn.close()
+    return {"sent": sent, "new_products": count}
+
+async def _digest_loop():
+    import asyncio
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, run_new_products_digest)
+        except Exception as e:
+            print(f"[PUSH] digest error: {e}")
+        await asyncio.sleep(600)
+
+@app.on_event("startup")
+async def _start_background_jobs():
+    import asyncio
+    asyncio.create_task(_digest_loop())
+
+class PushSubBody(BaseModel):
+    endpoint: str
+    keys: dict
+
+@app.get("/api/notifications/status")
+def notifications_status(sess: dict = Depends(require_auth)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT notify_consent FROM users WHERE id = %s;", (sess["user_id"],))
+    consent = bool(cur.fetchone()[0])
+    cur.execute("SELECT COUNT(*) FROM push_subscriptions WHERE user_id = %s;", (sess["user_id"],))
+    n = cur.fetchone()[0]; cur.close(); conn.close()
+    return {"configured": _push_configured(), "public_key": VAPID_PUBLIC_KEY, "consent": consent, "devices": n}
+
+@app.post("/api/notifications/subscribe")
+def notifications_subscribe(body: PushSubBody, sess: dict = Depends(require_auth)):
+    p256dh, auth = body.keys.get("p256dh"), body.keys.get("auth")
+    if not (body.endpoint.startswith("https://") and p256dh and auth):
+        raise HTTPException(status_code=400, detail="נתוני מנוי לא תקינים")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (%s,%s,%s,%s)
+                   ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth;""",
+                (sess["user_id"], body.endpoint, p256dh, auth))
+    cur.execute("UPDATE users SET notify_consent = TRUE, notify_consent_at = NOW() WHERE id = %s AND notify_consent = FALSE;", (sess["user_id"],))
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True}
+
+@app.post("/api/notifications/unsubscribe")
+def notifications_unsubscribe(sess: dict = Depends(require_auth)):
+    """ביטול מלא: מוחק את כל המכשירים של המשתמש ומאפס את האישור."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM push_subscriptions WHERE user_id = %s;", (sess["user_id"],))
+    cur.execute("UPDATE users SET notify_consent = FALSE WHERE id = %s;", (sess["user_id"],))
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True}
+
+@app.get("/api/admin/push-stats")
+def admin_push_stats(sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users WHERE notify_consent = TRUE;"); consenting = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM push_subscriptions;"); devices = cur.fetchone()[0]
+    last = _setting_get(cur, "push_new_last_sent"); cur.close(); conn.close()
+    return {"configured": _push_configured(), "consenting_users": consenting, "devices": devices, "last_new_products_push": last}
+
+# --- קבצי PWA: אפליקציה מותקנת + התראות ---
+@app.get("/sw.js")
+def serve_sw():
+    return FileResponse(os.path.join(STATIC_DIR, "sw.js"), media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+@app.get("/manifest.webmanifest")
+def serve_manifest():
+    return FileResponse(os.path.join(STATIC_DIR, "manifest.webmanifest"), media_type="application/manifest+json")
+
+@app.get("/icon-192.png")
+def serve_icon192():
+    return FileResponse(os.path.join(STATIC_DIR, "icon-192.png"), media_type="image/png")
+
+@app.get("/icon-512.png")
+def serve_icon512():
+    return FileResponse(os.path.join(STATIC_DIR, "icon-512.png"), media_type="image/png")
+
 # --- ייבוא מוצרים מאקסל של וולט (תצוגה מקדימה ואז אישור) ---
 # לא מוחק כלום: מוסיף מוצרים וקטגוריות חדשים בלבד. מוצר שכבר קיים (לפי שם) נשאר כמו שהוא.
 _WOLT_PSEUDO_CATS = {"חדש בחנות", "חדש_בחנות", "מוצרים מובילים", "מוצרים_מובילים",
@@ -1645,6 +1835,7 @@ async def admin_import_wolt(
     divide: bool = True,
     rounding: str = "nine",
     update_prices: bool = False,
+    as_new: bool = False,
     sess: dict = Depends(require_admin),
 ):
     import pandas as pd, io
@@ -1774,9 +1965,10 @@ async def admin_import_wolt(
                 continue
             primary = m["cats"][0] if m["cats"] else None
             cur.execute(
-                "INSERT INTO Products (name, category_id, price, stock_quantity, weight_grams, units_per_package, image_url, notes) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id;",
-                (m["name"], primary, price, m["stock"], m["weight"], m["units"], m["image"], m["notes"]))
+                "INSERT INTO Products (name, category_id, price, stock_quantity, weight_grams, units_per_package, image_url, notes, created_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s, (NOW() - %s::interval)::timestamp) RETURNING id;",
+                (m["name"], primary, price, m["stock"], m["weight"], m["units"], m["image"], m["notes"],
+                 "0 days" if as_new else "400 days"))
             new_id = cur.fetchone()[0]
             for cid in m["cats"]:
                 cur.execute("INSERT INTO product_categories (product_id, category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING;", (new_id, cid))

@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bake & Party - אפייה ומסיבות | ממלכת הגלידות מבית פינוקים</title>
     <link rel="icon" type="image/jpeg" href="logo.jpg">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <meta name="theme-color" content="#FFD1DC">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Bake & Party">
     <meta name="keywords" content="ממלכת הגלידות, פינוקים, גבעת שמואל, אפייה, מסיבות, גלידות, שוקולד, בלונים, חומרי גלם לאפייה, Bake and Party">
     <meta name="description" content="Bake & Party - חנות אפייה ומסיבות בגבעת שמואל. חומרי גלם, אביזרי אפייה וקישוטים לכל אירוע. שעות פתיחה, יצירת קשר ומשלוחים.">
     <meta property="og:title" content="Bake & Party | ממלכת הגלידות מבית פינוקים">
@@ -562,6 +567,10 @@
                 <input id="reg-email" type="email" autocomplete="email" required>
                 <label>סיסמה (6 תווים לפחות)</label>
                 <input id="reg-password" type="password" autocomplete="new-password" required minlength="6">
+                <label style="display:flex; gap:8px; align-items:flex-start; font-weight:400; font-size:0.9em; margin:10px 0;">
+                    <input id="reg-notify" type="checkbox" style="width:auto; margin-top:4px;">
+                    <span>אשמח לקבל התראות מהחנות: מוצרים חדשים, עדכונים על הזמנות ועוד (אפשר לבטל בכל רגע)</span>
+                </label>
                 <button class="btn" type="submit">הרשמה</button>
                 <p class="switch">כבר רשום/ה? <a onclick="showAuthMode('login')">התחברות</a></p>
             </form>
@@ -961,7 +970,9 @@
                     area.innerHTML += `<button class="btn btn-sm" style="display:block; width:100%; margin-bottom:10px; background-color:#4A90E2;" onclick="openAddProductModal()">➕ הוספת מוצר חדש</button>`;
                     area.innerHTML += `<a href="admin.html" class="btn btn-sm" style="display:block; margin-bottom:10px;">ניהול חנות וקטגוריות ⚙️</a>`;
                 }
+                area.innerHTML += `<div id="notif-box"></div>`;
                 area.innerHTML += `<button class="btn btn-sm btn-ghost" onclick="logout()">התנתקות</button>`;
+                setTimeout(refreshNotifBox, 0);
             } else {
                 area.innerHTML = `
                     <button class="btn btn-sm" onclick="openAuth('login')" style="margin-bottom:8px;">כניסה / התחברות</button>
@@ -1682,10 +1693,53 @@
                 .then(res => res.json().then(d => ({ ok: res.ok, d })))
                 .then(({ ok, d }) => {
                     if (!ok) throw new Error(d.detail || 'שגיאה בהרשמה');
+                    const wantsNotify = document.getElementById('reg-notify') && document.getElementById('reg-notify').checked;
                     setToken(d.token); currentUser = d.user; closeAuth(); renderAccount(); initApp();
+                    if (wantsNotify) setTimeout(enableNotifications, 400);
                 })
                 .catch(err => { document.getElementById('auth-msg').textContent = err.message; });
         };
+
+        // ===================== התראות (אישור מפורש בלבד) =====================
+        if ('serviceWorker' in navigator) { window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {})); }
+        function pushSupported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
+        function b64ToU8(b64) { const p = '='.repeat((4 - b64.length % 4) % 4); const r = atob((b64 + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from([...r].map(c => c.charCodeAt(0))); }
+        function notifApi(path, opts) { return fetch(API + path, { ...(opts || {}), headers: { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' } }).then(r => r.json().then(d => { if (!r.ok) throw new Error(d.detail || 'שגיאה'); return d; })); }
+        async function enableNotifications() {
+            try {
+                const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+                if (!pushSupported()) {
+                    alert(isIos ? 'באייפון אפשר לקבל התראות רק אחרי שמוסיפים את האתר למסך הבית: בכפתור השיתוף בחרי "הוספה למסך הבית", פתחי משם ואז אשרי התראות.' : 'הדפדפן הזה לא תומך בהתראות.');
+                    return;
+                }
+                const st = await notifApi('/api/notifications/status');
+                if (!st.configured) { alert('ההתראות עדיין לא הופעלו באתר. נסי שוב בהמשך 🙂'); return; }
+                const perm = await Notification.requestPermission();
+                if (perm !== 'granted') { alert('לא אושרו התראות בדפדפן, ולכן לא נשלח כלום.'); return; }
+                const reg = await navigator.serviceWorker.ready;
+                const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(st.public_key) });
+                await notifApi('/api/notifications/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
+                alert('מעולה! ההתראות הופעלו 🎉 נעדכן אותך על חדשות בחנות.');
+            } catch (e) { alert('לא הצלחנו להפעיל התראות: ' + e.message); }
+            refreshNotifBox();
+        }
+        async function disableNotifications() {
+            try {
+                if (pushSupported()) { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); }
+                await notifApi('/api/notifications/unsubscribe', { method: 'POST' });
+            } catch (e) { alert(e.message); }
+            refreshNotifBox();
+        }
+        async function refreshNotifBox() {
+            const box = document.getElementById('notif-box'); if (!box || !currentUser) return;
+            try {
+                const st = await notifApi('/api/notifications/status');
+                if (!st.configured) { box.innerHTML = ''; return; }
+                box.innerHTML = st.consent
+                    ? `<div style="font-size:0.85em; color:var(--muted); margin-bottom:6px;">🔔 התראות פעילות</div><button class="btn btn-sm btn-ghost" style="margin-bottom:10px;" onclick="disableNotifications()">ביטול התראות</button>`
+                    : `<button class="btn btn-sm" style="display:block; width:100%; margin-bottom:10px;" onclick="enableNotifications()">🔔 אישור קבלת התראות</button>`;
+            } catch (e) { box.innerHTML = ''; }
+        }
 
         fetch(`${API}/api/store-status?_t=${new Date().getTime()}`).then(res => res.json()).then(data => {
             document.getElementById('hours-text').innerHTML = `

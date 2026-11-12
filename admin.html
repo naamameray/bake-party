@@ -246,6 +246,7 @@
                             </select></div>
                     </div>
                     <label style="font-weight:400; margin:8px 0;"><input type="checkbox" id="wi-update" style="width:auto;"> לעדכן גם מחיר של מוצרים שכבר קיימים (לפי שם). לא מומלץ אם תיקנת מחירים ידנית.</label>
+                    <label style="font-weight:400; margin:8px 0;"><input type="checkbox" id="wi-asnew" style="width:auto;"> להציג את המוצרים החדשים בשורת "חדש בחנות" ולשלוח עליהם התראה ללקוחות. <strong>לא לסמן בייבוא ראשון גדול.</strong></label>
                     <button class="btn" type="button" onclick="wiRun('preview')">תצוגה מקדימה</button>
                     <button class="btn" type="button" id="wi-apply" style="display:none; background:var(--ok);" onclick="wiRun('apply')">אישור וייבוא לאתר</button>
                     <div id="wi-out" style="margin-top:12px;"></div>
@@ -1167,7 +1168,7 @@
             const out = document.getElementById('wi-out');
             if (!f) { out.textContent = 'בחרי קודם קובץ אקסל.'; return; }
             if (mode === 'apply' && !confirm('לייבא את המוצרים לאתר? הפעולה מוסיפה מוצרים וקטגוריות חדשים ולא מוחקת כלום.')) return;
-            const q = new URLSearchParams({ mode, divide: document.getElementById('wi-divide').value === '1', rounding: document.getElementById('wi-round').value, update_prices: document.getElementById('wi-update').checked });
+            const q = new URLSearchParams({ mode, divide: document.getElementById('wi-divide').value === '1', rounding: document.getElementById('wi-round').value, update_prices: document.getElementById('wi-update').checked, as_new: document.getElementById('wi-asnew').checked });
             const fd = new FormData(); fd.append('file', f);
             out.textContent = mode === 'apply' ? 'מייבאת... זה יכול לקחת כדקה.' : 'בודקת את הקובץ...';
             document.getElementById('wi-apply').style.display = 'none';
