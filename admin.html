@@ -1198,7 +1198,8 @@
                 const d = await res.json();
                 box.innerHTML = `לקוחות שאישרו התראות: <strong>${d.consenting_users}</strong> · מכשירים רשומים: <strong>${d.devices}</strong><br>` +
                     `מייל: ${d.email_configured ? '<span style="color:var(--ok);">פעיל</span>' : '<span style="color:#d9534f;">לא מוגדר (חסרות הגדרות SMTP ב-Railway)</span>'} · ` +
-                    `התראות טלפון: ${d.configured ? '<span style="color:var(--ok);">פעיל</span>' : '<span style="color:#d9534f;">לא מוגדר (חסרים מפתחות VAPID)</span>'}`;
+                    `התראות טלפון: ${d.configured ? '<span style="color:var(--ok);">פעיל</span>' : '<span style="color:#d9534f;">לא מוגדר (חסרים מפתחות VAPID)</span>'}` +
+                    (d.last_email_error ? `<br><span style="color:#d9534f;">שגיאת מייל אחרונה: ${escHtml(d.last_email_error)}</span>` : '');
             } catch (e) { box.textContent = 'שגיאה בטעינה'; }
         }
         async function sendPush(testOnly) {

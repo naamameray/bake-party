@@ -1654,6 +1654,8 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "") or SMTP_USER
 SITE_URL = os.environ.get("SITE_URL", "https://www.bakeparty.co.il").rstrip("/")
 
+_LAST_EMAIL_ERROR = None      # הסיבה לכישלון השליחה האחרון (בלי סודות), מוצגת בפאנל הניהול
+
 def _email_configured():
     return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
 
@@ -1684,6 +1686,8 @@ def _send_emails(recipients, subject, text, url="/", promo=True):
             srv = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30); srv.starttls(context=ssl.create_default_context())
         srv.login(SMTP_USER, SMTP_PASSWORD)
     except Exception as e:
+        global _LAST_EMAIL_ERROR
+        _LAST_EMAIL_ERROR = f"חיבור לשרת המייל נכשל: {str(e)[:160]}"
         print(f"[EMAIL] connect failed: {e}"); return 0
     try:
         for uid, to, name in recipients:
@@ -1705,9 +1709,10 @@ def _send_emails(recipients, subject, text, url="/", promo=True):
                     f'<p><a href="{link}" style="background:#FF85A2;color:#fff;padding:10px 20px;border-radius:18px;text-decoration:none;font-weight:bold">לצפייה באתר</a></p>'
                     f'<hr style="border:none;border-top:1px solid #FFD1DC"><p style="font-size:12px;color:#9B7B82">קיבלת הודעה זו כי אישרת קבלת עדכונים מ-Bake &amp; Party, גבעת שמואל. '
                     f'<a href="{unsub}" style="color:#9B7B82">להסרה מרשימת התפוצה</a></p></div>', subtype="html")
-                srv.send_message(msg); sent += 1
+                srv.send_message(msg); sent += 1; _LAST_EMAIL_ERROR = None
                 _t.sleep(0.15)
             except Exception as e:
+                _LAST_EMAIL_ERROR = f"שליחה נכשלה: {str(e)[:160]}"
                 print(f"[EMAIL] failed for user {uid}: {e}")
     finally:
         try: srv.quit()
@@ -1719,7 +1724,7 @@ def _html_escape(t):
 
 def _consenting_customer_emails():
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, email, name FROM users WHERE notify_consent = TRUE AND active = TRUE AND role = 'customer' AND email IS NOT NULL;")
+    cur.execute("SELECT id, email, name FROM users WHERE notify_consent = TRUE AND active = TRUE AND email IS NOT NULL;")
     rows = cur.fetchall(); cur.close(); conn.close()
     return rows
 
@@ -1924,7 +1929,7 @@ def admin_push_stats(sess: dict = Depends(require_admin)):
     cur.execute("SELECT COUNT(*) FROM users WHERE notify_consent = TRUE;"); consenting = cur.fetchone()[0]
     cur.execute("SELECT COUNT(*) FROM push_subscriptions;"); devices = cur.fetchone()[0]
     last = _setting_get(cur, "push_new_last_sent"); cur.close(); conn.close()
-    return {"configured": _push_configured(), "email_configured": _email_configured(), "consenting_users": consenting, "devices": devices, "last_new_products_push": last}
+    return {"configured": _push_configured(), "email_configured": _email_configured(), "last_email_error": _LAST_EMAIL_ERROR, "consenting_users": consenting, "devices": devices, "last_new_products_push": last}
 
 class PushSendBody(BaseModel):
     title: str
@@ -1951,7 +1956,9 @@ def admin_push_send(b: PushSendBody, sess: dict = Depends(require_admin)):
         pushed = _send_push_rows(rows, title, body, b.url) if rows else 0
         mailed = _send_emails([(sess["user_id"], me[0], me[1])], title, body, b.url) if (_email_configured() and me and me[0]) else 0
         if not pushed and not mailed:
-            raise HTTPException(status_code=400, detail="לא נשלח כלום אלייך: אין מכשיר רשום להתראות ולא הוגדר מייל. אפשר להירשם להתראות באתר הראשי (כפתור \"אישור קבלת התראות\").")
+            why = (_LAST_EMAIL_ERROR if _email_configured() and _LAST_EMAIL_ERROR else
+                   "אין מכשיר רשום להתראות ולא הוגדר מייל. אפשר להירשם להתראות באתר הראשי (כפתור \"אישור קבלת התראות\").")
+            raise HTTPException(status_code=400, detail="לא נשלח כלום אלייך. סיבה: " + why)
         return {"sent": pushed, "emails": mailed, "test": True}
     # הגנה מפני שליחה כפולה בטעות: הודעה לקהל אחת כל 5 דקות
     conn = get_conn(); cur = conn.cursor()
