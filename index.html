@@ -569,7 +569,7 @@
                 <input id="reg-password" type="password" autocomplete="new-password" required minlength="6">
                 <label style="display:flex; gap:8px; align-items:flex-start; font-weight:400; font-size:0.9em; margin:10px 0;">
                     <input id="reg-notify" type="checkbox" style="width:auto; margin-top:4px;">
-                    <span>אשמח לקבל התראות מהחנות: מוצרים חדשים, עדכונים על הזמנות ועוד (אפשר לבטל בכל רגע)</span>
+                    <span>אשמח לקבל התראות מהחנות במייל ובטלפון: מוצרים חדשים, עדכונים על הזמנות ועוד (אפשר לבטל בכל רגע)</span>
                 </label>
                 <button class="btn" type="submit">הרשמה</button>
                 <p class="switch">כבר רשום/ה? <a onclick="showAuthMode('login')">התחברות</a></p>
@@ -1689,13 +1689,13 @@
             const name = document.getElementById('reg-name').value.trim();
             const email = document.getElementById('reg-email').value.trim();
             const password = document.getElementById('reg-password').value;
-            fetch(`${API}/api/register`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, email, password }) })
+            fetch(`${API}/api/register`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, email, password, notify: !!(document.getElementById('reg-notify') && document.getElementById('reg-notify').checked) }) })
                 .then(res => res.json().then(d => ({ ok: res.ok, d })))
                 .then(({ ok, d }) => {
                     if (!ok) throw new Error(d.detail || 'שגיאה בהרשמה');
                     const wantsNotify = document.getElementById('reg-notify') && document.getElementById('reg-notify').checked;
                     setToken(d.token); currentUser = d.user; closeAuth(); renderAccount(); initApp();
-                    if (wantsNotify) setTimeout(enableNotifications, 400);
+                    if (wantsNotify) setTimeout(() => tryEnablePush(true), 400);
                 })
                 .catch(err => { document.getElementById('auth-msg').textContent = err.message; });
         };
@@ -1705,21 +1705,26 @@
         function pushSupported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
         function b64ToU8(b64) { const p = '='.repeat((4 - b64.length % 4) % 4); const r = atob((b64 + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from([...r].map(c => c.charCodeAt(0))); }
         function notifApi(path, opts) { return fetch(API + path, { ...(opts || {}), headers: { 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' } }).then(r => r.json().then(d => { if (!r.ok) throw new Error(d.detail || 'שגיאה'); return d; })); }
+        // מנסה לרשום את המכשיר להתראות בטלפון/דפדפן. בלי זה האישור עדיין תקף למייל.
+        async function tryEnablePush(silent) {
+            const st = await notifApi('/api/notifications/status');
+            if (!st.configured) return 'none';
+            if (!pushSupported()) { return /iphone|ipad|ipod/i.test(navigator.userAgent) ? 'ios' : 'unsupported'; }
+            const perm = await Notification.requestPermission();
+            if (perm !== 'granted') return 'denied';
+            const reg = await navigator.serviceWorker.ready;
+            const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(st.public_key) });
+            await notifApi('/api/notifications/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
+            return 'ok';
+        }
         async function enableNotifications() {
             try {
-                const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
-                if (!pushSupported()) {
-                    alert(isIos ? 'באייפון אפשר לקבל התראות רק אחרי שמוסיפים את האתר למסך הבית: בכפתור השיתוף בחרי "הוספה למסך הבית", פתחי משם ואז אשרי התראות.' : 'הדפדפן הזה לא תומך בהתראות.');
-                    return;
-                }
                 const st = await notifApi('/api/notifications/status');
-                if (!st.configured) { alert('ההתראות עדיין לא הופעלו באתר. נסי שוב בהמשך 🙂'); return; }
-                const perm = await Notification.requestPermission();
-                if (perm !== 'granted') { alert('לא אושרו התראות בדפדפן, ולכן לא נשלח כלום.'); return; }
-                const reg = await navigator.serviceWorker.ready;
-                const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(st.public_key) });
-                await notifApi('/api/notifications/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
-                alert('מעולה! ההתראות הופעלו 🎉 נעדכן אותך על חדשות בחנות.');
+                if (!st.any_channel) { alert('ההתראות עדיין לא הופעלו באתר. נסי שוב בהמשך 🙂'); return; }
+                await notifApi('/api/notifications/consent', { method: 'POST' });      // אישור (מייל)
+                let r = 'none'; try { r = await tryEnablePush(false); } catch (e) { r = 'error'; }
+                const extra = { ok: ' וגם התראות בטלפון.', ios: ' כדי לקבל גם התראות בטלפון באייפון: "הוספה למסך הבית" ואז לאשר שוב.', denied: ' התראות הדפדפן לא אושרו, אז נעדכן אותך במייל.' }[r] || '';
+                alert('מעולה! קיבלנו את האישור שלך 🎉 נעדכן אותך על חדשות בחנות.' + extra);
             } catch (e) { alert('לא הצלחנו להפעיל התראות: ' + e.message); }
             refreshNotifBox();
         }
@@ -1734,7 +1739,7 @@
             const box = document.getElementById('notif-box'); if (!box || !currentUser) return;
             try {
                 const st = await notifApi('/api/notifications/status');
-                if (!st.configured) { box.innerHTML = ''; return; }
+                if (!st.any_channel) { box.innerHTML = ''; return; }
                 box.innerHTML = st.consent
                     ? `<div style="font-size:0.85em; color:var(--muted); margin-bottom:6px;">🔔 התראות פעילות</div><button class="btn btn-sm btn-ghost" style="margin-bottom:10px;" onclick="disableNotifications()">ביטול התראות</button>`
                     : `<button class="btn btn-sm" style="display:block; width:100%; margin-bottom:10px;" onclick="enableNotifications()">🔔 אישור קבלת התראות</button>`;

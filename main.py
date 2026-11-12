@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from datetime import datetime, date, time, timedelta, timezone
 import json
+import threading
 from zoneinfo import ZoneInfo
 
 ISRAEL_TZ = ZoneInfo('Asia/Jerusalem')
@@ -387,6 +388,7 @@ class RegisterBody(BaseModel):
     password: str
     phone: Optional[str] = None
     address: Optional[str] = None
+    notify: bool = False        # אישור מפורש לקבל התראות (מייל והתראות בטלפון)
 
 class LoginBody(BaseModel):
     email: str
@@ -426,9 +428,13 @@ def register(body: RegisterBody):
         (body.name.strip(), email, body.phone, body.address, hash_password(body.password))
     )
     user_id = cur.fetchone()[0]
+    if body.notify:
+        cur.execute("UPDATE users SET notify_consent = TRUE, notify_consent_at = NOW() WHERE id = %s;", (user_id,))
     conn.commit()
     user = _fetch_user(cur, user_id)
     cur.close(); conn.close()
+    if body.notify:
+        threading.Thread(target=_send_welcome_email, args=(email, body.name.strip(), user_id), daemon=True).start()
     return {"token": _issue_token(user_id, "customer"), "user": _user_public(user)}
 
 LOGIN_ATTEMPTS = defaultdict(list)
@@ -1639,6 +1645,100 @@ def get_products_on_sale():
 #  - לקוח מקבל התראה רק אם לחץ "אשר התראות" (notify_consent) וגם נתן הרשאה בדפדפן. בלי זה אף פעם לא נשלח כלום.
 #  - אחרי ביטול: המנוי נמחק והאישור מתאפס מיד.
 #  - הודעה אחת מרוכזת על מוצרים חדשים (לא הודעה לכל מוצר), לכל היותר אחת ל-12 שעות, רק בין 09:00 ל-20:00 וגם לא בשבת.
+# ---------- מייל (SMTP) ----------
+# הגדרה ב-Railway: SMTP_HOST, SMTP_PORT (465 או 587), SMTP_USER, SMTP_PASSWORD, SMTP_FROM (אופציונלי), SITE_URL (אופציונלי)
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465") or 465)
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM = os.environ.get("SMTP_FROM", "") or SMTP_USER
+SITE_URL = os.environ.get("SITE_URL", "https://www.bakeparty.co.il").rstrip("/")
+
+def _email_configured():
+    return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
+
+def _unsub_secret():
+    conn = get_conn(); cur = conn.cursor()
+    sec = _setting_get(cur, "unsub_secret")
+    if not sec:
+        sec = secrets.token_hex(32); _setting_set(cur, "unsub_secret", sec); conn.commit()
+    cur.close(); conn.close()
+    return sec
+
+def _unsub_token(user_id):
+    return hmac.new(_unsub_secret().encode(), str(user_id).encode(), hashlib.sha256).hexdigest()[:32]
+
+def _send_emails(recipients, subject, text, url="/", promo=True):
+    """recipients: [(user_id, email, name)]. כל מייל כולל קישור הסרה אישי. מחזיר כמה נשלחו."""
+    if not _email_configured() or not recipients:
+        return 0
+    import smtplib, ssl, time as _t
+    from email.message import EmailMessage
+    from email.utils import formataddr
+    subj = ("פרסומת | " + subject) if promo else subject        # חוק התקשורת (סעיף 30א): הודעה פרסומית מסומנת
+    sent = 0
+    try:
+        if SMTP_PORT == 465:
+            srv = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=30)
+        else:
+            srv = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30); srv.starttls(context=ssl.create_default_context())
+        srv.login(SMTP_USER, SMTP_PASSWORD)
+    except Exception as e:
+        print(f"[EMAIL] connect failed: {e}"); return 0
+    try:
+        for uid, to, name in recipients:
+            try:
+                unsub = f"{SITE_URL}/unsubscribe?u={uid}&t={_unsub_token(uid)}"
+                link = SITE_URL + (url if url.startswith("/") else "/")
+                first = ((name or "").split() or [""])[0]
+                msg = EmailMessage()
+                msg["Subject"] = subj
+                msg["From"] = formataddr(("Bake & Party", SMTP_FROM))
+                msg["To"] = to
+                msg["List-Unsubscribe"] = f"<{unsub}>"
+                msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+                hi = f"שלום {first}," if first else "שלום,"
+                msg.set_content(f"{hi}\n\n{text}\n\nלצפייה באתר: {link}\n\nBake & Party, גבעת שמואל\nקיבלת הודעה זו כי אישרת קבלת עדכונים. להסרה: {unsub}")
+                msg.add_alternative(
+                    f'<div dir="rtl" style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#4A2E35">'
+                    f'<h2 style="color:#E05276">Bake &amp; Party 🎉</h2><p>{hi}</p><p style="font-size:16px;line-height:1.6">{_html_escape(text)}</p>'
+                    f'<p><a href="{link}" style="background:#FF85A2;color:#fff;padding:10px 20px;border-radius:18px;text-decoration:none;font-weight:bold">לצפייה באתר</a></p>'
+                    f'<hr style="border:none;border-top:1px solid #FFD1DC"><p style="font-size:12px;color:#9B7B82">קיבלת הודעה זו כי אישרת קבלת עדכונים מ-Bake &amp; Party, גבעת שמואל. '
+                    f'<a href="{unsub}" style="color:#9B7B82">להסרה מרשימת התפוצה</a></p></div>', subtype="html")
+                srv.send_message(msg); sent += 1
+                _t.sleep(0.15)
+            except Exception as e:
+                print(f"[EMAIL] failed for user {uid}: {e}")
+    finally:
+        try: srv.quit()
+        except Exception: pass
+    return sent
+
+def _html_escape(t):
+    return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+
+def _consenting_customer_emails():
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, email, name FROM users WHERE notify_consent = TRUE AND active = TRUE AND role = 'customer' AND email IS NOT NULL;")
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return rows
+
+def notify_customers(title, body, url="/", background_email=True):
+    """הודעה ללקוחות שאישרו: התראת טלפון + מייל. מחזיר (מכשירים, נמענים-במייל)."""
+    pushed = push_to_consenting_customers(title, body, url)
+    recips = _consenting_customer_emails() if _email_configured() else []
+    if recips:
+        if background_email:
+            threading.Thread(target=_send_emails, args=(recips, title, body, url), daemon=True).start()
+        else:
+            _send_emails(recips, title, body, url)
+    return pushed, len(recips)
+
+WELCOME_TEXT = "תודה שהצטרפת! מעכשיו נעדכן אותך על מוצרים חדשים ועל חדשות מהחנות. אפשר לבטל בכל רגע."
+
+def _send_welcome_email(email, name, user_id):
+    _send_emails([(user_id, email, name)], "תודה שהצטרפת!", WELCOME_TEXT, "/", promo=False)
+
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "https://www.bakeparty.co.il")
@@ -1700,7 +1800,7 @@ def _setting_set(cur, key, val):
 def run_new_products_digest(now=None):
     """בודק אם יש מוצרים חדשים שעוד לא הוכרזו, ואם כן שולח הודעה אחת מרוכזת. מחזיר מילון תוצאה (לבדיקות)."""
     now = now or datetime.now(ISRAEL_TZ)
-    if not _push_configured():
+    if not (_push_configured() or _email_configured()):
         return {"skipped": "not_configured"}
     if not (9 <= now.hour < 20) or now.weekday() == 5:      # weekday 5 = שבת
         return {"skipped": "quiet_hours"}
@@ -1725,12 +1825,12 @@ def run_new_products_digest(now=None):
     title = "Bake & Party 🎉"
     body = ("עלה מוצר חדש בחנות! כדאי להציץ ב\"חדש בחנות\"" if count == 1
             else "איזה כיף, עלו מוצרים חדשים! כדאי להציץ ב\"חדש בחנות\"")
-    sent = push_to_consenting_customers(title, body, "/#new-section")
+    sent, emails = notify_customers(title, body, "/#new-section")
     conn = get_conn(); cur = conn.cursor()
     _setting_set(cur, "push_new_cursor", newest.isoformat())
     _setting_set(cur, "push_new_last_sent", datetime.now(timezone.utc).isoformat())
     conn.commit(); cur.close(); conn.close()
-    return {"sent": sent, "new_products": count}
+    return {"sent": sent, "emails": emails, "new_products": count}
 
 async def _digest_loop():
     import asyncio
@@ -1758,7 +1858,18 @@ def notifications_status(sess: dict = Depends(require_auth)):
     consent = bool(cur.fetchone()[0])
     cur.execute("SELECT COUNT(*) FROM push_subscriptions WHERE user_id = %s;", (sess["user_id"],))
     n = cur.fetchone()[0]; cur.close(); conn.close()
-    return {"configured": _push_configured(), "public_key": VAPID_PUBLIC_KEY, "consent": consent, "devices": n}
+    return {"configured": _push_configured(), "email_configured": _email_configured(), "any_channel": _push_configured() or _email_configured(),
+            "public_key": VAPID_PUBLIC_KEY, "consent": consent, "devices": n}
+
+@app.post("/api/notifications/consent")
+def notifications_consent(sess: dict = Depends(require_auth)):
+    """אישור קבלת התראות (מייל, ובנוסף התראות בטלפון אם המכשיר נרשם). הודעת תודה במייל נשלחת פעם אחת."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("UPDATE users SET notify_consent = TRUE, notify_consent_at = NOW() WHERE id = %s AND notify_consent = FALSE RETURNING name, email;", (sess["user_id"],))
+    first = cur.fetchone(); conn.commit(); cur.close(); conn.close()
+    if first and first[1]:
+        threading.Thread(target=_send_welcome_email, args=(first[1], first[0], sess["user_id"]), daemon=True).start()
+    return {"ok": True, "welcome_sent": bool(first)}
 
 @app.post("/api/notifications/subscribe")
 def notifications_subscribe(body: PushSubBody, sess: dict = Depends(require_auth)):
@@ -1767,11 +1878,20 @@ def notifications_subscribe(body: PushSubBody, sess: dict = Depends(require_auth
         raise HTTPException(status_code=400, detail="נתוני מנוי לא תקינים")
     conn = get_conn(); cur = conn.cursor()
     cur.execute("""INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (%s,%s,%s,%s)
-                   ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth;""",
-                (sess["user_id"], body.endpoint, p256dh, auth))
-    cur.execute("UPDATE users SET notify_consent = TRUE, notify_consent_at = NOW() WHERE id = %s AND notify_consent = FALSE;", (sess["user_id"],))
+                   ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth
+                   RETURNING id, (xmax = 0);""", (sess["user_id"], body.endpoint, p256dh, auth))
+    sub_id, inserted = cur.fetchone()
+    cur.execute("UPDATE users SET notify_consent = TRUE, notify_consent_at = NOW() WHERE id = %s AND notify_consent = FALSE RETURNING name, email;", (sess["user_id"],))
+    first = cur.fetchone()
     conn.commit(); cur.close(); conn.close()
-    return {"ok": True}
+    if first and first[1]:
+        threading.Thread(target=_send_welcome_email, args=(first[1], first[0], sess["user_id"]), daemon=True).start()
+    if inserted:      # הודעת תודה בטלפון: פעם אחת לכל מכשיר חדש
+        name = (first[0] if first else None)
+        hello = "תודה שהצטרפת! 🎉"
+        _send_push_rows([(sub_id, body.endpoint, p256dh, auth)], hello,
+                        "מעכשיו נעדכן אותך על מוצרים חדשים ועל חדשות מהחנות. אפשר לבטל בכל רגע.", "/")
+    return {"ok": True, "welcome_sent": bool(inserted)}
 
 @app.post("/api/notifications/unsubscribe")
 def notifications_unsubscribe(sess: dict = Depends(require_auth)):
@@ -1782,13 +1902,71 @@ def notifications_unsubscribe(sess: dict = Depends(require_auth)):
     conn.commit(); cur.close(); conn.close()
     return {"ok": True}
 
+from fastapi.responses import HTMLResponse
+
+@app.get("/unsubscribe", response_class=HTMLResponse)
+def unsubscribe_link(u: int, t: str):
+    """קישור הסרה מתוך מייל: בלי צורך להתחבר. מאפס אישור ומוחק מכשירים."""
+    ok = hmac.compare_digest(_unsub_token(u), t)
+    if ok:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("UPDATE users SET notify_consent = FALSE WHERE id = %s;", (u,))
+        cur.execute("DELETE FROM push_subscriptions WHERE user_id = %s;", (u,))
+        conn.commit(); cur.close(); conn.close()
+    msg = "הוסרת בהצלחה מרשימת התפוצה. לא נשלח לך עוד הודעות." if ok else "הקישור לא תקין."
+    return HTMLResponse(f'<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+                        f'<title>הסרה מרשימת תפוצה</title><body style="font-family:Arial,sans-serif;text-align:center;padding:60px 20px;color:#4A2E35;background:#FFF9F5">'
+                        f'<h2 style="color:#E05276">Bake &amp; Party</h2><p style="font-size:18px">{msg}</p><p><a href="/" style="color:#E05276">חזרה לאתר</a></p></body></html>')
+
 @app.get("/api/admin/push-stats")
 def admin_push_stats(sess: dict = Depends(require_admin)):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM users WHERE notify_consent = TRUE;"); consenting = cur.fetchone()[0]
     cur.execute("SELECT COUNT(*) FROM push_subscriptions;"); devices = cur.fetchone()[0]
     last = _setting_get(cur, "push_new_last_sent"); cur.close(); conn.close()
-    return {"configured": _push_configured(), "consenting_users": consenting, "devices": devices, "last_new_products_push": last}
+    return {"configured": _push_configured(), "email_configured": _email_configured(), "consenting_users": consenting, "devices": devices, "last_new_products_push": last}
+
+class PushSendBody(BaseModel):
+    title: str
+    body: str
+    url: str = "/"
+    audience: str = "customers"      # customers | staff
+    test_only: bool = False          # שליחה רק למכשירים של המנהל עצמו
+
+@app.post("/api/admin/push-send")
+def admin_push_send(b: PushSendBody, sess: dict = Depends(require_admin)):
+    title, body = b.title.strip(), b.body.strip()
+    if not title or not body or len(title) > 60 or len(body) > 200:
+        raise HTTPException(status_code=400, detail="צריך כותרת (עד 60 תווים) והודעה (עד 200 תווים)")
+    if not b.url.startswith("/") or b.url.startswith("//") or b.audience not in ("customers", "staff"):
+        raise HTTPException(status_code=400, detail="פרמטר לא תקין")
+    if not (_push_configured() or _email_configured()):
+        raise HTTPException(status_code=400, detail="ההתראות עוד לא הופעלו בשרת (חסרים מפתחות VAPID או הגדרות מייל SMTP ב-Railway).")
+    if b.test_only:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = %s;", (sess["user_id"],))
+        rows = cur.fetchall()
+        cur.execute("SELECT email, name FROM users WHERE id = %s;", (sess["user_id"],))
+        me = cur.fetchone(); cur.close(); conn.close()
+        pushed = _send_push_rows(rows, title, body, b.url) if rows else 0
+        mailed = _send_emails([(sess["user_id"], me[0], me[1])], title, body, b.url) if (_email_configured() and me and me[0]) else 0
+        if not pushed and not mailed:
+            raise HTTPException(status_code=400, detail="לא נשלח כלום אלייך: אין מכשיר רשום להתראות ולא הוגדר מייל. אפשר להירשם להתראות באתר הראשי (כפתור \"אישור קבלת התראות\").")
+        return {"sent": pushed, "emails": mailed, "test": True}
+    # הגנה מפני שליחה כפולה בטעות: הודעה לקהל אחת כל 5 דקות
+    conn = get_conn(); cur = conn.cursor()
+    last = _setting_get(cur, "push_manual_last")
+    if last and (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() < 300:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=429, detail="נשלחה הודעה לפני פחות מ-5 דקות. כדי לא להציף, כדאי להמתין.")
+    _setting_set(cur, "push_manual_last", datetime.now(timezone.utc).isoformat())
+    conn.commit(); cur.close(); conn.close()
+    if b.audience == "customers":
+        sent, emails = notify_customers(title, body, b.url)
+    else:
+        sent, emails = push_to_staff(title, body, b.url), 0
+    _audit(sess, "push_send", "push", None, {"audience": b.audience, "title": title, "sent": sent, "emails": emails})
+    return {"sent": sent, "emails": emails, "test": False}
 
 # --- קבצי PWA: אפליקציה מותקנת + התראות ---
 @app.get("/sw.js")
@@ -1954,6 +2132,10 @@ async def admin_import_wolt(
         for pid, pn in cur.fetchall():
             existing.setdefault(_norm_name(pn), pid)
 
+        cur.execute("SELECT COUNT(*) FROM Products;")
+        site_was_empty = cur.fetchone()[0] == 0
+        if site_was_empty:
+            as_new = False        # ייבוא ראשון לאתר ריק: לא "חדש בחנות" ולא התראה
         added = skipped = updated = uncategorized = multi = 0
         samples = []
         for (nk, _), m in merged.items():
@@ -1992,7 +2174,7 @@ async def admin_import_wolt(
         cur.close(); conn.close()
     result = {"mode": mode, "products_in_file": len(merged), "added": added, "skipped_existing": skipped,
               "prices_updated": updated, "categories_created": cats_created, "categories_matched": cats_matched,
-              "uncategorized": uncategorized, "multi_category": multi, "samples": samples}
+              "uncategorized": uncategorized, "multi_category": multi, "samples": samples, "announced_as_new": bool(as_new)}
     if mode == "apply":
         _audit(sess, "wolt_import", "products", None, {k: v for k, v in result.items() if k != "samples"})
     return result

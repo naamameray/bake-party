@@ -169,6 +169,7 @@
             <button class="tab-btn" type="button" id="tab-btn-categories" onclick="switchTab('categories')">📁 ניהול קטגוריות</button>
             <button class="tab-btn" type="button" id="tab-btn-faq" onclick="switchTab('faq')">💬 שאלות ותשובות</button>
             <button class="tab-btn" type="button" id="tab-btn-staff" onclick="switchTab('staff')">👥 צוות ומשתמשים</button>
+            <button class="tab-btn" type="button" id="tab-btn-notify" onclick="switchTab('notify')">📣 הודעות</button>
             <button class="tab-btn" type="button" id="tab-btn-pay" onclick="switchTab('pay')">⏱️ שעות ושכר</button>
             <button class="tab-btn" type="button" id="tab-btn-ailog" onclick="switchTab('ailog')">🤖 שיחות עם ה-AI</button>
         </div>
@@ -246,7 +247,7 @@
                             </select></div>
                     </div>
                     <label style="font-weight:400; margin:8px 0;"><input type="checkbox" id="wi-update" style="width:auto;"> לעדכן גם מחיר של מוצרים שכבר קיימים (לפי שם). לא מומלץ אם תיקנת מחירים ידנית.</label>
-                    <label style="font-weight:400; margin:8px 0;"><input type="checkbox" id="wi-asnew" style="width:auto;"> להציג את המוצרים החדשים בשורת "חדש בחנות" ולשלוח עליהם התראה ללקוחות. <strong>לא לסמן בייבוא ראשון גדול.</strong></label>
+                    <label style="font-weight:400; margin:8px 0;"><input type="checkbox" id="wi-asnew" style="width:auto;" checked> להציג את המוצרים החדשים בשורת "חדש בחנות" ולשלוח עליהם התראה אחת מרוכזת ללקוחות שאישרו. (באתר ריק, ייבוא ראשון, זה מבוטל אוטומטית.)</label>
                     <button class="btn" type="button" onclick="wiRun('preview')">תצוגה מקדימה</button>
                     <button class="btn" type="button" id="wi-apply" style="display:none; background:var(--ok);" onclick="wiRun('apply')">אישור וייבוא לאתר</button>
                     <div id="wi-out" style="margin-top:12px;"></div>
@@ -350,6 +351,30 @@
                     <h2>פעולות אחרונות (יומן)</h2>
                     <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">כל הוספה, שינוי תפקיד, השבתה ואיפוס סיסמה נרשמים כאן עם שם מי שביצע. אי אפשר לערוך או למחוק את היומן.</p>
                     <div id="audit-list">טוען...</div>
+                </div>
+            </div>
+
+            <div class="tab-page" id="tab-page-notify">
+                <div class="card">
+                    <h2>📣 שליחת הודעה</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        ההודעה נשלחת <strong>רק למי שאישר קבלת התראות</strong>: כמייל, וגם כהתראה בטלפון או במחשב למי שהפעיל. בכל מייל יש קישור הסרה, והוא מסומן "פרסומת". SMS ווואטסאפ לא נשלחים.
+                        הודעות על מוצרים חדשים נשלחות לבד (אחת מרוכזת, לכל היותר אחת ל-12 שעות). כאן אפשר לשלוח הודעה ידנית מתי שרוצים.
+                    </p>
+                    <div id="nt-stats" style="background:#fffafa; border:1px solid var(--pink-light); border-radius:12px; padding:10px 12px; margin-bottom:12px; font-size:0.92em;">טוען...</div>
+                    <label>כותרת</label><input type="text" id="nt-title" maxlength="60" value="Bake & Party 🎉">
+                    <label style="margin-top:8px;">הודעה</label><textarea id="nt-body" maxlength="200" rows="3" placeholder="למשל: מבצע סוף שבוע על כל הבלונים!"></textarea>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
+                        <div style="flex:1; min-width:160px;"><label>מי יקבל</label>
+                            <select id="nt-aud"><option value="customers">לקוחות שאישרו התראות</option><option value="staff">צוות</option></select></div>
+                        <div style="flex:1; min-width:160px;"><label>לחיצה על ההודעה תפתח</label>
+                            <select id="nt-url"><option value="/">דף הבית</option><option value="/#new-section">חדש בחנות</option></select></div>
+                    </div>
+                    <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+                        <button class="btn ghost" type="button" onclick="sendPush(true)">שליחה אליי לבדיקה</button>
+                        <button class="btn" type="button" onclick="sendPush(false)">שליחה לכולם</button>
+                    </div>
+                    <p id="nt-msg" style="margin-top:10px; font-weight:600;"></p>
                 </div>
             </div>
 
@@ -612,6 +637,9 @@
             document.getElementById('tab-btn-pay').classList.toggle('active', name === 'pay');
             document.getElementById('tab-page-pay').classList.toggle('active', name === 'pay');
             if (name === 'pay') loadPayTab();
+            document.getElementById('tab-btn-notify').classList.toggle('active', name === 'notify');
+            document.getElementById('tab-page-notify').classList.toggle('active', name === 'notify');
+            if (name === 'notify') loadNotifyTab();
             
             document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
@@ -1162,6 +1190,32 @@
         setTimeout(() => { if (document.getElementById('deal-list')) loadDealProducts(); }, 2000);
 
         // ===================== טאב שיחות עם ה-AI =====================
+        // ===================== שליחת הודעות =====================
+        async function loadNotifyTab() {
+            const box = document.getElementById('nt-stats');
+            try {
+                const res = await fetch(`${API}/api/admin/push-stats`, { headers: authHeaders() });
+                const d = await res.json();
+                box.innerHTML = `לקוחות שאישרו התראות: <strong>${d.consenting_users}</strong> · מכשירים רשומים: <strong>${d.devices}</strong><br>` +
+                    `מייל: ${d.email_configured ? '<span style="color:var(--ok);">פעיל</span>' : '<span style="color:#d9534f;">לא מוגדר (חסרות הגדרות SMTP ב-Railway)</span>'} · ` +
+                    `התראות טלפון: ${d.configured ? '<span style="color:var(--ok);">פעיל</span>' : '<span style="color:#d9534f;">לא מוגדר (חסרים מפתחות VAPID)</span>'}`;
+            } catch (e) { box.textContent = 'שגיאה בטעינה'; }
+        }
+        async function sendPush(testOnly) {
+            const msg = document.getElementById('nt-msg'); msg.style.color = 'var(--muted)';
+            const payload = { title: document.getElementById('nt-title').value, body: document.getElementById('nt-body').value,
+                url: document.getElementById('nt-url').value, audience: document.getElementById('nt-aud').value, test_only: testOnly };
+            if (!testOnly && !confirm('לשלוח עכשיו את ההודעה לכל מי שאישר התראות? אי אפשר לבטל אחרי השליחה.')) return;
+            try {
+                const res = await fetch(`${API}/api/admin/push-send`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(payload) });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                msg.style.color = 'var(--ok)';
+                msg.textContent = (testOnly ? '✓ נשלחה אלייך לבדיקה' : '✓ נשלחה') + `: ${d.sent} מכשירים, ${d.emails} מיילים` + (testOnly ? '' : ' (המיילים נשלחים ברקע ועלולים לקחת כמה דקות)');
+                if (!testOnly) loadAuditLog();
+            } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
+        }
+
         // ===================== ייבוא מוצרים מוולט =====================
         async function wiRun(mode) {
             const f = document.getElementById('wi-file').files[0];
@@ -1272,7 +1326,7 @@
 
         // ===================== צוות ומשתמשים =====================
         const ROLE_LABELS = { admin: 'מנהל', employee: 'עובד', customer: 'לקוח' };
-        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת' };
+        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט' };
 
         async function loadStaffTab() {
             const list = document.getElementById('st-list');
