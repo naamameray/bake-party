@@ -1728,16 +1728,18 @@ def _consenting_customer_emails():
     rows = cur.fetchall(); cur.close(); conn.close()
     return rows
 
-def notify_customers(title, body, url="/", background_email=True):
-    """הודעה ללקוחות שאישרו: התראת טלפון + מייל. מחזיר (מכשירים, נמענים-במייל)."""
+def notify_customers(title, body, url="/", sync_limit=25):
+    """הודעה ללקוחות שאישרו: התראת טלפון + מייל. עד sync_limit נמענים שולחים מיד ומחזירים תוצאה אמיתית,
+    מעבר לזה ברקע. מחזיר (מכשירים, נמענים במייל, נשלחו בפועל או None אם ברקע)."""
     pushed = push_to_consenting_customers(title, body, url)
     recips = _consenting_customer_emails() if _email_configured() else []
+    sent = None
     if recips:
-        if background_email:
-            threading.Thread(target=_send_emails, args=(recips, title, body, url), daemon=True).start()
+        if len(recips) <= sync_limit:
+            sent = _send_emails(recips, title, body, url)
         else:
-            _send_emails(recips, title, body, url)
-    return pushed, len(recips)
+            threading.Thread(target=_send_emails, args=(recips, title, body, url), daemon=True).start()
+    return pushed, len(recips), sent
 
 WELCOME_TEXT = "תודה שהצטרפת! מעכשיו נעדכן אותך על מוצרים חדשים ועל חדשות מהחנות. אפשר לבטל בכל רגע."
 
@@ -1830,7 +1832,7 @@ def run_new_products_digest(now=None):
     title = "Bake & Party 🎉"
     body = ("עלה מוצר חדש בחנות! כדאי להציץ ב\"חדש בחנות\"" if count == 1
             else "איזה כיף, עלו מוצרים חדשים! כדאי להציץ ב\"חדש בחנות\"")
-    sent, emails = notify_customers(title, body, "/#new-section")
+    sent, emails, _mailed = notify_customers(title, body, "/#new-section")
     conn = get_conn(); cur = conn.cursor()
     _setting_set(cur, "push_new_cursor", newest.isoformat())
     _setting_set(cur, "push_new_last_sent", datetime.now(timezone.utc).isoformat())
@@ -1968,12 +1970,13 @@ def admin_push_send(b: PushSendBody, sess: dict = Depends(require_admin)):
         raise HTTPException(status_code=429, detail="נשלחה הודעה לפני פחות מ-5 דקות. כדי לא להציף, כדאי להמתין.")
     _setting_set(cur, "push_manual_last", datetime.now(timezone.utc).isoformat())
     conn.commit(); cur.close(); conn.close()
+    mailed = None
     if b.audience == "customers":
-        sent, emails = notify_customers(title, body, b.url)
+        sent, emails, mailed = notify_customers(title, body, b.url)
     else:
         sent, emails = push_to_staff(title, body, b.url), 0
-    _audit(sess, "push_send", "push", None, {"audience": b.audience, "title": title, "sent": sent, "emails": emails})
-    return {"sent": sent, "emails": emails, "test": False}
+    _audit(sess, "push_send", "push", None, {"audience": b.audience, "title": title, "sent": sent, "emails": emails, "emails_sent": mailed})
+    return {"sent": sent, "emails": emails, "emails_sent": mailed, "email_error": _LAST_EMAIL_ERROR if (emails and mailed is not None and mailed < emails) else None, "test": False}
 
 # --- קבצי PWA: אפליקציה מותקנת + התראות ---
 @app.get("/sw.js")
