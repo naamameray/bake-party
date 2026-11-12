@@ -217,6 +217,11 @@
         .product-card { background: white; border: 2px solid var(--pink-light); border-radius: 20px; padding: 15px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); display: flex; flex-direction: column; justify-content: space-between; transition: box-shadow 0.2s; cursor: pointer; }
         .product-card:hover { box-shadow: 0 8px 18px var(--shadow); transform: translateY(-3px); }
         .product-img { width: 100%; height: 160px; object-fit: contain; margin-bottom: 10px; }
+        #new-section { margin: 28px 0 10px; }
+        #new-section h3 { color: var(--pink-dark); margin: 0 0 12px; font-size: 1.3em; }
+        #new-products { display: flex; gap: 14px; overflow-x: auto; padding: 4px 2px 12px; scroll-snap-type: x proximity; }
+        #new-products .product-card { flex: 0 0 170px; scroll-snap-align: start; }
+        #new-products .new-ribbon { position: absolute; top: 8px; right: 8px; background: var(--pink-main); color: #fff; font-size: 0.72em; font-weight: bold; padding: 3px 9px; border-radius: 10px; z-index: 2; }
         .product-card h3 { font-size: 1.1em; margin: 10px 0; min-height: 40px; }
         .price { font-size: 1.4em; color: var(--pink-dark); font-weight: bold; margin: 10px 0; }
         .state-msg { text-align: center; color: var(--muted); padding: 40px 0; font-size: 1.1em; grid-column: 1 / -1; }
@@ -429,6 +434,11 @@
         
         <div id="categories-container" class="categories-container"></div>
 
+        <section id="new-section" style="display:none;">
+            <h3>חדש בחנות ✨</h3>
+            <div id="new-products"></div>
+        </section>
+
         <section id="features-section">
             <div class="features-grid">
                 <div class="feature-card">
@@ -574,9 +584,9 @@
                 </div>
 
                 <label>קטגוריה ראשונה</label>
-                <select id="add-p-cat-1"><option value="">ללא קטגוריה</option></select>
+                <select id="add-p-cat-1" class="cat-combo"><option value="">ללא קטגוריה</option></select>
                 <label>קטגוריה שנייה (אופציונלי)</label>
-                <select id="add-p-cat-2"><option value="">ללא</option></select>
+                <select id="add-p-cat-2" class="cat-combo"><option value="">ללא</option></select>
                 <label>תמונה (העלאת קובץ)</label>
                 <input type="file" id="add-p-file" accept="image/*">
                 <div style="display:flex; gap:10px; margin-top:5px;">
@@ -1086,7 +1096,7 @@
                     document.getElementById('add-product-modal').classList.remove('open');
                     
                     const updatedProds = await fetch(`${API}/api/products?_t=${new Date().getTime()}`).then(r => r.json());
-                    allProducts = updatedProds;
+                    allProducts = updatedProds; newProductsCache = null;
                 }, 1500);
 
             } catch (err) {
@@ -1098,7 +1108,7 @@
 
         // --- הצגת מוצרים במבצע ---
         window.openSales = function() {
-            document.getElementById('about-section').style.display = 'none';
+            document.getElementById('about-section').style.display = 'none'; document.getElementById('new-section').style.display = 'none';
             document.getElementById('features-section').style.display = 'none';
             document.getElementById('faq-section').style.display = 'none';
             fadeOutContent();
@@ -1223,6 +1233,38 @@
             });
         }
 
+        // --- שורת "חדש בחנות" בדף הבית ---
+        let newProductsCache = null;
+        async function showNewProducts() {
+            const sec = document.getElementById('new-section');
+            const box = document.getElementById('new-products');
+            try {
+                if (newProductsCache === null) {
+                    const res = await fetch(`${API}/api/products/new?_t=${new Date().getTime()}`);
+                    newProductsCache = res.ok ? await res.json() : [];
+                }
+            } catch { newProductsCache = []; }
+            if (view !== 'mains') return;
+            if (!newProductsCache.length) { sec.style.display = 'none'; return; }
+            box.innerHTML = '';
+            newProductsCache.forEach(p => {
+                const imgSrc = (p.image && p.image.startsWith('/')) ? API + p.image : (p.image || PLACEHOLDER);
+                const card = document.createElement('article');
+                card.className = 'product-card';
+                const price = p.in_stock ? `<div class="price">₪${p.price.toFixed(2)}</div>`
+                    : `<div class="price" style="color:#aaa;">₪${p.price.toFixed(2)} <span style="font-size:0.7em;">(אזל)</span></div>`;
+                card.innerHTML = `<span class="new-ribbon">חדש</span>
+                    <div class="product-clickable" onclick="openProductDetail(${p.id})">
+                        <img src="${imgSrc}" alt="" class="product-img" onerror="this.src='${PLACEHOLDER}'">
+                        <h3 class="p-title"></h3>
+                        ${price}
+                    </div>`;
+                card.querySelector('.p-title').textContent = p.name;
+                box.appendChild(card);
+            });
+            sec.style.display = 'block';
+        }
+
         function goHome() { loadMainCategories(); }
 
         function loadMainCategories() {
@@ -1234,6 +1276,7 @@
                 document.getElementById('products-container').innerHTML = '';
                 document.getElementById('categories-container').style.display = 'grid';
                 document.getElementById('about-section').style.display = 'block';
+                showNewProducts();
                 document.getElementById('features-section').style.display = 'block';
                 document.getElementById('faq-section').style.display = 'block';
                 renderCategoryCircles(allCategories, true, null);
@@ -1244,7 +1287,7 @@
 
         function openMain(main) {
             currentMain = main; currentSub = null;
-            document.getElementById('about-section').style.display = 'none';
+            document.getElementById('about-section').style.display = 'none'; document.getElementById('new-section').style.display = 'none';
             document.getElementById('features-section').style.display = 'none';
             document.getElementById('faq-section').style.display = 'none';
             fadeOutContent();
@@ -1273,7 +1316,7 @@
 
         function openSub(sub) {
             currentSub = sub;
-            document.getElementById('about-section').style.display = 'none';
+            document.getElementById('about-section').style.display = 'none'; document.getElementById('new-section').style.display = 'none';
             document.getElementById('features-section').style.display = 'none';
             document.getElementById('faq-section').style.display = 'none';
             const prods = allProducts.filter(p => p.category_id === sub.id || (p.category_ids && p.category_ids.includes(sub.id)));
@@ -1326,7 +1369,7 @@
         }
 
         function showProducts(prods, title, crumbs) {
-            document.getElementById('about-section').style.display = 'none';
+            document.getElementById('about-section').style.display = 'none'; document.getElementById('new-section').style.display = 'none';
             document.getElementById('features-section').style.display = 'none';
             document.getElementById('faq-section').style.display = 'none';
             fadeOutContent();
@@ -1405,8 +1448,8 @@
                         <input type="hidden" id="edit-detail-sale" value="${p.is_on_sale ? '1' : ''}">
                         <input type="hidden" id="edit-detail-sale-label" value="${p.sale_label || ''}">
                     </li>
-                    <li><span style="font-size:0.85em;">קטגוריה 1</span><select id="edit-detail-cat1" class="edit-input-sm" style="width:65%;">${catOptions}</select></li>
-                    <li><span style="font-size:0.85em;">קטגוריה 2</span><select id="edit-detail-cat2" class="edit-input-sm" style="width:65%;">${catOptions}</select></li>
+                    <li><span style="font-size:0.85em;">קטגוריה 1</span><select id="edit-detail-cat1" class="edit-input-sm cat-combo" style="width:65%;">${catOptions}</select></li>
+                    <li><span style="font-size:0.85em;">קטגוריה 2</span><select id="edit-detail-cat2" class="edit-input-sm cat-combo" style="width:65%;">${catOptions}</select></li>
                     <li><span>משקל (גרם)</span><input type="number" id="edit-detail-weight" value="${p.weight_grams || ''}" class="edit-input-sm"></li>
                     <li><span>יחידות</span><input type="number" id="edit-detail-units" value="${p.units_per_package || ''}" class="edit-input-sm"></li>
                     <li><span style="font-size:0.85em;">הערות</span><input type="text" id="edit-detail-notes" value="${p.notes || ''}" class="edit-input-sm" style="width:65%;" placeholder="אופציונלי"></li>
@@ -1520,7 +1563,7 @@
                 
                 closeDetail();
                 const updatedProds = await fetch(`${API}/api/products?_t=${new Date().getTime()}`).then(r => r.json());
-                allProducts = updatedProds;
+                allProducts = updatedProds; newProductsCache = null;
                 
                 if (currentFilteredProducts) {
                     currentFilteredProducts = currentFilteredProducts.map(item => allProducts.find(p => p.id === item.id) || item);
@@ -1674,6 +1717,106 @@
             document.getElementById("edit-detail-sale").value = label ? "1" : "";
             document.getElementById("edit-detail-sale-label").value = label;
         };
+</script>
+<style>
+    .cc-wrap { position: relative; display: block; }
+    .cc-input { width: 100% !important; box-sizing: border-box; }
+    .cc-list { position: fixed; z-index: 2147483000; background: #fff; border: 2px solid var(--pink-main); border-radius: 10px;
+        max-height: 230px; overflow-y: auto; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.18); direction: rtl; text-align: right; }
+    .cc-item { padding: 8px 12px; cursor: pointer; font-size: 0.92em; color: var(--text-color); }
+    .cc-item:hover, .cc-item.active { background: var(--pink-light); }
+    .cc-item.cc-none { color: var(--muted); border-bottom: 1px solid var(--pink-light); }
+    .cc-empty { padding: 8px 12px; color: var(--muted); font-size: 0.9em; }
+</style>
+<script>
+/* בחירת קטגוריה בהקלדה: כותבים את ההתחלה של השם, והקטגוריות שמתחילות כך קופצות למעלה */
+(function () {
+    function selLabel(sel) { const o = sel.options[sel.selectedIndex]; return (o && o.value) ? o.text : ''; }
+    function subName(t) { const i = t.lastIndexOf('>'); return (i >= 0 ? t.slice(i + 1) : t).trim(); }
+
+    function enhance(sel) {
+        if (sel._cc) return; sel._cc = true;
+        const wrap = document.createElement('div'); wrap.className = 'cc-wrap';
+        if (sel.style.width) wrap.style.width = sel.style.width;
+        const inp = document.createElement('input');
+        inp.type = 'text'; inp.autocomplete = 'off';
+        inp.className = (sel.className || '').replace('cat-combo', '') + ' cc-input';
+        inp.placeholder = 'הקלידי התחלה של שם קטגוריה';
+        const list = document.createElement('div'); list.className = 'cc-list';
+        sel.parentNode.insertBefore(wrap, sel);
+        wrap.appendChild(inp); wrap.appendChild(sel); document.body.appendChild(list);
+        sel.style.display = 'none';
+        let items = [], active = -1;
+
+        function options() { return Array.from(sel.options).filter(o => o.value); }
+        function build() {
+            const q = inp.value.trim().toLowerCase();
+            let opts = options();
+            if (q && q !== selLabel(sel).toLowerCase()) {
+                const starts = [], rest = [];
+                opts.forEach(o => {
+                    const full = o.text.toLowerCase(), sub = subName(full);
+                    if (sub.startsWith(q) || full.startsWith(q)) starts.push(o);
+                    else if (full.includes(q)) rest.push(o);
+                });
+                opts = starts.concat(rest);
+            }
+            list.innerHTML = ''; items = []; active = -1;
+            const none = document.createElement('div');
+            none.className = 'cc-item cc-none'; none.textContent = '— ללא קטגוריה —';
+            none.onmousedown = e => { e.preventDefault(); pick(''); };
+            list.appendChild(none);
+            if (!opts.length) { const e = document.createElement('div'); e.className = 'cc-empty'; e.textContent = 'לא נמצאה קטגוריה'; list.appendChild(e); }
+            opts.slice(0, 60).forEach(o => {
+                const d = document.createElement('div'); d.className = 'cc-item'; d.textContent = o.text;
+                d.onmousedown = e => { e.preventDefault(); pick(o.value); };
+                list.appendChild(d); items.push({ el: d, value: o.value });
+            });
+        }
+        function place() {
+            const r = inp.getBoundingClientRect();
+            list.style.left = r.left + 'px'; list.style.width = r.width + 'px';
+            const below = window.innerHeight - r.bottom, h = Math.min(230, list.scrollHeight);
+            if (below < h + 10 && r.top > below) { list.style.top = 'auto'; list.style.bottom = (window.innerHeight - r.top) + 'px'; }
+            else { list.style.bottom = 'auto'; list.style.top = r.bottom + 'px'; }
+        }
+        function show() { build(); list.style.display = 'block'; place(); }
+        function hide() { list.style.display = 'none'; }
+        function pick(v) {
+            sel.value = v; sel.dispatchEvent(new Event('change', { bubbles: true }));
+            inp.value = selLabel(sel); hide();
+        }
+        function mark(i) {
+            items.forEach(x => x.el.classList.remove('active'));
+            active = i; if (items[i]) { items[i].el.classList.add('active'); items[i].el.scrollIntoView({ block: 'nearest' }); }
+        }
+        inp.addEventListener('focus', () => { inp.select(); show(); });
+        inp.addEventListener('input', show);
+        inp.addEventListener('keydown', e => {
+            if (e.key === 'ArrowDown') { e.preventDefault(); mark(Math.min(active + 1, items.length - 1)); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); mark(Math.max(active - 1, 0)); }
+            else if (e.key === 'Enter') { e.preventDefault(); const t = items[active >= 0 ? active : 0]; if (t) pick(t.value); }
+            else if (e.key === 'Escape') { hide(); inp.value = selLabel(sel); }
+        });
+        inp.addEventListener('blur', () => {
+            hide();
+            if (!inp.value.trim()) { if (sel.value) { sel.value = ''; sel.dispatchEvent(new Event('change', { bubbles: true })); } }
+            else inp.value = selLabel(sel);
+        });
+        window.addEventListener('scroll', () => { if (list.style.display === 'block') place(); }, true);
+        inp.value = selLabel(sel);
+        sel._ccSync = () => { if (!sel.isConnected) { list.remove(); return; } if (document.activeElement !== inp && inp.value !== selLabel(sel)) inp.value = selLabel(sel); };
+        sel._ccList = list; sel._ccWrap = wrap;
+    }
+
+    function scan(root) {
+        (root.querySelectorAll ? root.querySelectorAll('select.cat-combo') : []).forEach(enhance);
+        if (root.matches && root.matches('select.cat-combo')) enhance(root);
+    }
+    new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.nodeType === 1) scan(n); }))).observe(document.body, { childList: true, subtree: true });
+    scan(document);
+    setInterval(() => document.querySelectorAll('select.cat-combo').forEach(s => { if (s._ccSync) s._ccSync(); }), 400);
+})();
 </script>
 </body>
 </html>

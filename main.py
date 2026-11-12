@@ -50,6 +50,10 @@ try:
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS is_on_sale BOOLEAN DEFAULT FALSE;")
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(10,2);")
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS sale_label TEXT;")
+    # תאריך הוספה, לשורת "חדש בחנות". בלי ברירת מחדל בעת היצירה, כדי שמוצרים קיימים
+    # לא יסומנו כולם כחדשים. רק מוצרים שנוספים מעכשיו מקבלים תאריך.
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP;")
+    init_cur.execute("ALTER TABLE Products ALTER COLUMN created_at SET DEFAULT NOW();")
 
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS weekly_hours (
@@ -593,6 +597,27 @@ def get_products():
     data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
     return data
 
+@app.get("/api/products/new")
+def get_new_products(limit: int = 8):
+    """מוצרים שנוספו לאחרונה (45 הימים האחרונים), לשורת "חדש בחנות" בדף הבית."""
+    limit = max(1, min(limit, 20))
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url,
+               p.category_id, p.weight_grams, p.units_per_package, p.notes,
+               (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
+               p.is_on_sale, p.sale_price, p.sale_label
+        FROM Products p
+        LEFT JOIN Categories c ON p.category_id = c.id
+        WHERE p.category_id IS NOT NULL
+          AND p.created_at IS NOT NULL
+          AND p.created_at > NOW() - INTERVAL '45 days'
+        ORDER BY p.created_at DESC, p.id DESC
+        LIMIT %s;
+    """, (limit,))
+    data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
+    return data
+
 @app.get("/api/categories/{category_id}/products")
 def get_category_products(category_id: int):
     conn = get_conn(); cur = conn.cursor()
@@ -995,28 +1020,6 @@ def get_products_on_sale():
     """)
     data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
     return data
-
-# --- תיקון מחירים חד-פעמי (הסרת תוספת 30% של וולט) ---
-@app.post("/api/admin/fix-prices")
-def admin_fix_prices(sess: dict = Depends(require_admin)):
-    """
-    מחלק את כל המחירים ב-1.3 ומעגל ל-0.10 הקרוב (עדיפות לעיגול למעלה).
-    רץ פעם אחת בלבד. מחזיר כמה מוצרים עודכנו.
-    """
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, price FROM Products;")
-    products = cur.fetchall()
-    updated = 0
-    for pid, price in products:
-        real_price = float(price) / 1.3
-        # עיגול ל-0.10 הקרוב, עם עדיפות למעלה
-        import math
-        rounded = math.ceil(real_price * 10) / 10  # ceil מעגל תמיד למעלה
-        cur.execute("UPDATE Products SET price = %s WHERE id = %s;", (rounded, pid))
-        updated += 1
-    conn.commit(); cur.close(); conn.close()
-    return {"ok": True, "updated": updated, "message": f"עודכנו {updated} מחירים (חולקו ב-1.3 ועוגלו למעלה)"}
-
 
 # --- שיוך מהיר של מבצע מוכן ---
 class QuickDealBody(BaseModel):

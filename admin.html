@@ -150,7 +150,6 @@
         <div class="tab-bar">
             <button class="tab-btn active" type="button" id="tab-btn-hours" onclick="switchTab('hours')">🕒 שעות ומשלוחים</button>
             <button class="tab-btn" type="button" id="tab-btn-products" onclick="switchTab('products')">🏷️ מוצרים</button>
-            <button class="tab-btn" type="button" id="tab-btn-categories" onclick="switchTab('categories')">📁 ניהול קטגוריות</button>
             <button class="tab-btn" type="button" id="tab-btn-faq" onclick="switchTab('faq')">💬 שאלות ותשובות</button>
             <button class="tab-btn" type="button" id="tab-btn-ailog" onclick="switchTab('ailog')">🤖 שיחות עם ה-AI</button>
         </div>
@@ -205,14 +204,6 @@
 
             <div class="tab-page" id="tab-page-products">
 
-                <!-- כלי תיקון מחירים -->
-                <div class="card" id="price-fix-card">
-                    <h2>🔧 תיקון מחירים (חד-פעמי)</h2>
-                    <p style="color:var(--muted); font-size:0.9em;">מחלק את כל המחירים ב-1.3 (הסרת תוספת וולט) ומעגל למעלה ל-0.10 הקרוב. <strong>שימי לב:</strong> פעולה זו משפיעה על כל המוצרים!</p>
-                    <button class="btn" style="max-width:300px;" onclick="fixPrices()">תקני מחירים עכשיו</button>
-                    <p id="price-fix-msg" style="margin-top:8px; font-weight:bold;"></p>
-                </div>
-
                 <!-- כלי השוואת מלאי מול וולט -->
                 <div class="card">
                     <h2>🔍 השוואת מלאי מול וולט</h2>
@@ -235,6 +226,15 @@
                         ולשמור בלחיצה אחת. מוצר שמסומן באדום הוא מוצר <strong>ללא קטגוריה בכלל</strong> — הוא לא
                         מוצג באתר הראשי בכלל עד שתשייכי לו קטגוריה.
                     </p>
+                    <div style="margin-bottom:14px;">
+                        <button class="btn ghost" type="button" id="add-cat-toggle" onclick="toggleAddCat()">+ קטגוריה</button>
+                        <div id="add-cat-form" style="display:none; margin-top:10px; background:var(--cream); border:2px solid var(--pink-light); border-radius:12px; padding:12px; gap:10px; flex-wrap:wrap; align-items:center;">
+                            <input type="text" id="add-cat-name" placeholder="שם הקטגוריה החדשה" style="flex:1; min-width:160px; width:auto;">
+                            <select id="add-cat-parent" style="flex:1; min-width:160px; width:auto;"></select>
+                            <button class="btn" type="button" onclick="submitAddCat()" style="width:auto;">הוספה</button>
+                            <span id="add-cat-msg" class="msg" style="margin:0;"></span>
+                        </div>
+                    </div>
                     <div class="prod-toolbar">
                         <input type="text" id="prod-search" placeholder="חיפוש מוצר לפי שם..." oninput="clearTimeout(window._searchTimer); window._searchTimer=setTimeout(()=>{prodOffset=0; loadProductPage()}, 400)">
                         <span class="prod-filter-chip active" id="chip-all" onclick="setProdFilter('all')">הכל</span>
@@ -245,17 +245,6 @@
                         <span></span><span>מוצר</span><span>קטגוריה 1</span><span>קטגוריה 2</span><span></span>
                     </div>
                     <div class="prod-table-wrap" id="prod-list">טוען מוצרים...</div>
-                </div>
-            </div>
-
-            <div class="tab-page" id="tab-page-categories">
-                <div class="card">
-                    <h2>ניהול קטגוריות</h2>
-                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
-                        כאן תוכלי להוסיף, לערוך או למחוק קטגוריות. מחיקת קטגוריה <strong>לא</strong> תמחק את המוצרים שבתוכה, אלא תעביר אותם למצב "ללא קטגוריה" כדי שתוכלי לשייך אותם מחדש.
-                    </p>
-                    <button class="btn" style="margin-bottom: 15px;" onclick="addCategoryPrompt(null)">+ קטגוריה ראשית חדשה</button>
-                    <div id="cat-tree-list">טוען קטגוריות...</div>
                 </div>
             </div>
 
@@ -459,115 +448,66 @@
 
         // --- טאבים ---
         let productsLoaded = false;
-        let categoriesLoaded = false;
         window.switchTab = function(name) {
             document.getElementById('tab-btn-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-btn-products').classList.toggle('active', name === 'products');
-            document.getElementById('tab-btn-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-btn-faq').classList.toggle('active', name === 'faq');
             document.getElementById('tab-btn-ailog').classList.toggle('active', name === 'ailog');
             
             document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
-            document.getElementById('tab-page-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-page-faq').classList.toggle('active', name === 'faq');
             document.getElementById('tab-page-ailog').classList.toggle('active', name === 'ailog');
             
             if (name === 'products' && !productsLoaded) loadProductsTab();
-            if (name === 'categories' && !categoriesLoaded) loadCategoriesTab();
             if (name === 'faq') loadFaqTab();
             if (name === 'ailog') loadAiLogTab();
         };
 
-        // --- טאב ניהול קטגוריות ---
-        let currentTree = [];
-        async function loadCategoriesTab() {
-            document.getElementById('cat-tree-list').innerHTML = 'טוען...';
+        // --- הוספת קטגוריה מהירה (כפתור, בלי דף נפרד) ---
+        window.toggleAddCat = async function() {
+            const form = document.getElementById('add-cat-form');
+            const open = form.style.display === 'none';
+            form.style.display = open ? 'flex' : 'none';
+            if (!open) return;
+            const sel = document.getElementById('add-cat-parent');
+            sel.innerHTML = '<option value="">טוען...</option>';
             try {
-                const res = await fetch(`${API}/api/categories/tree`);
-                currentTree = await res.json();
-                categoriesLoaded = true;
-                renderAdminTree();
-            } catch(e) { document.getElementById('cat-tree-list').innerHTML = 'שגיאה בטעינת קטגוריות.'; }
-        }
+                const res = await fetch(`${API}/api/categories/tree?_t=${Date.now()}`);
+                const tree = await res.json();
+                sel.innerHTML = '';
+                tree.forEach(m => {
+                    const o = document.createElement('option');
+                    o.value = m.id; o.textContent = 'תחת: ' + m.name;
+                    sel.appendChild(o);
+                });
+                const mainOpt = document.createElement('option');
+                mainOpt.value = ''; mainOpt.textContent = 'קטגוריה ראשית חדשה';
+                sel.appendChild(mainOpt);
+            } catch { sel.innerHTML = '<option value="">שגיאה בטעינה</option>'; }
+            document.getElementById('add-cat-name').focus();
+        };
 
-        function renderAdminTree() {
-            const cont = document.getElementById('cat-tree-list');
-            cont.innerHTML = '';
-            currentTree.forEach(m => {
-                const d = document.createElement('div');
-                d.className = 'admin-cat-main';
-                
-                let subsHtml = '';
-                if(m.subcategories && m.subcategories.length > 0) {
-                    m.subcategories.forEach(s => {
-                        subsHtml += `
-                            <div class="admin-subcat-row">
-                                <span>↳ ${s.name} <small style="color:#aaa;">(${s.product_count} מוצרים)</small></span>
-                                <div class="admin-cat-actions">
-                                    <button class="btn ghost" style="padding:4px 8px; font-size:0.8em;" onclick="editCategoryPrompt(${s.id}, '${s.name.replace(/'/g, "\\'")}')">ערוך</button>
-                                    <button class="btn danger" style="padding:4px 8px; font-size:0.8em;" onclick="deleteCategory(${s.id}, '${s.name.replace(/'/g, "\\'")}')">מחק</button>
-                                </div>
-                            </div>
-                        `;
-                    });
-                }
-
-                d.innerHTML = `
-                    <div class="admin-cat-header">
-                        <span>📁 ${m.name} <small style="color:#aaa;font-weight:normal;">(${m.product_count} מוצרים תחת הראשי)</small></span>
-                        <div class="admin-cat-actions">
-                            <button class="btn ghost" style="padding:4px 8px; font-size:0.8em;" onclick="editCategoryPrompt(${m.id}, '${m.name.replace(/'/g, "\\'")}')">ערוך שם</button>
-                            <button class="btn danger" style="padding:4px 8px; font-size:0.8em;" onclick="deleteCategory(${m.id}, '${m.name.replace(/'/g, "\\'")}')">מחק</button>
-                        </div>
-                    </div>
-                    <div class="admin-subcat-list">
-                        ${subsHtml}
-                        <button class="btn ghost" style="padding:4px 8px; font-size:0.85em; width:max-content; margin-top:5px;" onclick="addCategoryPrompt(${m.id})">+ הוסף תת-קטגוריה</button>
-                    </div>
-                `;
-                cont.appendChild(d);
-            });
-        }
-
-        window.addCategoryPrompt = async function(parentId) {
-            const title = parentId ? 'הקלידי שם לתת-הקטגוריה החדשה:' : 'הקלידי שם לקטגוריה הראשית החדשה:';
-            const name = prompt(title);
-            if(!name || !name.trim()) return;
+        window.submitAddCat = async function() {
+            const nameEl = document.getElementById('add-cat-name');
+            const name = nameEl.value.trim();
+            const parent = document.getElementById('add-cat-parent').value;
+            const msg = document.getElementById('add-cat-msg');
+            if (!name) { msg.style.color = '#d9534f'; msg.textContent = 'צריך שם לקטגוריה.'; return; }
+            msg.style.color = 'var(--muted)'; msg.textContent = 'מוסיף...';
             try {
-                await fetch(`${API}/api/admin/categories`, {
+                const res = await fetch(`${API}/api/admin/categories`, {
                     method: 'POST', headers: authHeaders(),
-                    body: JSON.stringify({ name: name.trim(), parent_id: parentId })
+                    body: JSON.stringify({ name, parent_id: parent ? parseInt(parent) : null })
                 });
-                loadCategoriesTab();
-                if(productsLoaded) loadProductsTab(); // רענון רשימות הבחירה בטאב מוצרים
-            } catch(e) { alert('שגיאה בהוספת קטגוריה'); }
-        }
-
-        window.editCategoryPrompt = async function(id, oldName) {
-            const newName = prompt('שני את שם הקטגוריה:', oldName);
-            if(!newName || !newName.trim() || newName.trim() === oldName) return;
-            try {
-                await fetch(`${API}/api/admin/categories/${id}`, {
-                    method: 'PATCH', headers: authHeaders(),
-                    body: JSON.stringify({ name: newName.trim() })
-                });
-                loadCategoriesTab();
-                if(productsLoaded) loadProductsTab();
-            } catch(e) { alert('שגיאה בעדכון קטגוריה'); }
-        }
-
-        window.deleteCategory = async function(id, name) {
-            if(!confirm(`האם את בטוחה שברצונך למחוק את הקטגוריה "${name}"?\nהמוצרים שבתוכה לא יימחקו, אלא יסומנו כ"ללא קטגוריה".`)) return;
-            try {
-                await fetch(`${API}/api/admin/categories/${id}`, {
-                    method: 'DELETE', headers: authHeaders()
-                });
-                loadCategoriesTab();
-                if(productsLoaded) loadProductsTab();
-            } catch(e) { alert('שגיאה במחיקת קטגוריה'); }
-        }
-
+                if (!res.ok) throw new Error();
+                nameEl.value = '';
+                msg.style.color = 'var(--ok)'; msg.textContent = '✓ נוספה';
+                allSubcatsFlat = [];            // יטען מחדש, כדי שהקטגוריה תופיע ברשימות הבחירה
+                if (productsLoaded) loadProductsTab();
+                setTimeout(() => msg.textContent = '', 2500);
+            } catch { msg.style.color = '#d9534f'; msg.textContent = 'שגיאה בהוספה.'; }
+        };
 
         // --- טאב מוצרים ושיוך ל-2 קטגוריות ---
         const PLACEHOLDER_IMG = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60"><rect width="60" height="60" fill="%23FFD1DC"/><text x="50%" y="55%" font-size="24" text-anchor="middle" dominant-baseline="middle" fill="%23E05276">🧁</text></svg>');
@@ -654,8 +594,8 @@
                         <div class="prod-name">${p.name}</div>
                         ${noCat ? '<span class="prod-warn">⚠️ ללא קטגוריה — לא מוצג באתר</span>' : ''}
                     </div>
-                    <select class="prod-cat-select cat1-select">${catOptionsHtml(cat1)}</select>
-                    <select class="prod-cat-select cat2-select">${catOptionsHtml(cat2)}</select>
+                    <select class="prod-cat-select cat-combo cat1-select">${catOptionsHtml(cat1)}</select>
+                    <select class="prod-cat-select cat-combo cat2-select">${catOptionsHtml(cat2)}</select>
                     <button class="prod-save-btn" type="button">שמור</button>
                 `;
                 const cat1Sel = row.querySelector('.cat1-select');
@@ -694,22 +634,6 @@
 
         if (token()) showAdmin(); else showLogin();
     
-        // --- תיקון מחירים ---
-        async function fixPrices() {
-            if (!confirm('זה יחלק את כל המחירים ב-1.3 ויעגל למעלה. בטוחה?')) return;
-            const msg = document.getElementById('price-fix-msg');
-            msg.style.color = 'var(--muted)'; msg.textContent = 'מעדכן מחירים...';
-            try {
-                const res = await fetch(`${API}/api/admin/fix-prices`, { method: 'POST', headers: authHeaders() });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'שגיאה');
-                msg.style.color = '#3B9E6A'; msg.textContent = `✓ ${data.message}`;
-                document.getElementById('price-fix-card').style.opacity = '0.5';
-            } catch (e) {
-                msg.style.color = '#E05276'; msg.textContent = 'שגיאה: ' + e.message;
-            }
-        }
-
         // --- כלי השוואת מלאי מול וולט ---
         async function runWoltStockCheck() {
             const fileInput = document.getElementById('wolt-check-file');
@@ -817,7 +741,7 @@
                         </div>
                     </div>
                     <label style="font-size:0.85em;">קטגוריה (חובה כדי שהמוצר יוצג באתר)</label>
-                    <select id="wcn-cat-${idx}" class="prod-cat-select">${catOptionsHtml('')}</select>
+                    <select id="wcn-cat-${idx}" class="prod-cat-select cat-combo">${catOptionsHtml('')}</select>
                     <label style="font-size:0.85em;">
                         <input type="checkbox" id="wcn-stock-${idx}" ${item.available ? 'checked' : ''} style="width:auto; display:inline-block;">
                         במלאי אצלנו
@@ -1137,5 +1061,105 @@
         };
 
     </script>
+<style>
+    .cc-wrap { position: relative; display: block; }
+    .cc-input { width: 100% !important; box-sizing: border-box; }
+    .cc-list { position: fixed; z-index: 2147483000; background: #fff; border: 2px solid var(--pink-main); border-radius: 10px;
+        max-height: 230px; overflow-y: auto; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.18); direction: rtl; text-align: right; }
+    .cc-item { padding: 8px 12px; cursor: pointer; font-size: 0.92em; color: var(--text-color); }
+    .cc-item:hover, .cc-item.active { background: var(--pink-light); }
+    .cc-item.cc-none { color: var(--muted); border-bottom: 1px solid var(--pink-light); }
+    .cc-empty { padding: 8px 12px; color: var(--muted); font-size: 0.9em; }
+</style>
+<script>
+/* בחירת קטגוריה בהקלדה: כותבים את ההתחלה של השם, והקטגוריות שמתחילות כך קופצות למעלה */
+(function () {
+    function selLabel(sel) { const o = sel.options[sel.selectedIndex]; return (o && o.value) ? o.text : ''; }
+    function subName(t) { const i = t.lastIndexOf('>'); return (i >= 0 ? t.slice(i + 1) : t).trim(); }
+
+    function enhance(sel) {
+        if (sel._cc) return; sel._cc = true;
+        const wrap = document.createElement('div'); wrap.className = 'cc-wrap';
+        if (sel.style.width) wrap.style.width = sel.style.width;
+        const inp = document.createElement('input');
+        inp.type = 'text'; inp.autocomplete = 'off';
+        inp.className = (sel.className || '').replace('cat-combo', '') + ' cc-input';
+        inp.placeholder = 'הקלידי התחלה של שם קטגוריה';
+        const list = document.createElement('div'); list.className = 'cc-list';
+        sel.parentNode.insertBefore(wrap, sel);
+        wrap.appendChild(inp); wrap.appendChild(sel); document.body.appendChild(list);
+        sel.style.display = 'none';
+        let items = [], active = -1;
+
+        function options() { return Array.from(sel.options).filter(o => o.value); }
+        function build() {
+            const q = inp.value.trim().toLowerCase();
+            let opts = options();
+            if (q && q !== selLabel(sel).toLowerCase()) {
+                const starts = [], rest = [];
+                opts.forEach(o => {
+                    const full = o.text.toLowerCase(), sub = subName(full);
+                    if (sub.startsWith(q) || full.startsWith(q)) starts.push(o);
+                    else if (full.includes(q)) rest.push(o);
+                });
+                opts = starts.concat(rest);
+            }
+            list.innerHTML = ''; items = []; active = -1;
+            const none = document.createElement('div');
+            none.className = 'cc-item cc-none'; none.textContent = '— ללא קטגוריה —';
+            none.onmousedown = e => { e.preventDefault(); pick(''); };
+            list.appendChild(none);
+            if (!opts.length) { const e = document.createElement('div'); e.className = 'cc-empty'; e.textContent = 'לא נמצאה קטגוריה'; list.appendChild(e); }
+            opts.slice(0, 60).forEach(o => {
+                const d = document.createElement('div'); d.className = 'cc-item'; d.textContent = o.text;
+                d.onmousedown = e => { e.preventDefault(); pick(o.value); };
+                list.appendChild(d); items.push({ el: d, value: o.value });
+            });
+        }
+        function place() {
+            const r = inp.getBoundingClientRect();
+            list.style.left = r.left + 'px'; list.style.width = r.width + 'px';
+            const below = window.innerHeight - r.bottom, h = Math.min(230, list.scrollHeight);
+            if (below < h + 10 && r.top > below) { list.style.top = 'auto'; list.style.bottom = (window.innerHeight - r.top) + 'px'; }
+            else { list.style.bottom = 'auto'; list.style.top = r.bottom + 'px'; }
+        }
+        function show() { build(); list.style.display = 'block'; place(); }
+        function hide() { list.style.display = 'none'; }
+        function pick(v) {
+            sel.value = v; sel.dispatchEvent(new Event('change', { bubbles: true }));
+            inp.value = selLabel(sel); hide();
+        }
+        function mark(i) {
+            items.forEach(x => x.el.classList.remove('active'));
+            active = i; if (items[i]) { items[i].el.classList.add('active'); items[i].el.scrollIntoView({ block: 'nearest' }); }
+        }
+        inp.addEventListener('focus', () => { inp.select(); show(); });
+        inp.addEventListener('input', show);
+        inp.addEventListener('keydown', e => {
+            if (e.key === 'ArrowDown') { e.preventDefault(); mark(Math.min(active + 1, items.length - 1)); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); mark(Math.max(active - 1, 0)); }
+            else if (e.key === 'Enter') { e.preventDefault(); const t = items[active >= 0 ? active : 0]; if (t) pick(t.value); }
+            else if (e.key === 'Escape') { hide(); inp.value = selLabel(sel); }
+        });
+        inp.addEventListener('blur', () => {
+            hide();
+            if (!inp.value.trim()) { if (sel.value) { sel.value = ''; sel.dispatchEvent(new Event('change', { bubbles: true })); } }
+            else inp.value = selLabel(sel);
+        });
+        window.addEventListener('scroll', () => { if (list.style.display === 'block') place(); }, true);
+        inp.value = selLabel(sel);
+        sel._ccSync = () => { if (!sel.isConnected) { list.remove(); return; } if (document.activeElement !== inp && inp.value !== selLabel(sel)) inp.value = selLabel(sel); };
+        sel._ccList = list; sel._ccWrap = wrap;
+    }
+
+    function scan(root) {
+        (root.querySelectorAll ? root.querySelectorAll('select.cat-combo') : []).forEach(enhance);
+        if (root.matches && root.matches('select.cat-combo')) enhance(root);
+    }
+    new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.nodeType === 1) scan(n); }))).observe(document.body, { childList: true, subtree: true });
+    scan(document);
+    setInterval(() => document.querySelectorAll('select.cat-combo').forEach(s => { if (s._ccSync) s._ccSync(); }), 400);
+})();
+</script>
 </body>
 </html>
