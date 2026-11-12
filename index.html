@@ -79,6 +79,11 @@
         .sticky-wrapper { position: sticky; top: 0; z-index: 800; box-shadow: 0 4px 12px rgba(0,0,0,0.08); background: #fff; }
 
         header { background-color: var(--pink-light); padding: 8px 15px; position: relative; }
+        #header-auth { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; gap: 6px; align-items: center; z-index: 5; }
+        #header-auth .ha-btn { border: 2px solid var(--pink-main); background: #fff; color: var(--pink-dark); border-radius: 16px; padding: 6px 12px; font-weight: bold; font-size: 0.85em; font-family: inherit; cursor: pointer; text-decoration: none; white-space: nowrap; }
+        #header-auth .ha-btn.primary { background: var(--pink-main); color: #fff; }
+        #header-auth .ha-hello { font-size: 0.85em; font-weight: bold; color: var(--pink-dark); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        @media (max-width: 640px) { #header-auth { position: static; transform: none; justify-content: center; margin-top: 6px; } #header-auth .ha-btn { padding: 5px 14px; font-size: 0.82em; } }
         .header-inner { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; padding-right: 45px; height: 65px; }
         
         .logo { width: 170px; height: 65px; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); object-fit: cover; object-position: center 20%; background: #fff; }
@@ -369,6 +374,7 @@
                     <p class="tag">אפייה ומסיבות</p>
                 </div>
             </div>
+            <div id="header-auth"></div>
         </header>
 
         <div id="status-bar">משלוחים בתיאום טלפוני/וואטסאפ להזמנות מעל 200 ₪ (החלוקה מתבצעת לאחר שעות הסגירה)</div>
@@ -945,6 +951,7 @@
         }
         document.getElementById('search-input').addEventListener('keypress', e => { if (e.key === 'Enter') doSearch(); });
 
+        function escapeHtmlSafe(t) { return String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
         function renderAccount() {
             const area = document.getElementById('sidebar-account');
             area.innerHTML = '';
@@ -959,6 +966,16 @@
                 area.innerHTML = `
                     <button class="btn btn-sm" onclick="openAuth('login')" style="margin-bottom:8px;">כניסה / התחברות</button>
                     <button class="btn btn-sm btn-ghost" onclick="openAuth('register')">הרשמה</button>`;
+            }
+            const ha = document.getElementById('header-auth');
+            if (ha) {
+                if (currentUser) {
+                    const staffLink = currentUser.role === 'admin' ? '<a class="ha-btn" href="admin.html">ניהול</a>'
+                        : currentUser.role === 'employee' ? '<a class="ha-btn" href="staff.html">אזור צוות</a>' : '';
+                    ha.innerHTML = `<span class="ha-hello">שלום, ${escapeHtmlSafe(currentUser.name || 'לקוח/ה')}</span>${staffLink}<button class="ha-btn" type="button" onclick="logout()">התנתקות</button>`;
+                } else {
+                    ha.innerHTML = `<button class="ha-btn" type="button" onclick="openAuth('login')">כניסה</button><button class="ha-btn primary" type="button" onclick="openAuth('register')">הרשמה</button>`;
+                }
             }
             const cEdit = document.getElementById('contact-edit-btn');
             if (cEdit) cEdit.style.display = (currentUser && currentUser.role === 'admin') ? 'block' : 'none';
