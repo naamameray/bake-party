@@ -53,8 +53,8 @@
         .radio-group label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: normal; }
         .msg { color: var(--ok); font-weight: bold; margin-top: 10px; display: inline-block; }
 
-        .tab-bar { max-width: 900px; margin: 20px auto 0; padding: 0 20px; display: flex; gap: 8px; }
-        .tab-btn { background: #fff; border: 2px solid var(--pink-light); color: var(--text-color); padding: 10px 18px; border-radius: 14px 14px 0 0; cursor: pointer; font-weight: bold; font-size: 0.95em; font-family: inherit; border-bottom: none; opacity: 0.7; }
+        .tab-bar { max-width: 900px; margin: 20px auto 0; padding: 0 20px; display: flex; gap: 6px; flex-wrap: wrap; }
+        .tab-btn { white-space: nowrap; background: #fff; border: 2px solid var(--pink-light); color: var(--text-color); padding: 10px 18px; border-radius: 14px 14px 0 0; cursor: pointer; font-weight: bold; font-size: 0.95em; font-family: inherit; border-bottom: none; opacity: 0.7; }
         .tab-btn.active { opacity: 1; background: var(--pink-light); color: var(--pink-dark); }
         .tab-page { display: none; }
         .tab-page.active { display: block; }
@@ -138,6 +138,21 @@
         </div>
     </div>
 
+    <div id="pw-view" style="display:none;">
+        <div class="login-card">
+            <h2>החלפת סיסמה</h2>
+            <p style="color:var(--muted); font-size:0.9em; text-align:center; margin-top:-6px;">נכנסת עם סיסמה זמנית. כדי להמשיך צריך לבחור סיסמה אישית חדשה (8 תווים לפחות).</p>
+            <label>הסיסמה הזמנית</label>
+            <input id="pw-old" type="password" autocomplete="current-password">
+            <label>סיסמה חדשה</label>
+            <input id="pw-new" type="password" autocomplete="new-password">
+            <label>הקלדה חוזרת של הסיסמה החדשה</label>
+            <input id="pw-new2" type="password" autocomplete="new-password">
+            <button class="btn" type="button" id="pw-save-btn">שמירה וכניסה</button>
+            <p class="error-msg" id="pw-error"></p>
+        </div>
+    </div>
+
     <div id="admin-view" style="display:none;">
         <header>
             <h1>פאנל ניהול חנות (שעות ומשלוחים)</h1>
@@ -150,7 +165,9 @@
         <div class="tab-bar">
             <button class="tab-btn active" type="button" id="tab-btn-hours" onclick="switchTab('hours')">🕒 שעות ומשלוחים</button>
             <button class="tab-btn" type="button" id="tab-btn-products" onclick="switchTab('products')">🏷️ מוצרים</button>
+            <button class="tab-btn" type="button" id="tab-btn-categories" onclick="switchTab('categories')">📁 ניהול קטגוריות</button>
             <button class="tab-btn" type="button" id="tab-btn-faq" onclick="switchTab('faq')">💬 שאלות ותשובות</button>
+            <button class="tab-btn" type="button" id="tab-btn-staff" onclick="switchTab('staff')">👥 צוות ומשתמשים</button>
             <button class="tab-btn" type="button" id="tab-btn-ailog" onclick="switchTab('ailog')">🤖 שיחות עם ה-AI</button>
         </div>
 
@@ -220,11 +237,10 @@
                 </div>
 
                 <div class="card">
-                    <h2>שיוך מהיר של מוצרים לקטגוריה שנייה</h2>
+                    <h2>מוצרים ללא קטגוריה</h2>
                     <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
-                        רשימה של כל המוצרים בחנות עם הקטגוריות המשויכות להם. אפשר לבחור קטגוריה שנייה מהתפריט
-                        ולשמור בלחיצה אחת. מוצר שמסומן באדום הוא מוצר <strong>ללא קטגוריה בכלל</strong> — הוא לא
-                        מוצג באתר הראשי בכלל עד שתשייכי לו קטגוריה.
+                        כאן מופיעים רק מוצרים שאין להם קטגוריה בכלל. מוצר כזה <strong>לא מוצג באתר הראשי</strong> עד שמשייכים לו קטגוריה.
+                        בוחרים קטגוריה (מקלידים את ההתחלה של השם) ולוחצים "שמור", והמוצר יוצא מהרשימה.
                     </p>
                     <div style="margin-bottom:14px;">
                         <button class="btn ghost" type="button" id="add-cat-toggle" onclick="toggleAddCat()">+ קטגוריה</button>
@@ -235,16 +251,74 @@
                             <span id="add-cat-msg" class="msg" style="margin:0;"></span>
                         </div>
                     </div>
-                    <div class="prod-toolbar">
-                        <input type="text" id="prod-search" placeholder="חיפוש מוצר לפי שם..." oninput="clearTimeout(window._searchTimer); window._searchTimer=setTimeout(()=>{prodOffset=0; loadProductPage()}, 400)">
-                        <span class="prod-filter-chip active" id="chip-all" onclick="setProdFilter('all')">הכל</span>
-                        <span class="prod-filter-chip" id="chip-nocat" onclick="setProdFilter('nocat')">ללא קטגוריה ⚠️</span>
-                        <span class="prod-filter-chip" id="chip-onecat" onclick="setProdFilter('onecat')">קטגוריה אחת בלבד</span>
-                    </div>
                     <div class="prod-table-head">
-                        <span></span><span>מוצר</span><span>קטגוריה 1</span><span>קטגוריה 2</span><span></span>
+                        <span></span><span>מוצר</span><span>קטגוריה 1</span><span>קטגוריה 2 (לא חובה)</span><span></span>
                     </div>
                     <div class="prod-table-wrap" id="prod-list">טוען מוצרים...</div>
+                </div>
+            </div>
+
+            <div class="tab-page" id="tab-page-categories">
+                <div class="card">
+                    <h2>ניהול קטגוריות</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        כאן תוכלי להוסיף, לערוך או למחוק קטגוריות. מחיקת קטגוריה <strong>לא</strong> תמחק את המוצרים שבתוכה, אלא תעביר אותם למצב "ללא קטגוריה" כדי שתוכלי לשייך אותם מחדש.
+                    </p>
+                    <button class="btn" style="margin-bottom: 15px;" onclick="addCategoryPrompt(null)">+ קטגוריה ראשית חדשה</button>
+                    <div id="cat-tree-list">טוען קטגוריות...</div>
+                </div>
+            </div>
+
+            <div class="tab-page" id="tab-page-staff">
+                <div class="card">
+                    <h2>הוספת איש צוות</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        יוצרים משתמש, והמערכת מייצרת סיסמה זמנית שמוצגת <strong>פעם אחת</strong>. שלחי אותה לעובד בוואטסאפ.
+                        בכניסה הראשונה הוא יבחר סיסמה אישית. <strong>עובד</strong> מתחיל עם הרשאות עובד, <strong>מנהל</strong> יכול הכול.
+                    </p>
+                    <div class="special-form">
+                        <div><label>שם</label><input type="text" id="st-name" style="width:100%;"></div>
+                        <div><label>אימייל</label><input type="email" id="st-email" style="width:100%;"></div>
+                        <div><label>טלפון</label><input type="tel" id="st-phone" style="width:100%;"></div>
+                        <div><label>תפקיד</label>
+                            <select id="st-role" style="width:100%;"><option value="employee">עובד</option><option value="admin">מנהל</option></select></div>
+                        <button class="btn" type="button" onclick="createStaff()" style="grid-column: 1 / -1;">+ הוספת איש צוות</button>
+                    </div>
+                    <p id="st-create-msg" style="font-weight:bold; margin:6px 0 0;"></p>
+                    <div id="st-temp-box" style="display:none; margin-top:10px; background:#fff8e1; border:2px solid #e0a800; border-radius:12px; padding:12px 14px;">
+                        <div style="font-weight:bold; margin-bottom:6px;">סיסמה זמנית (מוצגת פעם אחת בלבד):</div>
+                        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                            <code id="st-temp-pass" dir="ltr" style="font-size:1.3em; letter-spacing:1px; background:#fff; padding:6px 12px; border-radius:8px; border:1px solid #e0a800;"></code>
+                            <button class="btn ghost" type="button" style="width:auto;" onclick="copyTempPass()">העתקה</button>
+                        </div>
+                        <div id="st-temp-for" style="color:var(--muted); font-size:0.85em; margin-top:6px;"></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <h2>אנשי צוות ומשתמשים</h2>
+                    <div class="prod-toolbar">
+                        <select id="st-group" onchange="loadStaffTab()" style="width:auto;">
+                            <option value="staff">צוות (עובדים ומנהלים)</option>
+                            <option value="customers">לקוחות</option>
+                            <option value="all">כולם</option>
+                        </select>
+                        <input type="text" id="st-search" placeholder="חיפוש לפי שם, אימייל או טלפון..." oninput="clearTimeout(window._stTimer); window._stTimer=setTimeout(loadStaffTab, 400)">
+                    </div>
+                    <div id="st-list">טוען...</div>
+                </div>
+                <div class="card">
+                    <h2>שינוי הסיסמה שלי</h2>
+                    <div class="special-form">
+                        <div><label>סיסמה נוכחית</label><input type="password" id="my-old" autocomplete="current-password" style="width:100%;"></div>
+                        <div><label>סיסמה חדשה (8 תווים לפחות)</label><input type="password" id="my-new" autocomplete="new-password" style="width:100%;"></div>
+                        <button class="btn" type="button" onclick="changeMyPassword()" style="grid-column: 1 / -1;">שמירת סיסמה</button>
+                    </div>
+                    <p id="my-pw-msg" style="font-weight:bold; margin:6px 0 0;"></p>
+                </div>
+                <div class="card">
+                    <h2>פעולות אחרונות (יומן)</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">כל הוספה, שינוי תפקיד, השבתה ואיפוס סיסמה נרשמים כאן עם שם מי שביצע. אי אפשר לערוך או למחוק את היומן.</p>
+                    <div id="audit-list">טוען...</div>
                 </div>
             </div>
 
@@ -312,8 +386,11 @@
                 .then(res => res.json().then(d => ({ ok: res.ok, d })))
                 .then(({ ok, d }) => {
                     if (!ok) throw new Error(d.detail || 'שגיאה');
+                    if (d.user.role === 'employee') throw new Error('זהו חשבון עובד. מסך העובדים יתווסף בקרוב, ועד אז הפאנל זמין למנהלים בלבד.');
                     if (d.user.role !== 'admin') throw new Error('אינך מנהל');
-                    setToken(d.token); showAdmin();
+                    setToken(d.token);
+                    if (d.user.must_change_password) { showPwChange(); return; }
+                    showAdmin();
                 })
                 .catch(err => { document.getElementById('login-error').textContent = err.message; });
         };
@@ -322,8 +399,23 @@
             fetch(`${API}/api/logout`, { method: 'POST', headers: authHeaders() }).finally(() => { clearToken(); showLogin(); });
         };
 
-        function showLogin(){ adminView.style.display='none'; loginView.style.display='block'; }
-        function showAdmin(){ loginView.style.display='none'; adminView.style.display='block'; loadAdminData(); }
+        function showLogin(){ adminView.style.display='none'; document.getElementById('pw-view').style.display='none'; loginView.style.display='block'; }
+        function showAdmin(){ loginView.style.display='none'; document.getElementById('pw-view').style.display='none'; adminView.style.display='block'; loadAdminData(); }
+        function showPwChange(){ loginView.style.display='none'; adminView.style.display='none'; document.getElementById('pw-view').style.display='block'; }
+
+        document.getElementById('pw-save-btn').onclick = async () => {
+            const err = document.getElementById('pw-error');
+            const o = document.getElementById('pw-old').value, n = document.getElementById('pw-new').value, n2 = document.getElementById('pw-new2').value;
+            if (n !== n2) { err.textContent = 'הסיסמאות החדשות לא זהות'; return; }
+            err.textContent = '';
+            try {
+                const res = await fetch(`${API}/api/change-password`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ old_password: o, new_password: n }) });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                ['pw-old','pw-new','pw-new2'].forEach(id => document.getElementById(id).value = '');
+                showAdmin();
+            } catch (e) { err.textContent = e.message; }
+        };
 
         async function loadAdminData() {
             try {
@@ -448,21 +540,118 @@
 
         // --- טאבים ---
         let productsLoaded = false;
+        let categoriesLoaded = false;
         window.switchTab = function(name) {
             document.getElementById('tab-btn-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-btn-products').classList.toggle('active', name === 'products');
+            document.getElementById('tab-btn-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-btn-faq').classList.toggle('active', name === 'faq');
+            document.getElementById('tab-btn-staff').classList.toggle('active', name === 'staff');
             document.getElementById('tab-btn-ailog').classList.toggle('active', name === 'ailog');
             
             document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
+            document.getElementById('tab-page-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-page-faq').classList.toggle('active', name === 'faq');
+            document.getElementById('tab-page-staff').classList.toggle('active', name === 'staff');
             document.getElementById('tab-page-ailog').classList.toggle('active', name === 'ailog');
             
             if (name === 'products' && !productsLoaded) loadProductsTab();
+            if (name === 'categories' && !categoriesLoaded) loadCategoriesTab();
             if (name === 'faq') loadFaqTab();
+            if (name === 'staff') { loadStaffTab(); loadAuditLog(); }
             if (name === 'ailog') loadAiLogTab();
         };
+
+        // --- טאב ניהול קטגוריות ---
+        let currentTree = [];
+        async function loadCategoriesTab() {
+            document.getElementById('cat-tree-list').innerHTML = 'טוען...';
+            try {
+                const res = await fetch(`${API}/api/categories/tree`);
+                currentTree = await res.json();
+                categoriesLoaded = true;
+                renderAdminTree();
+            } catch(e) { document.getElementById('cat-tree-list').innerHTML = 'שגיאה בטעינת קטגוריות.'; }
+        }
+
+        function renderAdminTree() {
+            const cont = document.getElementById('cat-tree-list');
+            cont.innerHTML = '';
+            currentTree.forEach(m => {
+                const d = document.createElement('div');
+                d.className = 'admin-cat-main';
+                
+                let subsHtml = '';
+                if(m.subcategories && m.subcategories.length > 0) {
+                    m.subcategories.forEach(s => {
+                        subsHtml += `
+                            <div class="admin-subcat-row">
+                                <span>↳ ${s.name} <small style="color:#aaa;">(${s.product_count} מוצרים)</small></span>
+                                <div class="admin-cat-actions">
+                                    <button class="btn ghost" style="padding:4px 8px; font-size:0.8em;" onclick="editCategoryPrompt(${s.id}, '${s.name.replace(/'/g, "\\'")}')">ערוך</button>
+                                    <button class="btn danger" style="padding:4px 8px; font-size:0.8em;" onclick="deleteCategory(${s.id}, '${s.name.replace(/'/g, "\\'")}')">מחק</button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+
+                d.innerHTML = `
+                    <div class="admin-cat-header">
+                        <span>📁 ${m.name} <small style="color:#aaa;font-weight:normal;">(${m.product_count} מוצרים תחת הראשי)</small></span>
+                        <div class="admin-cat-actions">
+                            <button class="btn ghost" style="padding:4px 8px; font-size:0.8em;" onclick="editCategoryPrompt(${m.id}, '${m.name.replace(/'/g, "\\'")}')">ערוך שם</button>
+                            <button class="btn danger" style="padding:4px 8px; font-size:0.8em;" onclick="deleteCategory(${m.id}, '${m.name.replace(/'/g, "\\'")}')">מחק</button>
+                        </div>
+                    </div>
+                    <div class="admin-subcat-list">
+                        ${subsHtml}
+                        <button class="btn ghost" style="padding:4px 8px; font-size:0.85em; width:max-content; margin-top:5px;" onclick="addCategoryPrompt(${m.id})">+ הוסף תת-קטגוריה</button>
+                    </div>
+                `;
+                cont.appendChild(d);
+            });
+        }
+
+        window.addCategoryPrompt = async function(parentId) {
+            const title = parentId ? 'הקלידי שם לתת-הקטגוריה החדשה:' : 'הקלידי שם לקטגוריה הראשית החדשה:';
+            const name = prompt(title);
+            if(!name || !name.trim()) return;
+            try {
+                await fetch(`${API}/api/admin/categories`, {
+                    method: 'POST', headers: authHeaders(),
+                    body: JSON.stringify({ name: name.trim(), parent_id: parentId })
+                });
+                loadCategoriesTab();
+                if(productsLoaded) loadProductsTab(); // רענון רשימות הבחירה בטאב מוצרים
+            } catch(e) { alert('שגיאה בהוספת קטגוריה'); }
+        }
+
+        window.editCategoryPrompt = async function(id, oldName) {
+            const newName = prompt('שני את שם הקטגוריה:', oldName);
+            if(!newName || !newName.trim() || newName.trim() === oldName) return;
+            try {
+                await fetch(`${API}/api/admin/categories/${id}`, {
+                    method: 'PATCH', headers: authHeaders(),
+                    body: JSON.stringify({ name: newName.trim() })
+                });
+                loadCategoriesTab();
+                if(productsLoaded) loadProductsTab();
+            } catch(e) { alert('שגיאה בעדכון קטגוריה'); }
+        }
+
+        window.deleteCategory = async function(id, name) {
+            if(!confirm(`האם את בטוחה שברצונך למחוק את הקטגוריה "${name}"?\nהמוצרים שבתוכה לא יימחקו, אלא יסומנו כ"ללא קטגוריה".`)) return;
+            try {
+                await fetch(`${API}/api/admin/categories/${id}`, {
+                    method: 'DELETE', headers: authHeaders()
+                });
+                loadCategoriesTab();
+                if(productsLoaded) loadProductsTab();
+            } catch(e) { alert('שגיאה במחיקת קטגוריה'); }
+        }
+
 
         // --- הוספת קטגוריה מהירה (כפתור, בלי דף נפרד) ---
         window.toggleAddCat = async function() {
@@ -534,8 +723,8 @@
         async function loadProductPage() {
             const listEl = document.getElementById('prod-list');
             listEl.innerHTML = '<p style="color:var(--muted); padding:10px;">טוען מוצרים...</p>';
-            const search = (document.getElementById('prod-search')?.value || '').trim();
-            const onlyUnsorted = prodFilter === 'nocat';
+            const search = '';
+            const onlyUnsorted = true;
             try {
                 const url = `${API}/api/admin/products?search=${encodeURIComponent(search)}&only_unsorted=${onlyUnsorted}&limit=${PROD_LIMIT}&offset=${prodOffset}`;
                 const res = await fetch(url, { headers: authHeaders() });
@@ -567,7 +756,7 @@
             const listEl = document.getElementById('prod-list');
             listEl.innerHTML = '';
 
-            if (!products.length) { listEl.innerHTML = '<p style="color:var(--muted); padding:10px;">לא נמצאו מוצרים תואמים.</p>'; return; }
+            if (!products.length) { listEl.innerHTML = '<p style="color:var(--ok); font-weight:bold; padding:10px;">✓ כל המוצרים משויכים לקטגוריה.</p>'; return; }
 
             // דפדוף
             const from = prodTotal ? prodOffset + 1 : 0;
@@ -621,7 +810,10 @@
                         saveBtn.classList.add('saved');
                         row.classList.toggle('no-cat', category_ids.length === 0);
                         if (category_ids.length > 0) row.querySelector('.prod-warn')?.remove();
-                        setTimeout(() => { saveBtn.textContent = 'שמור'; saveBtn.classList.remove('saved'); saveBtn.disabled = false; }, 1500);
+                        setTimeout(() => {
+                            if (category_ids.length > 0) { row.remove(); if (!document.querySelector('#prod-list .prod-row')) loadProductPage(); }
+                            else { saveBtn.textContent = 'שמור'; saveBtn.classList.remove('saved'); saveBtn.disabled = false; }
+                        }, 1200);
                     } catch {
                         saveBtn.textContent = 'שגיאה';
                         saveBtn.disabled = false;
@@ -906,6 +1098,156 @@
         setTimeout(() => { if (document.getElementById('deal-list')) loadDealProducts(); }, 2000);
 
         // ===================== טאב שיחות עם ה-AI =====================
+        // ===================== צוות ומשתמשים =====================
+        const ROLE_LABELS = { admin: 'מנהל', employee: 'עובד', customer: 'לקוח' };
+        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה' };
+
+        async function loadStaffTab() {
+            const list = document.getElementById('st-list');
+            const group = document.getElementById('st-group').value;
+            const search = document.getElementById('st-search').value.trim();
+            list.innerHTML = 'טוען...';
+            try {
+                const res = await fetch(`${API}/api/admin/users?group=${group}&search=${encodeURIComponent(search)}&limit=100`, { headers: authHeaders() });
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                renderStaffList(data);
+            } catch { list.innerHTML = '<p style="color:var(--muted);">שגיאה בטעינה.</p>'; }
+        }
+
+        function renderStaffList(data) {
+            const list = document.getElementById('st-list');
+            if (!data.items.length) { list.innerHTML = '<p style="color:var(--muted);">לא נמצאו משתמשים.</p>'; return; }
+            list.innerHTML = `<p style="color:var(--muted); font-size:0.85em; margin:0 0 8px;">מציג ${data.items.length} מתוך ${data.total}</p>`;
+            data.items.forEach(u => {
+                const div = document.createElement('div');
+                div.className = 'faq-admin-item' + (u.active ? '' : ' pending');
+                const badges = `<span class="faq-badge hits">${ROLE_LABELS[u.role] || u.role}</span>` +
+                    (u.active ? '' : ' <span class="faq-badge pending">מושבת</span>') +
+                    (u.must_change_password ? ' <span class="faq-badge pending">ממתין להחלפת סיסמה</span>' : '');
+                div.innerHTML = `
+                    <div class="faq-admin-head">
+                        <div>
+                            <strong>${escHtml(u.name || '(ללא שם)')}</strong>
+                            <div style="color:var(--muted); font-size:0.85em;">${escHtml(u.email)}${u.phone ? ' · ' + escHtml(u.phone) : ''}</div>
+                            <div style="color:var(--muted); font-size:0.8em;">נרשם ${escHtml(u.created_at)}${u.last_login ? ' · כניסה אחרונה ' + escHtml(u.last_login) : ''}</div>
+                        </div>
+                        <div class="faq-admin-badges">${badges}</div>
+                    </div>
+                    <div class="faq-admin-actions">
+                        <select class="st-role-sel" style="width:auto; font-size:0.85em; padding:5px 8px;">
+                            ${['customer','employee','admin'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE_LABELS[r]}</option>`).join('')}
+                        </select>
+                        <button class="btn ghost st-edit-btn" type="button">עריכת פרטים</button>
+                        <button class="btn ghost st-reset-btn" type="button">איפוס סיסמה</button>
+                        <button class="btn st-active-btn" type="button" style="background:${u.active ? '#d9534f' : 'var(--ok)'};">${u.active ? 'השבתה' : 'הפעלה'}</button>
+                    </div>`;
+                div.querySelector('.st-role-sel').onchange = e => updateUser(u.id, { role: e.target.value }, e.target);
+                div.querySelector('.st-edit-btn').onclick = () => editUserDetails(u);
+                div.querySelector('.st-reset-btn').onclick = () => resetUserPassword(u);
+                div.querySelector('.st-active-btn').onclick = () => {
+                    if (u.active && !confirm(`להשבית את ${u.name || u.email}? הוא ינותק מיד ולא יוכל להתחבר.`)) return;
+                    updateUser(u.id, { active: !u.active });
+                };
+                list.appendChild(div);
+            });
+        }
+
+        async function updateUser(id, body, selEl) {
+            try {
+                const res = await fetch(`${API}/api/admin/users/${id}`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify(body) });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה');
+            } catch (e) { alert(e.message); }
+            loadStaffTab(); loadAuditLog();
+        }
+
+        function editUserDetails(u) {
+            const name = prompt('שם:', u.name || '');
+            if (name === null) return;
+            const phone = prompt('טלפון:', u.phone || '');
+            if (phone === null) return;
+            updateUser(u.id, { name, phone });
+        }
+
+        async function resetUserPassword(u) {
+            if (!confirm(`לאפס את הסיסמה של ${u.name || u.email}? הוא ינותק, ויקבל סיסמה זמנית חדשה.`)) return;
+            try {
+                const res = await fetch(`${API}/api/admin/users/${u.id}/reset-password`, { method: 'POST', headers: authHeaders() });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                showTempPassword(d.temp_password, u.name || u.email);
+            } catch (e) { alert(e.message); }
+            loadStaffTab(); loadAuditLog();
+        }
+
+        function showTempPassword(pass, who) {
+            document.getElementById('st-temp-pass').textContent = pass;
+            document.getElementById('st-temp-for').textContent = 'עבור: ' + who + '. שלחי לו אותה בוואטסאפ, והיא לא תוצג שוב.';
+            document.getElementById('st-temp-box').style.display = 'block';
+            document.getElementById('st-temp-box').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        window.copyTempPass = function() {
+            const t = document.getElementById('st-temp-pass').textContent;
+            if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => alert('הועתק'));
+        };
+
+        window.createStaff = async function() {
+            const msg = document.getElementById('st-create-msg');
+            const body = {
+                name: document.getElementById('st-name').value.trim(),
+                email: document.getElementById('st-email').value.trim(),
+                phone: document.getElementById('st-phone').value.trim(),
+                role: document.getElementById('st-role').value,
+            };
+            if (!body.name || !body.email) { msg.style.color = '#d9534f'; msg.textContent = 'צריך שם ואימייל.'; return; }
+            msg.style.color = 'var(--muted)'; msg.textContent = 'יוצר...';
+            try {
+                const res = await fetch(`${API}/api/admin/users`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                msg.style.color = 'var(--ok)'; msg.textContent = '✓ נוצר';
+                ['st-name','st-email','st-phone'].forEach(id => document.getElementById(id).value = '');
+                showTempPassword(d.temp_password, body.name);
+                loadStaffTab(); loadAuditLog();
+            } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
+        };
+
+        window.changeMyPassword = async function() {
+            const msg = document.getElementById('my-pw-msg');
+            const o = document.getElementById('my-old').value, n = document.getElementById('my-new').value;
+            try {
+                const res = await fetch(`${API}/api/change-password`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ old_password: o, new_password: n }) });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                msg.style.color = 'var(--ok)'; msg.textContent = '✓ הסיסמה הוחלפה. מכשירים אחרים נותקו.';
+                document.getElementById('my-old').value = ''; document.getElementById('my-new').value = '';
+                loadAuditLog();
+            } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
+        };
+
+        async function loadAuditLog() {
+            const wrap = document.getElementById('audit-list');
+            try {
+                const res = await fetch(`${API}/api/admin/audit-log?limit=50`, { headers: authHeaders() });
+                if (!res.ok) throw new Error();
+                const items = await res.json();
+                if (!items.length) { wrap.innerHTML = '<p style="color:var(--muted);">אין עדיין פעולות ביומן.</p>'; return; }
+                wrap.innerHTML = '';
+                items.forEach(a => {
+                    let det = '';
+                    try { det = a.details ? Object.entries(JSON.parse(a.details)).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(' ← ') : v}`).join(' · ') : ''; } catch { det = a.details || ''; }
+                    const row = document.createElement('div');
+                    row.style.cssText = 'padding:8px 0; border-bottom:1px solid var(--pink-light); font-size:0.9em;';
+                    row.innerHTML = `<strong>${escHtml(AUDIT_LABELS[a.action] || a.action)}</strong> · ${escHtml(a.actor || '?')} · <span style="color:var(--muted);">${escHtml(a.at)}</span>` +
+                        (a.target_id ? ` <span style="color:var(--muted);">(משתמש #${a.target_id})</span>` : '') +
+                        (det ? `<div style="color:var(--muted); font-size:0.85em;" dir="auto">${escHtml(det)}</div>` : '');
+                    wrap.appendChild(row);
+                });
+            } catch { wrap.innerHTML = '<p style="color:var(--muted);">שגיאה בטעינת היומן.</p>'; }
+        }
+
         function escHtml(s) {
             return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
@@ -1084,7 +1426,7 @@
         const inp = document.createElement('input');
         inp.type = 'text'; inp.autocomplete = 'off';
         inp.className = (sel.className || '').replace('cat-combo', '') + ' cc-input';
-        inp.placeholder = 'הקלידי התחלה של שם קטגוריה';
+        inp.placeholder = 'הקלידי קטגוריה';
         const list = document.createElement('div'); list.className = 'cc-list';
         sel.parentNode.insertBefore(wrap, sel);
         wrap.appendChild(inp); wrap.appendChild(sel); document.body.appendChild(list);

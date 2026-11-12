@@ -19,6 +19,15 @@ import psycopg2
 
 app = FastAPI(title="Bake & Party API")
 
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    return response
+
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -91,6 +100,38 @@ try:
     """)
     for col in ("phone", "address", "name"):
         init_cur.execute(f"ALTER TABLE users ALTER COLUMN {col} DROP NOT NULL;")
+
+    # --- תפקידים ואבטחת חשבונות: customer | employee | admin (מנהל) ---
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_logins INTEGER NOT NULL DEFAULT 0;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;")
+    # חיבורים נשמרים במסד הנתונים (לא בזיכרון), כך שפרסום חדש לא מנתק אף אחד.
+    # נשמר רק ה-hash של הטוקן, לא הטוקן עצמו.
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            token_hash VARCHAR(64) PRIMARY KEY,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);")
+    # יומן פעולות: מי עשה מה ומתי. נכתב רק על ידי השרת, ואי אפשר לערוך או למחוק אותו מהאתר.
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id          SERIAL PRIMARY KEY,
+            actor_id    INTEGER,
+            actor_name  VARCHAR(150),
+            action      VARCHAR(60) NOT NULL,
+            target_type VARCHAR(40),
+            target_id   INTEGER,
+            details     TEXT,
+            created_at  TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);")
 
     # --- הגנה על צ'אט ה-AI: חסימה זמנית על הודעות לא-קשורות ברצף + מגבלת שימוש יומית ---
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_offtopic_streak INTEGER NOT NULL DEFAULT 0;")
@@ -193,7 +234,7 @@ try:
         admin_name = os.environ.get("ADMIN_NAME", "מנהל")
         init_cur.execute(
             "INSERT INTO users (name, email, password_hash, role) VALUES (%s, %s, %s, 'admin') "
-            "ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, role='admin';",
+            "ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash, role='admin', active=TRUE;",
             (admin_name, admin_email.lower(), _hash))
 
     init_conn.commit()
@@ -211,8 +252,9 @@ PLACEHOLDER = "data:image/svg+xml;utf8," + "%3Csvg xmlns='http://www.w3.org/2000
 def get_conn():
     return psycopg2.connect(**DB_CONFIG)
 
-SESSIONS = {}
 SESSION_TTL = 60 * 60 * 24 * 7
+ROLES = ("customer", "employee", "admin")
+STAFF_ROLES = ("employee", "admin")
 
 def hash_password(password: str, iterations: int = 200_000) -> str:
     salt = os.urandom(16)
@@ -227,36 +269,79 @@ def verify_password(password: str, stored: str) -> bool:
     except Exception:
         return False
 
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
 def _session_from_header(authorization):
+    """מחזיר את פרטי המחובר, או None. התפקיד והסטטוס נקראים מהמסד בכל בקשה,
+    ולכן שינוי תפקיד או השבתה של משתמש נכנסים לתוקף מיד."""
     if not authorization or not authorization.startswith("Bearer "):
         return None
     token = authorization.split(" ", 1)[1]
-    sess = SESSIONS.get(token)
-    if not sess or sess["expires"] < time_module.time():
-        SESSIONS.pop(token, None)
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT s.user_id, u.role, u.name, u.must_change_password
+            FROM sessions s JOIN users u ON u.id = s.user_id
+            WHERE s.token_hash = %s AND s.expires_at > NOW() AND u.active = TRUE;
+            """,
+            (_token_hash(token),),
+        )
+        row = cur.fetchone()
+    finally:
+        cur.close(); conn.close()
+    if not row:
         return None
+    return {"user_id": row[0], "role": row[1], "name": row[2], "must_change": bool(row[3]),
+            "token_hash": _token_hash(token)}
+
+def require_auth_any(authorization: str = Header(None)):
+    """מחובר, גם אם עדיין צריך להחליף סיסמה (רק לשינוי סיסמה, /api/me ויציאה)."""
+    sess = _session_from_header(authorization)
+    if not sess:
+        raise HTTPException(status_code=401, detail="נדרשת התחברות")
     return sess
 
 def require_auth(authorization: str = Header(None)):
-    sess = _session_from_header(authorization)
-    if not sess:
-        raise HTTPException(status_code=401, detail="נדרשת התחברות")
+    sess = require_auth_any(authorization)
+    if sess["must_change"]:
+        raise HTTPException(status_code=403, detail="יש להחליף את הסיסמה הזמנית לפני שממשיכים")
+    return sess
+
+def require_staff(authorization: str = Header(None)):
+    sess = require_auth(authorization)
+    if sess["role"] not in STAFF_ROLES:
+        raise HTTPException(status_code=403, detail="נדרשות הרשאות צוות")
     return sess
 
 def require_admin(authorization: str = Header(None)):
-    sess = _session_from_header(authorization)
-    if not sess:
-        raise HTTPException(status_code=401, detail="נדרשת התחברות")
+    sess = require_auth(authorization)
     if sess["role"] != "admin":
         raise HTTPException(status_code=403, detail="נדרשות הרשאות מנהל")
     return sess
 
 def _user_public(row):
-    return {"id": row[0], "name": row[1], "email": row[2], "phone": row[3], "address": row[4], "role": row[5]}
+    return {"id": row[0], "name": row[1], "email": row[2], "phone": row[3], "address": row[4], "role": row[5],
+            "must_change_password": bool(row[6]) if len(row) > 6 else False}
 
 def _fetch_user(cur, user_id):
-    cur.execute("SELECT id, name, email, phone, address, role FROM users WHERE id = %s;", (user_id,))
+    cur.execute("SELECT id, name, email, phone, address, role, must_change_password FROM users WHERE id = %s;", (user_id,))
     return cur.fetchone()
+
+def _audit(actor, action, target_type=None, target_id=None, details=None):
+    """רושם ביומן הפעולות. לא מפיל את הפעולה עצמה אם הרישום נכשל."""
+    try:
+        import json as _json
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO audit_log (actor_id, actor_name, action, target_type, target_id, details) VALUES (%s,%s,%s,%s,%s,%s);",
+            (actor.get("user_id") if actor else None, actor.get("name") if actor else None, action,
+             target_type, target_id, _json.dumps(details, ensure_ascii=False) if details is not None else None),
+        )
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"[AUDIT] failed: {e}")
 
 class RegisterBody(BaseModel):
     name: str
@@ -269,10 +354,22 @@ class LoginBody(BaseModel):
     email: str
     password: str
 
-def _issue_token(user_id, role):
+def _issue_token(user_id, role=None):
     token = secrets.token_urlsafe(32)
-    SESSIONS[token] = {"user_id": user_id, "role": role, "expires": time_module.time() + SESSION_TTL}
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM sessions WHERE expires_at < NOW();")
+    cur.execute(
+        "INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (%s, %s, NOW() + (%s || ' seconds')::interval);",
+        (_token_hash(token), user_id, str(SESSION_TTL)),
+    )
+    conn.commit(); cur.close(); conn.close()
     return token
+
+def _drop_sessions(cur, user_id, keep_token_hash=None):
+    if keep_token_hash:
+        cur.execute("DELETE FROM sessions WHERE user_id = %s AND token_hash <> %s;", (user_id, keep_token_hash))
+    else:
+        cur.execute("DELETE FROM sessions WHERE user_id = %s;", (user_id,))
 
 @app.post("/api/register")
 def register(body: RegisterBody):
@@ -304,37 +401,226 @@ def check_rate_limit(ip: str, max_attempts: int = 10, window: int = 60):
     if len(LOGIN_ATTEMPTS[ip]) >= max_attempts:
         raise HTTPException(status_code=429, detail="יותר מדי ניסיונות התחברות. נסו שוב בעוד דקה.")
 
+MAX_FAILED_LOGINS = 5
+LOCK_MINUTES = 15
+
 @app.post("/api/login")
 def login(body: LoginBody, request: Request):
     ip = request.client.host if request.client else "unknown"
     check_rate_limit(ip)
     email = body.email.strip().lower()
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, password_hash, role FROM users WHERE email = %s;", (email,))
+    cur.execute(
+        "SELECT id, password_hash, role, active, (locked_until IS NOT NULL AND locked_until > NOW()) FROM users WHERE email = %s;",
+        (email,),
+    )
     row = cur.fetchone()
+    if row and row[4]:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=429, detail=f"יותר מדי ניסיונות שגויים. החשבון נעול זמנית ל-{LOCK_MINUTES} דקות.")
     if not row or not verify_password(body.password, row[1]):
+        if row:
+            cur.execute(
+                """
+                UPDATE users SET
+                    failed_logins = CASE WHEN failed_logins + 1 >= %s THEN 0 ELSE failed_logins + 1 END,
+                    locked_until  = CASE WHEN failed_logins + 1 >= %s THEN NOW() + (%s || ' minutes')::interval ELSE locked_until END
+                WHERE id = %s;
+                """,
+                (MAX_FAILED_LOGINS, MAX_FAILED_LOGINS, str(LOCK_MINUTES), row[0]),
+            )
+            conn.commit()
         cur.close(); conn.close()
         LOGIN_ATTEMPTS[ip].append(time_module.time())
         raise HTTPException(status_code=401, detail="אימייל או סיסמה שגויים")
+    if not row[3]:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=403, detail="החשבון הושבת. יש לפנות למנהל.")
+    cur.execute("UPDATE users SET failed_logins = 0, locked_until = NULL, last_login = NOW() WHERE id = %s;", (row[0],))
+    conn.commit()
     user = _fetch_user(cur, row[0])
     cur.close(); conn.close()
     LOGIN_ATTEMPTS.pop(ip, None)
-    return {"token": _issue_token(row[0], row[2]), "user": _user_public(user)}
+    return {"token": _issue_token(row[0]), "user": _user_public(user)}
 
 @app.post("/api/logout")
 def logout(authorization: str = Header(None)):
     if authorization and authorization.startswith("Bearer "):
-        SESSIONS.pop(authorization.split(" ", 1)[1], None)
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("DELETE FROM sessions WHERE token_hash = %s;", (_token_hash(authorization.split(" ", 1)[1]),))
+        conn.commit(); cur.close(); conn.close()
     return {"ok": True}
 
 @app.get("/api/me")
-def get_me(sess: dict = Depends(require_auth)):
+def get_me(sess: dict = Depends(require_auth_any)):
     conn = get_conn(); cur = conn.cursor()
     user = _fetch_user(cur, sess["user_id"])
     cur.close(); conn.close()
     if not user:
         raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
     return _user_public(user)
+
+# ===================== ניהול משתמשים וצוות (מנהלים בלבד) =====================
+import string as _string
+
+def _temp_password(n: int = 10) -> str:
+    alphabet = "".join(c for c in _string.ascii_letters + _string.digits if c not in "0OolI1")
+    return "".join(secrets.choice(alphabet) for _ in range(n))
+
+def _user_admin_row(r):
+    return {"id": r[0], "name": r[1], "email": r[2], "phone": r[3], "role": r[4], "active": bool(r[5]),
+            "must_change_password": bool(r[6]),
+            "created_at": r[7].strftime("%d/%m/%Y") if r[7] else "",
+            "last_login": r[8].strftime("%d/%m/%Y %H:%M") if r[8] else ""}
+
+_USER_ADMIN_COLS = "id, name, email, phone, role, active, must_change_password, created_at, last_login"
+
+@app.get("/api/admin/users")
+def admin_list_users(group: str = "staff", search: str = "", limit: int = 100, offset: int = 0,
+                     sess: dict = Depends(require_admin)):
+    where, params = [], []
+    if group == "staff":
+        where.append("role IN ('employee', 'admin')")
+    elif group == "customers":
+        where.append("role = 'customer'")
+    if search.strip():
+        where.append("(name ILIKE %s OR email ILIKE %s OR phone ILIKE %s)")
+        like = f"%{search.strip()}%"; params += [like, like, like]
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    limit = max(1, min(limit, 200)); offset = max(0, offset)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(f"SELECT COUNT(*) FROM users {clause};", params)
+    total = cur.fetchone()[0]
+    cur.execute(
+        f"SELECT {_USER_ADMIN_COLS} FROM users {clause} "
+        "ORDER BY (role = 'admin') DESC, (role = 'employee') DESC, name NULLS LAST, id LIMIT %s OFFSET %s;",
+        params + [limit, offset],
+    )
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return {"total": total, "items": [_user_admin_row(r) for r in rows]}
+
+class StaffCreateBody(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    role: str = "employee"
+
+@app.post("/api/admin/users")
+def admin_create_staff(body: StaffCreateBody, sess: dict = Depends(require_admin)):
+    email = body.email.strip().lower()
+    name = body.name.strip()
+    if "@" not in email or not name:
+        raise HTTPException(status_code=400, detail="צריך שם ואימייל תקין")
+    if body.role not in STAFF_ROLES:
+        raise HTTPException(status_code=400, detail="תפקיד לא תקין")
+    temp = _temp_password()
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, role FROM users WHERE email = %s;", (email,))
+    existing = cur.fetchone()
+    if existing:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=409, detail="האימייל כבר קיים במערכת. אפשר לשנות את התפקיד שלו ברשימה (בחרי 'כולם' או 'לקוחות').")
+    cur.execute(
+        "INSERT INTO users (name, email, phone, password_hash, role, must_change_password) VALUES (%s,%s,%s,%s,%s,TRUE) RETURNING id;",
+        (name, email, (body.phone or "").strip() or None, hash_password(temp), body.role),
+    )
+    new_id = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "user_create", "user", new_id, {"email": email, "role": body.role})
+    return {"id": new_id, "email": email, "role": body.role, "temp_password": temp}
+
+class UserUpdateBody(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None
+    active: Optional[bool] = None
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_update_user(user_id: int, body: UserUpdateBody, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT name, phone, role, active FROM users WHERE id = %s FOR UPDATE;", (user_id,))
+    cur_row = cur.fetchone()
+    if not cur_row:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
+    old_name, old_phone, old_role, old_active = cur_row
+    new_role = body.role if body.role is not None else old_role
+    new_active = body.active if body.active is not None else old_active
+    if new_role not in ROLES:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=400, detail="תפקיד לא תקין")
+    is_self = (user_id == sess["user_id"])
+    if is_self and (new_role != old_role or new_active is False):
+        cur.close(); conn.close()
+        raise HTTPException(status_code=400, detail="אי אפשר לשנות את התפקיד או להשבית את החשבון של עצמך")
+    # תמיד חייב להישאר לפחות מנהל פעיל אחד
+    if old_role == "admin" and old_active and (new_role != "admin" or not new_active):
+        cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = TRUE AND id <> %s;", (user_id,))
+        if cur.fetchone()[0] == 0:
+            cur.close(); conn.close()
+            raise HTTPException(status_code=400, detail="חייב להישאר לפחות מנהל פעיל אחד")
+    name = body.name.strip() if body.name is not None else old_name
+    phone = (body.phone.strip() or None) if body.phone is not None else old_phone
+    cur.execute("UPDATE users SET name = %s, phone = %s, role = %s, active = %s WHERE id = %s;",
+                (name, phone, new_role, new_active, user_id))
+    if new_role != old_role or new_active != old_active:
+        _drop_sessions(cur, user_id)      # משנה תפקיד או מושבת: מתנתק מיד
+    conn.commit(); cur.close(); conn.close()
+    changes = {}
+    if name != old_name: changes["name"] = [old_name, name]
+    if phone != old_phone: changes["phone"] = [old_phone, phone]
+    if new_role != old_role: changes["role"] = [old_role, new_role]
+    if new_active != old_active: changes["active"] = [old_active, new_active]
+    if changes:
+        _audit(sess, "user_update", "user", user_id, changes)
+    return {"ok": True}
+
+@app.post("/api/admin/users/{user_id}/reset-password")
+def admin_reset_password(user_id: int, sess: dict = Depends(require_admin)):
+    temp = _temp_password()
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("UPDATE users SET password_hash = %s, must_change_password = TRUE, failed_logins = 0, locked_until = NULL "
+                "WHERE id = %s RETURNING id;", (hash_password(temp), user_id))
+    if not cur.fetchone():
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
+    _drop_sessions(cur, user_id)
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "password_reset", "user", user_id)
+    return {"ok": True, "temp_password": temp}
+
+class ChangePasswordBody(BaseModel):
+    old_password: str
+    new_password: str
+
+@app.post("/api/change-password")
+def change_password(body: ChangePasswordBody, sess: dict = Depends(require_auth_any)):
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="הסיסמה החדשה חייבת להיות באורך 8 תווים לפחות")
+    if body.new_password == body.old_password:
+        raise HTTPException(status_code=400, detail="הסיסמה החדשה חייבת להיות שונה מהישנה")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT password_hash FROM users WHERE id = %s;", (sess["user_id"],))
+    row = cur.fetchone()
+    if not row or not verify_password(body.old_password, row[0]):
+        cur.close(); conn.close()
+        raise HTTPException(status_code=400, detail="הסיסמה הנוכחית שגויה")
+    cur.execute("UPDATE users SET password_hash = %s, must_change_password = FALSE WHERE id = %s;",
+                (hash_password(body.new_password), sess["user_id"]))
+    _drop_sessions(cur, sess["user_id"], keep_token_hash=sess["token_hash"])
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "password_change", "user", sess["user_id"])
+    return {"ok": True}
+
+@app.get("/api/admin/audit-log")
+def admin_audit_log(limit: int = 100, sess: dict = Depends(require_admin)):
+    limit = max(1, min(limit, 300))
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, created_at, actor_name, action, target_type, target_id, details FROM audit_log "
+                "ORDER BY id DESC LIMIT %s;", (limit,))
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return [{"id": r[0], "at": r[1].strftime("%d/%m/%Y %H:%M") if r[1] else "", "actor": r[2] or "",
+             "action": r[3], "target_type": r[4], "target_id": r[5], "details": r[6]} for r in rows]
 
 def _parse_time(val, default):
     try:
