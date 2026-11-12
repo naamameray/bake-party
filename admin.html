@@ -157,6 +157,7 @@
         <header>
             <h1>פאנל ניהול חנות (שעות ומשלוחים)</h1>
             <div class="header-actions">
+                <a href="/staff.html" class="btn ghost">⏱️ כניסה/יציאה למשמרת</a>
                 <a href="/" class="btn ghost">← חזור לאתר הראשי</a>
                 <button class="btn ghost" type="button" id="logout-btn">התנתק</button>
             </div>
@@ -168,6 +169,7 @@
             <button class="tab-btn" type="button" id="tab-btn-categories" onclick="switchTab('categories')">📁 ניהול קטגוריות</button>
             <button class="tab-btn" type="button" id="tab-btn-faq" onclick="switchTab('faq')">💬 שאלות ותשובות</button>
             <button class="tab-btn" type="button" id="tab-btn-staff" onclick="switchTab('staff')">👥 צוות ומשתמשים</button>
+            <button class="tab-btn" type="button" id="tab-btn-pay" onclick="switchTab('pay')">⏱️ שעות ושכר</button>
             <button class="tab-btn" type="button" id="tab-btn-ailog" onclick="switchTab('ailog')">🤖 שיחות עם ה-AI</button>
         </div>
 
@@ -322,6 +324,36 @@
                 </div>
             </div>
 
+            <div class="tab-page" id="tab-page-pay">
+                <div class="card">
+                    <h2>שעות ושכר</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        כאן קובעים תעריף שעתי לכל אחד, ורואים ומתקנים שעות. עובד לא יכול לערוך שעות שדיווח. שינוי תעריף חל על משמרות חדשות בלבד, ומשמרות שכבר נרשמו עם תעריף לא משתנות.
+                        השכר הוא הערכה ברוטו ולא תלוש.
+                    </p>
+                    <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+                        <button class="btn ghost" type="button" onclick="payShiftMonth(-1)">›</button>
+                        <input type="month" id="pay-month" style="width:auto;" onchange="loadPayTab()">
+                        <button class="btn ghost" type="button" onclick="payShiftMonth(1)">‹</button>
+                    </div>
+                    <div id="pay-summary">טוען...</div>
+                </div>
+                <div class="card" id="pay-detail" style="display:none;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+                        <h2 id="pay-detail-title" style="margin:0;"></h2>
+                        <button class="btn ghost" type="button" onclick="closePayDetail()">סגירה</button>
+                    </div>
+                    <div id="pay-detail-body" style="margin-top:12px;"></div>
+                    <h3 style="font-size:1em; margin:18px 0 8px; color:var(--pink-dark);">הוספת משמרת ידנית</h3>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+                        <div><label>כניסה</label><input type="datetime-local" id="pay-new-in"></div>
+                        <div><label>יציאה</label><input type="datetime-local" id="pay-new-out"></div>
+                        <button class="btn" type="button" onclick="addShift()">הוספה</button>
+                    </div>
+                    <p class="error-msg" id="pay-error"></p>
+                </div>
+            </div>
+
             <div class="tab-page" id="tab-page-ailog">
                 <div class="card">
                     <h2>שיחות עם ה-AI</h2>
@@ -386,7 +418,7 @@
                 .then(res => res.json().then(d => ({ ok: res.ok, d })))
                 .then(({ ok, d }) => {
                     if (!ok) throw new Error(d.detail || 'שגיאה');
-                    if (d.user.role === 'employee') throw new Error('זהו חשבון עובד. מסך העובדים יתווסף בקרוב, ועד אז הפאנל זמין למנהלים בלבד.');
+                    if (d.user.role === 'employee') { setToken(d.token); location.href = '/staff.html'; return; }
                     if (d.user.role !== 'admin') throw new Error('אינך מנהל');
                     setToken(d.token);
                     if (d.user.must_change_password) { showPwChange(); return; }
@@ -548,6 +580,9 @@
             document.getElementById('tab-btn-faq').classList.toggle('active', name === 'faq');
             document.getElementById('tab-btn-staff').classList.toggle('active', name === 'staff');
             document.getElementById('tab-btn-ailog').classList.toggle('active', name === 'ailog');
+            document.getElementById('tab-btn-pay').classList.toggle('active', name === 'pay');
+            document.getElementById('tab-page-pay').classList.toggle('active', name === 'pay');
+            if (name === 'pay') loadPayTab();
             
             document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
@@ -1098,9 +1133,92 @@
         setTimeout(() => { if (document.getElementById('deal-list')) loadDealProducts(); }, 2000);
 
         // ===================== טאב שיחות עם ה-AI =====================
+        // ===================== שעות ושכר =====================
+        let payUserId = null;
+        const fmtMinA = m => Math.floor(m/60) + ':' + String(m%60).padStart(2,'0');
+        const moneyA = n => '₪' + Number(n).toLocaleString('he-IL', {maximumFractionDigits: 2});
+        function payMonth(){ return document.getElementById('pay-month').value || new Date().toISOString().slice(0,7); }
+        function payShiftMonth(d){
+            const [y,m] = payMonth().split('-').map(Number); const dt = new Date(y, m-1+d, 1);
+            document.getElementById('pay-month').value = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+            loadPayTab();
+        }
+        async function payApi(path, opts) {
+            const res = await fetch(API + path, { ...(opts||{}), headers: authHeaders() });
+            let d = {}; try { d = await res.json(); } catch(e) {}
+            if (!res.ok) throw new Error(d.detail || 'שגיאה');
+            return d;
+        }
+        async function loadPayTab() {
+            const box = document.getElementById('pay-summary');
+            if (!document.getElementById('pay-month').value) document.getElementById('pay-month').value = new Date().toISOString().slice(0,7);
+            try {
+                const d = await payApi('/api/admin/hours-summary?month=' + payMonth());
+                box.innerHTML = d.items.map(u => `
+                    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:#fffafa; border:1px solid var(--pink-light); border-radius:12px; padding:10px 12px; margin-bottom:8px; ${u.active ? '' : 'opacity:.55;'}">
+                        <div style="flex:1; min-width:140px;"><strong>${escHtml(u.name || u.email)}</strong>
+                            <div style="color:var(--muted); font-size:0.8em;">${ROLE_LABELS[u.role] || u.role}${u.active ? '' : ' · מושבת'}${u.open_shifts ? ' · <span style="color:var(--ok);">במשמרת עכשיו</span>' : ''}${u.shifts_without_rate ? ' · <span style="color:#d9534f;">יש משמרות בלי תעריף</span>' : ''}</div></div>
+                        <div style="display:flex; align-items:center; gap:4px;"><input type="number" min="0" step="0.5" id="rate-${u.id}" value="${u.hourly_rate ?? ''}" placeholder="₪ לשעה" style="width:90px; margin:0;">
+                            <button class="btn ghost" type="button" style="padding:6px 10px;" onclick="saveRate(${u.id})">שמירה</button></div>
+                        <div style="min-width:120px; text-align:left; direction:ltr;">${fmtMinA(u.minutes)} · <strong>${moneyA(u.pay)}</strong></div>
+                        <button class="btn" type="button" style="padding:6px 12px;" onclick="openPayDetail(${u.id})">פירוט</button>
+                    </div>`).join('') +
+                    `<div style="display:flex; justify-content:space-between; background:var(--pink-light); border-radius:12px; padding:12px 14px; font-weight:700;"><span>סה״כ לחודש (${fmtMinA(d.total_minutes)} שעות)</span><span>${moneyA(d.total_pay)}</span></div>`;
+                if (payUserId) openPayDetail(payUserId);
+            } catch (e) { box.textContent = e.message; }
+        }
+        async function saveRate(id) {
+            const v = document.getElementById('rate-' + id).value;
+            try {
+                const r = await payApi(`/api/admin/users/${id}/rate`, { method: 'PUT', body: JSON.stringify({ hourly_rate: v === '' ? null : Number(v) }) });
+                alert(r.filled_shifts ? `התעריף נשמר, והוחל גם על ${r.filled_shifts} משמרות שהיו בלי תעריף.` : 'התעריף נשמר.');
+                loadPayTab();
+            } catch (e) { alert(e.message); }
+        }
+        function closePayDetail(){ payUserId = null; document.getElementById('pay-detail').style.display = 'none'; }
+        async function openPayDetail(id) {
+            payUserId = id;
+            document.getElementById('pay-detail').style.display = 'block';
+            document.getElementById('pay-error').textContent = '';
+            const body = document.getElementById('pay-detail-body');
+            try {
+                const d = await payApi(`/api/admin/hours/${id}?month=${payMonth()}`);
+                document.getElementById('pay-detail-title').textContent = d.name || d.email;
+                body.innerHTML = (d.items.length ? d.items.map(i => `
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-bottom:1px solid #f6e3e8; padding:8px 0;">
+                        <span style="min-width:90px;">${escHtml(i.weekday)} ${escHtml(i.date.slice(0,5))}</span>
+                        <input type="datetime-local" id="si-${i.id}" value="${i.in_iso}" style="width:auto; margin:0;">
+                        <input type="datetime-local" id="so-${i.id}" value="${i.out_iso || ''}" style="width:auto; margin:0;">
+                        <span style="min-width:70px; direction:ltr;">${i.minutes == null ? '<span style="color:var(--ok);">פתוחה</span>' : fmtMinA(i.minutes) + (i.pay != null ? ' · ' + moneyA(i.pay) : '')}</span>
+                        ${i.edited ? `<span class="faq-badge pending" title="תוקן ע״י ${escHtml(i.edited_by)}">תוקן</span>` : ''}
+                        <button class="btn ghost" type="button" style="padding:5px 10px;" onclick="saveShift(${i.id})">שמירה</button>
+                        <button class="btn ghost" type="button" style="padding:5px 10px; color:#d9534f; border-color:#d9534f;" onclick="deleteShift(${i.id})">מחיקה</button>
+                    </div>`).join('') : '<p style="color:var(--muted);">אין משמרות בחודש הזה</p>') +
+                    `<div style="display:flex; justify-content:space-between; background:var(--pink-light); border-radius:12px; padding:10px 14px; margin-top:10px; font-weight:700;"><span>סה״כ ${fmtMinA(d.total_minutes)} שעות</span><span>${moneyA(d.total_pay)}</span></div>`;
+            } catch (e) { body.textContent = e.message; }
+        }
+        async function saveShift(id) {
+            const cin = document.getElementById('si-' + id).value, cout = document.getElementById('so-' + id).value;
+            try { await payApi('/api/admin/shifts/' + id, { method: 'PATCH', body: JSON.stringify({ clock_in: cin, clock_out: cout }) }); loadPayTab(); }
+            catch (e) { document.getElementById('pay-error').textContent = e.message; }
+        }
+        async function deleteShift(id) {
+            if (!confirm('למחוק את המשמרת הזו? הפעולה תירשם ביומן.')) return;
+            try { await payApi('/api/admin/shifts/' + id, { method: 'DELETE' }); loadPayTab(); }
+            catch (e) { document.getElementById('pay-error').textContent = e.message; }
+        }
+        async function addShift() {
+            const cin = document.getElementById('pay-new-in').value, cout = document.getElementById('pay-new-out').value;
+            try {
+                await payApi('/api/admin/shifts', { method: 'POST', body: JSON.stringify({ user_id: payUserId, clock_in: cin, clock_out: cout || null }) });
+                document.getElementById('pay-new-in').value = ''; document.getElementById('pay-new-out').value = '';
+                loadPayTab();
+            } catch (e) { document.getElementById('pay-error').textContent = e.message; }
+        }
+
         // ===================== צוות ומשתמשים =====================
         const ROLE_LABELS = { admin: 'מנהל', employee: 'עובד', customer: 'לקוח' };
-        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה' };
+        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת' };
 
         async function loadStaffTab() {
             const list = document.getElementById('st-list');

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>אזור צוות | Bake & Party</title>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--cream:#FFF9F5;--pink-light:#FFD1DC;--pink-main:#FF85A2;--pink-dark:#E05276;--text:#4A2E35;--muted:#9B7B82;--ok:#3B9E6A;--bad:#d9534f}
+*{box-sizing:border-box}
+body{font-family:'Rubik','Segoe UI',Tahoma,sans-serif;background:var(--cream);color:var(--text);margin:0}
+header{background:var(--pink-light);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+header h1{color:var(--pink-dark);margin:0;font-size:1.2em}
+.wrap{max-width:640px;margin:20px auto;padding:0 16px}
+.card{background:#fff;border:2px solid var(--pink-light);border-radius:18px;padding:18px;margin-bottom:16px}
+.card h2{margin:0 0 10px;font-size:1.1em;color:var(--pink-dark)}
+input{padding:10px 12px;border:2px solid var(--pink-light);border-radius:10px;font-size:1em;font-family:inherit;width:100%;margin-bottom:10px}
+input:focus{outline:none;border-color:var(--pink-main)}
+label{font-weight:600;display:block;margin-bottom:4px}
+.btn{background:var(--pink-main);color:#fff;border:none;padding:10px 18px;border-radius:18px;cursor:pointer;font-weight:bold;font-size:.95em;font-family:inherit;text-decoration:none;display:inline-block}
+.btn:hover{background:var(--pink-dark)}
+.btn.ghost{background:var(--cream);color:var(--pink-dark);border:2px solid var(--pink-main)}
+.btn.block{width:100%}
+.err{color:var(--bad);font-weight:600;min-height:1.2em;margin:6px 0 0}
+.status{text-align:center}
+.status .state{font-size:1.1em;color:var(--muted);margin-bottom:6px}
+.status .big{font-size:2.4em;font-weight:800;color:var(--pink-dark);direction:ltr;margin:4px 0 14px;font-variant-numeric:tabular-nums}
+.clock-btn{width:100%;border:none;border-radius:22px;padding:26px 10px;font-size:1.6em;font-weight:800;font-family:inherit;color:#fff;cursor:pointer}
+.clock-btn.in{background:var(--ok)}
+.clock-btn.out{background:var(--bad)}
+.clock-btn:disabled{opacity:.6}
+.month-row{display:flex;gap:10px;align-items:center;margin-bottom:12px}
+.month-row input{margin:0;flex:1}
+table{width:100%;border-collapse:collapse;font-size:.95em}
+th{font-size:.8em;color:var(--muted);text-align:right;padding:6px 4px;border-bottom:2px solid var(--pink-light)}
+td{padding:9px 4px;border-bottom:1px solid #f6e3e8}
+td.num,th.num{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
+.tag{font-size:.72em;background:#fff3cd;color:#856404;border-radius:8px;padding:1px 6px;margin-right:4px}
+.tag.open{background:#e6f5ec;color:var(--ok)}
+.total{display:flex;justify-content:space-between;align-items:center;background:var(--pink-light);border-radius:14px;padding:14px 16px;margin-top:14px;font-weight:700}
+.total .sum{font-size:1.4em;color:var(--pink-dark)}
+.note{color:var(--muted);font-size:.82em;margin-top:10px;line-height:1.5}
+.warn{background:#fff3cd;color:#856404;border-radius:10px;padding:8px 12px;font-size:.88em;margin-top:10px}
+</style>
+</head>
+<body>
+<div id="login-view" class="wrap" style="display:none">
+  <div class="card">
+    <h2>כניסה לאזור הצוות</h2>
+    <label for="email">אימייל</label><input id="email" type="email" autocomplete="username">
+    <label for="password">סיסמה</label><input id="password" type="password" autocomplete="current-password">
+    <button class="btn block" id="login-btn" type="button">כניסה</button>
+    <p class="err" id="login-error"></p>
+  </div>
+</div>
+
+<div id="pw-view" class="wrap" style="display:none">
+  <div class="card">
+    <h2>בחירת סיסמה אישית</h2>
+    <p style="color:var(--muted);margin-top:0">זו הכניסה הראשונה, אז צריך לבחור סיסמה משלך (לפחות 8 תווים).</p>
+    <label>סיסמה נוכחית (הזמנית)</label><input id="pw-old" type="password" autocomplete="current-password">
+    <label>סיסמה חדשה</label><input id="pw-new" type="password" autocomplete="new-password">
+    <label>סיסמה חדשה שוב</label><input id="pw-new2" type="password" autocomplete="new-password">
+    <button class="btn block" id="pw-btn" type="button">שמירה וכניסה</button>
+    <p class="err" id="pw-error"></p>
+  </div>
+</div>
+
+<div id="main-view" style="display:none">
+  <header>
+    <h1 id="hello">אזור צוות</h1>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a class="btn ghost" id="admin-link" href="/admin.html" style="display:none">פאנל ניהול</a>
+      <button class="btn ghost" id="logout-btn" type="button">התנתק</button>
+    </div>
+  </header>
+  <div class="wrap">
+    <div class="card status">
+      <div class="state" id="state">טוען...</div>
+      <div class="big" id="elapsed">--:--</div>
+      <button class="clock-btn in" id="clock-btn" type="button" disabled>...</button>
+      <p class="err" id="clock-error"></p>
+    </div>
+
+    <div class="card">
+      <h2>השעות שלי</h2>
+      <div class="month-row">
+        <button class="btn ghost" type="button" id="m-prev">›</button>
+        <input type="month" id="month">
+        <button class="btn ghost" type="button" id="m-next">‹</button>
+      </div>
+      <table>
+        <thead><tr><th>תאריך</th><th class="num">כניסה</th><th class="num">יציאה</th><th class="num">שעות</th><th class="num">שכר</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5">טוען...</td></tr></tbody>
+      </table>
+      <div class="total"><span>סה״כ <span id="tot-hours">0:00</span> שעות</span><span class="sum" id="tot-pay">₪0</span></div>
+      <div class="warn" id="rate-warn" style="display:none">עדיין לא הוגדר לך תעריף שעתי, ולכן השכר לא מחושב. המנהל יעדכן אותו.</div>
+      <p class="note">השכר הוא הערכה ברוטו לפי השעות והתעריף, ואינו תלוש שכר. אם יש טעות בשעות, יש לפנות למנהל שיתקן.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = 'https://bake-party-production.up.railway.app';
+const TOKEN_KEY = 'bp_token';
+const $ = id => document.getElementById(id);
+const token = () => { try { return localStorage.getItem(TOKEN_KEY); } catch(e) { return null; } };
+const setToken = t => { try { localStorage.setItem(TOKEN_KEY, t); } catch(e) {} };
+const clearToken = () => { try { localStorage.removeItem(TOKEN_KEY); } catch(e) {} };
+const H = () => ({ 'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json' });
+function show(v){ ['login-view','pw-view','main-view'].forEach(x => $(x).style.display = x === v ? 'block' : 'none'); }
+const fmtMin = m => Math.floor(m/60) + ':' + String(m%60).padStart(2,'0');
+const money = n => '₪' + Number(n).toLocaleString('he-IL', {maximumFractionDigits: 2});
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, { ...opts, headers: H() });
+  let d = {}; try { d = await res.json(); } catch(e) {}
+  if (res.status === 401) { clearToken(); show('login-view'); throw new Error('פג תוקף הכניסה. יש להיכנס שוב.'); }
+  if (!res.ok) throw new Error(d.detail || 'שגיאה');
+  return d;
+}
+
+$('login-btn').onclick = async () => {
+  $('login-error').textContent = '';
+  try {
+    const res = await fetch(API + '/api/login', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }) });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || 'שגיאה');
+    if (!['employee','admin'].includes(d.user.role)) throw new Error('האזור הזה מיועד לצוות בלבד');
+    setToken(d.token);
+    if (d.user.must_change_password) { $('pw-old').value = $('password').value; show('pw-view'); return; }
+    start(d.user);
+  } catch (e) { $('login-error').textContent = e.message; }
+};
+$('password').addEventListener('keydown', e => { if (e.key === 'Enter') $('login-btn').click(); });
+
+$('pw-btn').onclick = async () => {
+  $('pw-error').textContent = '';
+  if ($('pw-new').value !== $('pw-new2').value) { $('pw-error').textContent = 'הסיסמאות החדשות לא זהות'; return; }
+  try {
+    await api('/api/change-password', { method: 'POST', body: JSON.stringify({ old_password: $('pw-old').value, new_password: $('pw-new').value }) });
+    init();
+  } catch (e) { $('pw-error').textContent = e.message; }
+};
+
+$('logout-btn').onclick = () => { fetch(API + '/api/logout', { method: 'POST', headers: H() }).finally(() => { clearToken(); stopTick(); show('login-view'); }); };
+
+let openShift = null, tick = null;
+function stopTick(){ if (tick) { clearInterval(tick); tick = null; } }
+function renderClock() {
+  stopTick();
+  const btn = $('clock-btn');
+  btn.disabled = false;
+  if (openShift) {
+    $('state').textContent = 'נכנסת בשעה ' + openShift.in;
+    btn.className = 'clock-btn out'; btn.textContent = 'יציאה';
+    const t0 = Date.now() - openShift.open_minutes * 60000;
+    const upd = () => { const s = Math.floor((Date.now() - t0) / 1000); $('elapsed').textContent = [Math.floor(s/3600), Math.floor(s/60)%60, s%60].map(x => String(x).padStart(2,'0')).join(':'); };
+    upd(); tick = setInterval(upd, 1000);
+  } else {
+    $('state').textContent = 'את/ה לא במשמרת';
+    $('elapsed').textContent = '--:--';
+    btn.className = 'clock-btn in'; btn.textContent = 'כניסה למשמרת';
+  }
+}
+$('clock-btn').onclick = async () => {
+  $('clock-error').textContent = '';
+  $('clock-btn').disabled = true;
+  try {
+    await api('/api/staff/clock/' + (openShift ? 'out' : 'in'), { method: 'POST' });
+  } catch (e) { $('clock-error').textContent = e.message; }
+  await loadClock(); loadHours();
+};
+async function loadClock() {
+  try { openShift = (await api('/api/staff/clock')).open_shift; renderClock(); }
+  catch (e) { $('state').textContent = e.message; }
+}
+
+function curMonth(){ return $('month').value || new Date().toISOString().slice(0,7); }
+async function loadHours() {
+  const body = $('rows');
+  try {
+    const d = await api('/api/staff/my-hours?month=' + curMonth());
+    body.innerHTML = d.items.length ? d.items.map(i => `
+      <tr><td>${esc(i.weekday)} ${esc(i.date.slice(0,5))}${i.edited ? '<span class="tag">תוקן</span>' : ''}</td>
+      <td class="num">${esc(i.in)}</td>
+      <td class="num">${i.open ? '<span class="tag open">פתוחה</span>' : esc(i.out)}</td>
+      <td class="num">${i.minutes == null ? '' : fmtMin(i.minutes)}</td>
+      <td class="num">${i.pay == null ? '' : money(i.pay)}</td></tr>`).join('')
+      : '<tr><td colspan="5" style="color:var(--muted)">אין משמרות בחודש הזה</td></tr>';
+    $('tot-hours').textContent = fmtMin(d.total_minutes);
+    $('tot-pay').textContent = money(d.total_pay);
+    $('rate-warn').style.display = (d.current_rate == null || d.missing_rate) ? 'block' : 'none';
+  } catch (e) { body.innerHTML = `<tr><td colspan="5" class="err">${esc(e.message)}</td></tr>`; }
+}
+function shiftMonth(delta) {
+  const [y, m] = curMonth().split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  $('month').value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  loadHours();
+}
+$('m-prev').onclick = () => shiftMonth(-1);
+$('m-next').onclick = () => shiftMonth(1);
+$('month').onchange = loadHours;
+
+function start(user) {
+  show('main-view');
+  $('hello').textContent = 'שלום ' + (user.name || '');
+  $('admin-link').style.display = user.role === 'admin' ? 'inline-block' : 'none';
+  if (!$('month').value) $('month').value = new Date().toISOString().slice(0,7);
+  loadClock(); loadHours();
+}
+async function init() {
+  if (!token()) { show('login-view'); return; }
+  try {
+    const res = await fetch(API + '/api/me', { headers: H() });
+    if (!res.ok) throw 0;
+    const u = await res.json();
+    if (!['employee','admin'].includes(u.role)) throw 0;
+    if (u.must_change_password) { show('pw-view'); return; }
+    start(u);
+  } catch (e) { clearToken(); show('login-view'); }
+}
+init();
+</script>
+</body>
+</html>

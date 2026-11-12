@@ -133,6 +133,28 @@ try:
     """)
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);")
 
+    # --- שעות עבודה ושכר ---
+    # hourly_rate על המשתמש הוא התעריף הנוכחי. כל משמרת שומרת עותק של התעריף שהיה בכניסה,
+    # כדי ששינוי תעריף בהמשך לא ישנה חישוב של משמרות קודמות. רק מנהל משנה תעריף או משמרת.
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(8,2);")
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS shifts (
+            id          SERIAL PRIMARY KEY,
+            user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            clock_in    TIMESTAMPTZ NOT NULL,
+            clock_out   TIMESTAMPTZ,
+            hourly_rate NUMERIC(8,2),
+            note        TEXT,
+            created_by  INTEGER,
+            edited_by   INTEGER,
+            edited_at   TIMESTAMPTZ,
+            created_at  TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_shifts_user_in ON shifts(user_id, clock_in DESC);")
+    # עובד אחד לא יכול להיות עם שתי משמרות פתוחות במקביל (מוגן גם ברמת המסד)
+    init_cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uniq_open_shift_per_user ON shifts(user_id) WHERE clock_out IS NULL;")
+
     # --- הגנה על צ'אט ה-AI: חסימה זמנית על הודעות לא-קשורות ברצף + מגבלת שימוש יומית ---
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_offtopic_streak INTEGER NOT NULL DEFAULT 0;")
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_blocked_until TIMESTAMP;")
@@ -621,6 +643,286 @@ def admin_audit_log(limit: int = 100, sess: dict = Depends(require_admin)):
     rows = cur.fetchall(); cur.close(); conn.close()
     return [{"id": r[0], "at": r[1].strftime("%d/%m/%Y %H:%M") if r[1] else "", "actor": r[2] or "",
              "action": r[3], "target_type": r[4], "target_id": r[5], "details": r[6]} for r in rows]
+
+# ===================== שעות עבודה ושכר =====================
+MAX_SHIFT_HOURS = 24
+
+def _month_bounds(month: Optional[str]):
+    """'YYYY-MM' (שעון ישראל) -> (תחילת החודש, תחילת החודש הבא, המחרוזת)."""
+    now = datetime.now(ISRAEL_TZ)
+    try:
+        y, m = (int(x) for x in month.split("-")) if month else (now.year, now.month)
+        start = datetime(y, m, 1, tzinfo=ISRAEL_TZ)
+    except Exception:
+        raise HTTPException(status_code=400, detail="חודש לא תקין (פורמט YYYY-MM)")
+    end = datetime(y + (m == 12), (m % 12) + 1, 1, tzinfo=ISRAEL_TZ)
+    return start, end, f"{y:04d}-{m:02d}"
+
+def _il(dt):
+    return dt.astimezone(ISRAEL_TZ) if dt else None
+
+def _shift_dict(r, now=None):
+    """r = (id, clock_in, clock_out, hourly_rate, note, edited_by_name)."""
+    cin, cout = _il(r[1]), _il(r[2])
+    minutes = None; pay = None
+    if cout:
+        minutes = max(0, int(round((cout - cin).total_seconds() / 60)))
+        pay = round(minutes / 60 * float(r[3]), 2) if r[3] is not None else None
+    return {
+        "id": r[0],
+        "date": cin.strftime("%d/%m/%Y"), "weekday": ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"][cin.weekday()],
+        "in": cin.strftime("%H:%M"), "out": cout.strftime("%H:%M") if cout else None,
+        "in_iso": cin.strftime("%Y-%m-%dT%H:%M"), "out_iso": cout.strftime("%Y-%m-%dT%H:%M") if cout else None,
+        "minutes": minutes, "rate": float(r[3]) if r[3] is not None else None, "pay": pay,
+        "note": r[4] or "", "edited": bool(r[5]), "edited_by": r[5] or "",
+        "open": cout is None,
+        "open_minutes": int((datetime.now(ISRAEL_TZ) - cin).total_seconds() // 60) if not cout else None,
+    }
+
+def _hours_payload(cur, user_id, month):
+    start, end, month_str = _month_bounds(month)
+    cur.execute(
+        """
+        SELECT s.id, s.clock_in, s.clock_out, s.hourly_rate, s.note, eb.name
+        FROM shifts s LEFT JOIN users eb ON eb.id = s.edited_by
+        WHERE s.user_id = %s AND s.clock_in >= %s AND s.clock_in < %s
+        ORDER BY s.clock_in;
+        """,
+        (user_id, start, end),
+    )
+    items = [_shift_dict(r) for r in cur.fetchall()]
+    total_min = sum(i["minutes"] or 0 for i in items)
+    total_pay = round(sum(i["pay"] or 0 for i in items), 2)
+    missing_rate = any(i["minutes"] and i["rate"] is None for i in items)
+    return {"month": month_str, "items": items, "total_minutes": total_min, "total_pay": total_pay,
+            "missing_rate": missing_rate}
+
+# ---------- עובד / מנהל: שעון נוכחות ושעות שלי ----------
+@app.get("/api/staff/clock")
+def staff_clock_status(sess: dict = Depends(require_staff)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        "SELECT s.id, s.clock_in, s.clock_out, s.hourly_rate, s.note, NULL FROM shifts s "
+        "WHERE s.user_id = %s AND s.clock_out IS NULL;", (sess["user_id"],))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    return {"open_shift": _shift_dict(row) if row else None, "name": sess["name"]}
+
+@app.post("/api/staff/clock/in")
+def staff_clock_in(sess: dict = Depends(require_staff)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT hourly_rate FROM users WHERE id = %s;", (sess["user_id"],))
+    rate = cur.fetchone()[0]
+    try:
+        cur.execute("INSERT INTO shifts (user_id, clock_in, hourly_rate) VALUES (%s, NOW(), %s) RETURNING id;",
+                    (sess["user_id"], rate))
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback(); cur.close(); conn.close()
+        raise HTTPException(status_code=409, detail="כבר רשומה כניסה פתוחה. צריך לסמן יציאה קודם.")
+    cur.close(); conn.close()
+    return {"ok": True}
+
+@app.post("/api/staff/clock/out")
+def staff_clock_out(sess: dict = Depends(require_staff)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("UPDATE shifts SET clock_out = NOW() WHERE user_id = %s AND clock_out IS NULL RETURNING id;",
+                (sess["user_id"],))
+    row = cur.fetchone()
+    conn.commit(); cur.close(); conn.close()
+    if not row:
+        raise HTTPException(status_code=409, detail="אין כניסה פתוחה. צריך לסמן כניסה קודם.")
+    return {"ok": True}
+
+@app.get("/api/staff/my-hours")
+def staff_my_hours(month: Optional[str] = None, sess: dict = Depends(require_staff)):
+    conn = get_conn(); cur = conn.cursor()
+    data = _hours_payload(cur, sess["user_id"], month)
+    cur.execute("SELECT hourly_rate FROM users WHERE id = %s;", (sess["user_id"],))
+    r = cur.fetchone()[0]
+    cur.close(); conn.close()
+    data["current_rate"] = float(r) if r is not None else None
+    return data
+
+# ---------- מנהל: שעות ושכר של כולם ----------
+@app.get("/api/admin/hours-summary")
+def admin_hours_summary(month: Optional[str] = None, sess: dict = Depends(require_admin)):
+    start, end, month_str = _month_bounds(month)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT u.id, u.name, u.email, u.role, u.active, u.hourly_rate,
+               COALESCE(SUM(EXTRACT(EPOCH FROM (s.clock_out - s.clock_in)) / 60) FILTER (WHERE s.clock_out IS NOT NULL), 0),
+               COALESCE(SUM(EXTRACT(EPOCH FROM (s.clock_out - s.clock_in)) / 3600 * s.hourly_rate)
+                        FILTER (WHERE s.clock_out IS NOT NULL AND s.hourly_rate IS NOT NULL), 0),
+               COUNT(s.id) FILTER (WHERE s.clock_out IS NULL),
+               COUNT(s.id) FILTER (WHERE s.clock_out IS NOT NULL AND s.hourly_rate IS NULL)
+        FROM users u
+        LEFT JOIN shifts s ON s.user_id = u.id AND s.clock_in >= %s AND s.clock_in < %s
+        WHERE u.role IN ('employee', 'admin')
+        GROUP BY u.id
+        ORDER BY u.active DESC, u.name NULLS LAST, u.id;
+        """,
+        (start, end),
+    )
+    rows = cur.fetchall(); cur.close(); conn.close()
+    items = [{"id": r[0], "name": r[1], "email": r[2], "role": r[3], "active": bool(r[4]),
+              "hourly_rate": float(r[5]) if r[5] is not None else None,
+              "minutes": int(round(float(r[6]))), "pay": round(float(r[7]), 2),
+              "open_shifts": r[8], "shifts_without_rate": r[9]} for r in rows]
+    return {"month": month_str, "items": items,
+            "total_pay": round(sum(i["pay"] for i in items), 2),
+            "total_minutes": sum(i["minutes"] for i in items)}
+
+@app.get("/api/admin/hours/{user_id}")
+def admin_user_hours(user_id: int, month: Optional[str] = None, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT name, email, hourly_rate FROM users WHERE id = %s;", (user_id,))
+    u = cur.fetchone()
+    if not u:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
+    data = _hours_payload(cur, user_id, month)
+    cur.close(); conn.close()
+    data.update({"user_id": user_id, "name": u[0], "email": u[1], "current_rate": float(u[2]) if u[2] is not None else None})
+    return data
+
+class RateBody(BaseModel):
+    hourly_rate: Optional[float] = None
+
+@app.put("/api/admin/users/{user_id}/rate")
+def admin_set_rate(user_id: int, body: RateBody, sess: dict = Depends(require_admin)):
+    rate = body.hourly_rate
+    if rate is not None and (rate < 0 or rate > 1000):
+        raise HTTPException(status_code=400, detail="תעריף שעתי לא תקין")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT hourly_rate FROM users WHERE id = %s FOR UPDATE;", (user_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
+    old = float(row[0]) if row[0] is not None else None
+    cur.execute("UPDATE users SET hourly_rate = %s WHERE id = %s;", (rate, user_id))
+    filled = 0
+    if rate is not None:
+        # משמרות שנרשמו כשעוד לא היה תעריף מקבלות אותו. משמרות עם תעריף קודם לא משתנות.
+        cur.execute("UPDATE shifts SET hourly_rate = %s WHERE user_id = %s AND hourly_rate IS NULL;", (rate, user_id))
+        filled = cur.rowcount
+        # משמרת פתוחה כרגע שנפתחה בתעריף אחר: מעדכנים גם אותה, כדי שלא תיחשב לפי תעריף ישן
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "rate_change", "user", user_id, {"hourly_rate": [old, rate], "filled_shifts": filled})
+    return {"ok": True, "filled_shifts": filled}
+
+def _parse_local_dt(val: Optional[str]):
+    """'YYYY-MM-DDTHH:MM' בשעון ישראל."""
+    if not val:
+        return None
+    try:
+        dt = datetime.strptime(val[:16], "%Y-%m-%dT%H:%M")
+    except Exception:
+        raise HTTPException(status_code=400, detail="פורמט תאריך ושעה לא תקין")
+    return dt.replace(tzinfo=ISRAEL_TZ)
+
+def _validate_shift_times(cur, user_id, cin, cout, exclude_id=None):
+    if not cin:
+        raise HTTPException(status_code=400, detail="חסרה שעת כניסה")
+    if cout is not None:
+        if cout <= cin:
+            raise HTTPException(status_code=400, detail="שעת היציאה חייבת להיות אחרי שעת הכניסה")
+        if (cout - cin).total_seconds() > MAX_SHIFT_HOURS * 3600:
+            raise HTTPException(status_code=400, detail=f"משמרת לא יכולה להיות ארוכה מ-{MAX_SHIFT_HOURS} שעות")
+    cur.execute(
+        """
+        SELECT 1 FROM shifts
+        WHERE user_id = %s AND (%s::int IS NULL OR id <> %s)
+          AND clock_in < COALESCE(%s::timestamptz, 'infinity'::timestamptz)
+          AND COALESCE(clock_out, 'infinity'::timestamptz) > %s;
+        """,
+        (user_id, exclude_id, exclude_id, cout, cin),
+    )
+    if cur.fetchone():
+        raise HTTPException(status_code=409, detail="המשמרת חופפת למשמרת אחרת של אותו עובד")
+
+class ShiftCreateBody(BaseModel):
+    user_id: int
+    clock_in: str
+    clock_out: Optional[str] = None
+    hourly_rate: Optional[float] = None
+    note: Optional[str] = None
+
+@app.post("/api/admin/shifts")
+def admin_create_shift(body: ShiftCreateBody, sess: dict = Depends(require_admin)):
+    cin, cout = _parse_local_dt(body.clock_in), _parse_local_dt(body.clock_out)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT hourly_rate FROM users WHERE id = %s;", (body.user_id,))
+    u = cur.fetchone()
+    if not u:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
+    rate = body.hourly_rate if body.hourly_rate is not None else u[0]
+    try:
+        _validate_shift_times(cur, body.user_id, cin, cout)
+        cur.execute(
+            "INSERT INTO shifts (user_id, clock_in, clock_out, hourly_rate, note, created_by) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id;",
+            (body.user_id, cin, cout, rate, (body.note or "").strip() or None, sess["user_id"]))
+        new_id = cur.fetchone()[0]
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback(); cur.close(); conn.close()
+        raise HTTPException(status_code=409, detail="לעובד הזה כבר יש כניסה פתוחה")
+    except HTTPException:
+        conn.rollback(); cur.close(); conn.close(); raise
+    cur.close(); conn.close()
+    _audit(sess, "shift_create", "shift", new_id, {"user_id": body.user_id, "in": body.clock_in, "out": body.clock_out})
+    return {"id": new_id}
+
+class ShiftUpdateBody(BaseModel):
+    clock_in: Optional[str] = None
+    clock_out: Optional[str] = None      # מחרוזת ריקה = משמרת פתוחה
+    hourly_rate: Optional[float] = None
+    note: Optional[str] = None
+
+@app.patch("/api/admin/shifts/{shift_id}")
+def admin_update_shift(shift_id: int, body: ShiftUpdateBody, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT user_id, clock_in, clock_out, hourly_rate, note FROM shifts WHERE id = %s FOR UPDATE;", (shift_id,))
+    old = cur.fetchone()
+    if not old:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="המשמרת לא נמצאה")
+    user_id = old[0]
+    cin = _parse_local_dt(body.clock_in) if body.clock_in else old[1]
+    cout = old[2] if body.clock_out is None else _parse_local_dt(body.clock_out)
+    rate = body.hourly_rate if body.hourly_rate is not None else old[3]
+    note = old[4] if body.note is None else ((body.note.strip()) or None)
+    try:
+        _validate_shift_times(cur, user_id, cin, cout, exclude_id=shift_id)
+        cur.execute("UPDATE shifts SET clock_in=%s, clock_out=%s, hourly_rate=%s, note=%s, edited_by=%s, edited_at=NOW() WHERE id=%s;",
+                    (cin, cout, rate, note, sess["user_id"], shift_id))
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback(); cur.close(); conn.close()
+        raise HTTPException(status_code=409, detail="לעובד הזה כבר יש כניסה פתוחה")
+    except HTTPException:
+        conn.rollback(); cur.close(); conn.close(); raise
+    cur.close(); conn.close()
+    fmt = lambda d: _il(d).strftime("%Y-%m-%d %H:%M") if d else None
+    _audit(sess, "shift_update", "shift", shift_id,
+           {"user_id": user_id, "in": [fmt(old[1]), fmt(cin)], "out": [fmt(old[2]), fmt(cout)],
+            "rate": [float(old[3]) if old[3] is not None else None, float(rate) if rate is not None else None]})
+    return {"ok": True}
+
+@app.delete("/api/admin/shifts/{shift_id}")
+def admin_delete_shift(shift_id: int, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM shifts WHERE id = %s RETURNING user_id, clock_in, clock_out;", (shift_id,))
+    row = cur.fetchone()
+    conn.commit(); cur.close(); conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="המשמרת לא נמצאה")
+    fmt = lambda d: _il(d).strftime("%Y-%m-%d %H:%M") if d else None
+    _audit(sess, "shift_delete", "shift", shift_id, {"user_id": row[0], "in": fmt(row[1]), "out": fmt(row[2])})
+    return {"ok": True}
 
 def _parse_time(val, default):
     try:
@@ -2051,6 +2353,10 @@ def serve_index():
 @app.get("/admin.html")
 def serve_admin():
     return FileResponse(os.path.join(STATIC_DIR, "admin.html"), headers=_NO_CACHE_HTML)
+
+@app.get("/staff.html")
+def serve_staff():
+    return FileResponse(os.path.join(STATIC_DIR, "staff.html"), headers=_NO_CACHE_HTML)
 
 @app.get("/logo.jpg")
 def serve_logo():

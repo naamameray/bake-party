@@ -1,6 +1,8 @@
 User-agent: *
 Allow: /
 Disallow: /admin.html
+Disallow: /staff.html
 Disallow: /api/admin/
+Disallow: /api/staff/
 
 Sitemap: https://www.bakeparty.co.il/sitemap.xml
