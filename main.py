@@ -28,10 +28,13 @@ async def add_security_headers(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.scheme == "https":
+        # Browsers remember to use HTTPS only for this site for a year
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
     return response
 
 from fastapi.middleware.gzip import GZipMiddleware
-# דחיסה: רשימת המוצרים יורדת מכ-900KB לכ-100KB, כך שהאתר נטען הרבה יותר מהר בטלפון
+# Compression: the product list drops from ~900KB to ~100KB, so the site loads much faster on phones
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
@@ -54,8 +57,8 @@ DB_CONFIG = {
 try:
     init_conn = psycopg2.connect(**DB_CONFIG)
     init_cur = init_conn.cursor()
-    # במסד ריק (הקמה ראשונה) הטבלאות של המוצרים עוד לא קיימות. בלי זה כל ההקמה נכשלת,
-    # כולל משתמשים ושעות. הסכימה זהה לזו של tools/import_data.py.
+    # On an empty database (first deploy) the product tables don't exist yet. Without this the whole setup fails,
+    # including users and hours. The schema matches tools/import_data.py.
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS Categories (
             id SERIAL PRIMARY KEY, wolt_id VARCHAR(64) UNIQUE, name VARCHAR(255) NOT NULL,
@@ -82,8 +85,8 @@ try:
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS is_on_sale BOOLEAN DEFAULT FALSE;")
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(10,2);")
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS sale_label TEXT;")
-    # תאריך הוספה, לשורת "חדש בחנות". בלי ברירת מחדל בעת היצירה, כדי שמוצרים קיימים
-    # לא יסומנו כולם כחדשים. רק מוצרים שנוספים מעכשיו מקבלים תאריך.
+    # Date added, for the "New in store" row. No default at creation time, so existing products
+    # are not all marked as new. Only products added from now on get a date.
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP;")
     init_cur.execute("ALTER TABLE Products ALTER COLUMN created_at SET DEFAULT NOW();")
 
@@ -124,14 +127,18 @@ try:
     for col in ("phone", "address", "name"):
         init_cur.execute(f"ALTER TABLE users ALTER COLUMN {col} DROP NOT NULL;")
 
-    # --- תפקידים ואבטחת חשבונות: customer | employee | admin (מנהל) ---
+    # --- Roles and account security: customer | employee | admin ---
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;")
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;")
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_logins INTEGER NOT NULL DEFAULT 0;")
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP;")
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;")
-    # חיבורים נשמרים במסד הנתונים (לא בזיכרון), כך שפרסום חדש לא מנתק אף אחד.
-    # נשמר רק ה-hash של הטוקן, לא הטוקן עצמו.
+    # Sign in with Google: the Google account id and its profile picture (shown on reviews)
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(64);")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;")
+    init_cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL;")
+    # Sessions live in the database (not in memory), so a new deploy doesn't log anyone out.
+    # Only the token's hash is stored, never the token itself.
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             token_hash VARCHAR(64) PRIMARY KEY,
@@ -141,7 +148,7 @@ try:
         );
     """)
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);")
-    # יומן פעולות: מי עשה מה ומתי. נכתב רק על ידי השרת, ואי אפשר לערוך או למחוק אותו מהאתר.
+    # Audit log: who did what and when. Written only by the server; it can't be edited or deleted from the site.
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS audit_log (
             id          SERIAL PRIMARY KEY,
@@ -156,9 +163,9 @@ try:
     """)
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);")
 
-    # --- שעות עבודה ושכר ---
-    # hourly_rate על המשתמש הוא התעריף הנוכחי. כל משמרת שומרת עותק של התעריף שהיה בכניסה,
-    # כדי ששינוי תעריף בהמשך לא ישנה חישוב של משמרות קודמות. רק מנהל משנה תעריף או משמרת.
+    # --- Work hours and pay ---
+    # users.hourly_rate is the current rate. Each shift keeps a copy of the rate at clock-in,
+    # so a later rate change doesn't alter past shifts. Only an admin changes rates or shifts.
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(8,2);")
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS shifts (
@@ -175,10 +182,10 @@ try:
         );
     """)
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_shifts_user_in ON shifts(user_id, clock_in DESC);")
-    # עובד אחד לא יכול להיות עם שתי משמרות פתוחות במקביל (מוגן גם ברמת המסד)
+    # One employee can't have two open shifts at once (also enforced by the database)
     init_cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uniq_open_shift_per_user ON shifts(user_id) WHERE clock_out IS NULL;")
 
-    # --- התראות (Web Push). שולחים ללקוחות רק אם notify_consent = TRUE (אישור מפורש מהלקוח) ---
+    # --- Web Push. Customers get messages only if notify_consent = TRUE (explicit opt-in) ---
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_consent BOOLEAN NOT NULL DEFAULT FALSE;")
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_consent_at TIMESTAMPTZ;")
     init_cur.execute("""
@@ -193,7 +200,7 @@ try:
     """)
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);")
 
-    # --- הגנה על צ'אט ה-AI: חסימה זמנית על הודעות לא-קשורות ברצף + מגבלת שימוש יומית ---
+    # --- AI chat protection: temporary block after repeated off-topic messages + a daily limit ---
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_offtopic_streak INTEGER NOT NULL DEFAULT 0;")
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_blocked_until TIMESTAMP;")
     init_cur.execute("""
@@ -205,8 +212,8 @@ try:
         );
     """)
 
-    # --- יומן שיחות עם ה-AI: מה נשאל, מה נענה, ומי שאל (לצפייה במנהל) ---
-    # נשמרים גם ניסיונות שנכשלו (עם סיבת הכשל) — כך אפשר לאבחן תקלות בלי לחפור בלוגים.
+    # --- AI chat log: what was asked, what was answered, and by whom (visible to admins) ---
+    # Failed attempts are stored too (with the reason), so problems can be diagnosed without digging through logs.
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS ai_chat_log (
             id          SERIAL PRIMARY KEY,
@@ -229,14 +236,14 @@ try:
         INSERT INTO settings (key, value) VALUES ('opening_time','09:00'),('closing_time','18:00'),
         ('delivery_override','auto') ON CONFLICT (key) DO NOTHING;
     """)
-    # תיקון כתובת החנות: יוני נתניהו 25 (גם אם נשמרה בעבר כתובת ישנה, 21 או 23)
+    # Store address fix: Yoni Netanyahu 25 (also when an old address, 21 or 23, was saved before)
     init_cur.execute("UPDATE settings SET value = regexp_replace(value, 'יוני נתניהו (21|23)\\M', 'יוני נתניהו 25') "
                      "WHERE key = 'contact_address' AND value ~ 'יוני נתניהו (21|23)\\M';")
 
-    # --- שאלות ותשובות נפוצות (FAQ) — כולל מנגנון "מתגלה אוטומטית מהצ'אט" ---
-    # topic_key: תגית קבועה שה-AI מסווג אליה כל שאלה בצ'אט (ראו _ai_build_context/ai_chat).
-    # ברגע שנושא מסוים נשאל FAQ_AUTO_PUBLISH_THRESHOLD פעמים, הוא עולה אוטומטית לאתר.
-    # שאלה/תשובה כתובות מראש ידנית (לא טקסט גולמי מהצ'אט) — כדי לשמור על ניסוח מדויק ומבוקר.
+    # --- FAQ, including items that are "discovered" automatically from the chat ---
+    # topic_key: a fixed label the AI assigns to every chat question (see _ai_build_context / ai_chat).
+    # Once a topic has been asked FAQ_AUTO_PUBLISH_THRESHOLD times, it is published on the site automatically.
+    # Questions and answers are written in advance (not raw chat text), to keep the wording accurate.
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS faq_items (
             id          SERIAL PRIMARY KEY,
@@ -269,7 +276,7 @@ try:
         ("sugar_sheets", "יש אפשרות לבדוק גודל דף סוכר לפני שמדפיסים?",
          "כלי כזה נמצא כרגע בפיתוח ויתווסף לאתר בקרוב. בינתיים אפשר לפנות אלינו ישירות ונעזור עם המידע הדרוש.",
          True, 6),
-        # שלושת אלה עדיין לא מוצגים באתר — יעלו אוטומטית ברגע שישאלו עליהם מספיק פעמים בצ'אט
+        # These three are not shown yet; they go live once they've been asked about enough times in the chat
         ("prices", "איך אפשר לדעת מחירים? יש מחירון?",
          "המחיר של כל מוצר מופיע ישירות על כרטיס המוצר באתר. אם יש שאלה על מוצר ספציפי שלא מצאתם, אפשר להתקשר או לשלוח הודעת וואטסאפ ונבדוק עבורכם.",
          False, 7),
@@ -287,7 +294,7 @@ try:
             (topic_key, question, answer, published, sort_order),
         )
 
-    # --- הזמנות לאיסוף עצמי ---
+    # --- Pickup orders ---
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id            SERIAL PRIMARY KEY,
@@ -322,13 +329,13 @@ try:
         );
     """)
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);")
-    # פריט חסר: הלקוח בוחר מה לעשות (remove = להמשיך בלעדיו, replace = תחליף + הערה). פריט שהצוות הוסיף (תחליף) מסומן.
+    # Missing item: the customer decides what to do (remove = continue without it, replace = substitute + note). Staff-added items are flagged.
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_choice VARCHAR(20);")
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_note TEXT;")
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS added_by_staff BOOLEAN NOT NULL DEFAULT FALSE;")
-    # תחליף שהלקוח בחר בעצמו: מצביע על הפריט החסר שהוא מחליף
+    # Substitute the customer picked: points to the missing item it replaces
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS substitute_for INTEGER;")
-    # התראות בטלפון לפי הזמנה: גם לקוח שלא נרשם יכול לבקש התראה כשההזמנה שלו מוכנה (בלי הסכמה לפרסומות)
+    # Per-order push subscriptions: even a guest can ask to be notified when their order is ready (not marketing consent)
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS order_push_subs (
             id         SERIAL PRIMARY KEY,
@@ -340,12 +347,12 @@ try:
             UNIQUE (order_id, endpoint)
         );
     """)
-    # עכשיו יש הזמנות באתר: מעדכנים את תשובת ה-FAQ הישנה ("אין הזמנות באתר") אם לא נערכה ידנית
+    # The site now takes orders: update the old FAQ answer ("no ordering on the site") unless it was edited by hand
     init_cur.execute("""UPDATE faq_items SET question = 'איך מזמינים? אפשר להזמין דרך האתר?',
         answer = 'כן! מוסיפים מוצרים לעגלה באתר ושולחים הזמנה לאיסוף עצמי מהחנות. כשההזמנה מוכנה נעדכן אתכם, והתשלום בחנות בזמן האיסוף. אפשר להזמין גם בטלפון, בוואטסאפ או בוולט.',
         updated_at = NOW() WHERE topic_key = 'ordering' AND answer LIKE 'כרגע אין באתר מערכת הזמנות%';""")
 
-    # --- ביקורות: מוצגות רק אחרי אישור מנהל. תגובות לביקורות מתפרסמות מיד (מנהל יכול למחוק) ---
+    # --- Reviews: shown only after admin approval. Replies are published immediately (admins can delete them) ---
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS reviews (
             id          SERIAL PRIMARY KEY,
@@ -374,7 +381,7 @@ try:
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_review_replies_review ON review_replies(review_id, id);")
     init_cur.execute("ALTER TABLE reviews ADD COLUMN IF NOT EXISTS photo_url TEXT;")
 
-    # יומן שליחות: כל מייל והתראה שנשלחו או נכשלו, עם הסיבה. מוצג בפאנל הניהול (לשונית הודעות)
+    # Notification log: every email and push that was sent or failed, with the reason. Shown in the admin panel (Messages tab)
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS notification_log (
             id         SERIAL PRIMARY KEY,
@@ -438,8 +445,8 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 def _session_from_header(authorization):
-    """מחזיר את פרטי המחובר, או None. התפקיד והסטטוס נקראים מהמסד בכל בקשה,
-    ולכן שינוי תפקיד או השבתה של משתמש נכנסים לתוקף מיד."""
+    """Returns the signed-in session, or None. Role and status are read from the database on every request,
+    so a role change or a disabled account takes effect immediately."""
     if not authorization or not authorization.startswith("Bearer "):
         return None
     token = authorization.split(" ", 1)[1]
@@ -462,7 +469,7 @@ def _session_from_header(authorization):
             "token_hash": _token_hash(token)}
 
 def require_auth_any(authorization: str = Header(None)):
-    """מחובר, גם אם עדיין צריך להחליף סיסמה (רק לשינוי סיסמה, /api/me ויציאה)."""
+    """Signed in, even if a password change is still required (only for changing it, /api/me and logout)."""
     sess = _session_from_header(authorization)
     if not sess:
         raise HTTPException(status_code=401, detail="נדרשת התחברות")
@@ -488,14 +495,16 @@ def require_admin(authorization: str = Header(None)):
 
 def _user_public(row):
     return {"id": row[0], "name": row[1], "email": row[2], "phone": row[3], "address": row[4], "role": row[5],
-            "must_change_password": bool(row[6]) if len(row) > 6 else False}
+            "must_change_password": bool(row[6]) if len(row) > 6 else False,
+            "avatar": row[7] if len(row) > 7 else None, "google": bool(row[8]) if len(row) > 8 else False}
 
 def _fetch_user(cur, user_id):
-    cur.execute("SELECT id, name, email, phone, address, role, must_change_password FROM users WHERE id = %s;", (user_id,))
+    cur.execute("SELECT id, name, email, phone, address, role, must_change_password, avatar_url, google_sub "
+                "FROM users WHERE id = %s;", (user_id,))
     return cur.fetchone()
 
 def _audit(actor, action, target_type=None, target_id=None, details=None):
-    """רושם ביומן הפעולות. לא מפיל את הפעולה עצמה אם הרישום נכשל."""
+    """Writes to the audit log. Never fails the action itself if logging fails."""
     try:
         import json as _json
         conn = get_conn(); cur = conn.cursor()
@@ -514,7 +523,7 @@ class RegisterBody(BaseModel):
     password: str
     phone: Optional[str] = None
     address: Optional[str] = None
-    notify: bool = False        # אישור מפורש לקבל התראות (מייל והתראות בטלפון)
+    notify: bool = False        # Explicit opt-in for notifications (email and phone)
 
 class LoginBody(BaseModel):
     email: str
@@ -613,6 +622,76 @@ def login(body: LoginBody, request: Request):
     LOGIN_ATTEMPTS.pop(ip, None)
     return {"token": _issue_token(row[0]), "user": _user_public(user)}
 
+# ---------- Sign in with Google ----------
+# The browser gets a signed ID token from Google; the server checks it with Google before trusting it.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_ATTEMPTS = defaultdict(list)
+
+class GoogleAuthBody(BaseModel):
+    credential: str
+
+@app.get("/api/auth/config")
+def auth_config():
+    return {"google_client_id": GOOGLE_CLIENT_ID or None}
+
+def _verify_google_token(credential):
+    """Validates a Google ID token via Google's tokeninfo endpoint. Returns its claims or raises."""
+    import urllib.request, urllib.parse, urllib.error
+    base = os.environ.get("GOOGLE_TOKENINFO_URL", "https://oauth2.googleapis.com/tokeninfo")   # overridable for local tests
+    url = base + "?" + urllib.parse.urlencode({"id_token": credential})
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            claims = json.loads(r.read().decode())
+    except urllib.error.HTTPError:
+        raise HTTPException(status_code=401, detail="ההתחברות עם Google לא אושרה. נסו שוב.")
+    except Exception:
+        raise HTTPException(status_code=503, detail="אין כרגע חיבור ל-Google. נסו שוב בעוד רגע.")
+    if claims.get("aud") != GOOGLE_CLIENT_ID or claims.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
+        raise HTTPException(status_code=401, detail="ההתחברות עם Google לא אושרה.")
+    if str(claims.get("email_verified")).lower() != "true" or not claims.get("email"):
+        raise HTTPException(status_code=401, detail="כתובת המייל בחשבון Google לא מאומתת.")
+    if int(claims.get("exp", 0)) < time_module.time():
+        raise HTTPException(status_code=401, detail="פג תוקף ההתחברות. נסו שוב.")
+    return claims
+
+@app.post("/api/auth/google")
+def auth_google(body: GoogleAuthBody, request: Request):
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=400, detail="התחברות עם Google עוד לא הופעלה באתר")
+    ip = request.client.host if request.client else "unknown"
+    _simple_rate_limit(GOOGLE_ATTEMPTS, ip, 20, 600, "יותר מדי ניסיונות התחברות. נסו שוב בעוד כמה דקות.")
+    claims = _verify_google_token(body.credential)
+    sub, email = str(claims["sub"]), claims["email"].strip().lower()
+    name = (claims.get("name") or "").strip() or email.split("@")[0]
+    picture = claims.get("picture") if str(claims.get("picture", "")).startswith("https://") else None
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, active FROM users WHERE google_sub = %s;", (sub,))
+        row = cur.fetchone()
+        if not row:
+            # Same email already registered: Google has verified the address, so link the accounts
+            cur.execute("SELECT id, active FROM users WHERE email = %s;", (email,))
+            row = cur.fetchone()
+        if row and not row[1]:
+            raise HTTPException(status_code=403, detail="החשבון הושבת. יש לפנות לחנות.")
+        if row:
+            user_id = row[0]
+            cur.execute("UPDATE users SET google_sub = %s, avatar_url = %s, name = COALESCE(NULLIF(name, ''), %s), "
+                        "last_login = NOW(), failed_logins = 0, locked_until = NULL WHERE id = %s;", (sub, picture, name, user_id))
+            new_user = False
+        else:
+            # New customer. The random password is never shown, so this account signs in only through Google
+            cur.execute("INSERT INTO users (name, email, password_hash, role, google_sub, avatar_url, last_login) "
+                        "VALUES (%s, %s, %s, 'customer', %s, %s, NOW()) RETURNING id;",
+                        (name[:150], email, hash_password(secrets.token_urlsafe(24)), sub, picture))
+            user_id = cur.fetchone()[0]
+            new_user = True
+        conn.commit()
+        user = _fetch_user(cur, user_id)
+    finally:
+        cur.close(); conn.close()
+    return {"token": _issue_token(user_id), "user": _user_public(user), "new_user": new_user}
+
 @app.post("/api/logout")
 def logout(authorization: str = Header(None)):
     if authorization and authorization.startswith("Bearer "):
@@ -630,7 +709,7 @@ def get_me(sess: dict = Depends(require_auth_any)):
         raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
     return _user_public(user)
 
-# ===================== ניהול משתמשים וצוות (מנהלים בלבד) =====================
+# ===================== User and staff management (admins only) =====================
 import string as _string
 
 def _temp_password(n: int = 10) -> str:
@@ -715,7 +794,7 @@ def admin_update_user(user_id: int, body: UserUpdateBody, sess: dict = Depends(r
         raise HTTPException(status_code=404, detail="המשתמש לא נמצא")
     old_name, old_phone, old_role, old_active = cur_row
     if old_role == "customer":
-        # לקוחות הם לקריאה בלבד: אי אפשר לשנות להם פרטים, תפקיד או סטטוס, כדי לא לפגוע בלקוח בטעות
+        # Customers are read-only here: their details, role and status can't be changed, so no customer is affected by mistake
         cur.close(); conn.close()
         raise HTTPException(status_code=403, detail="לקוחות הם לקריאה בלבד. אי אפשר לשנות את הפרטים שלהם.")
     new_role = body.role if body.role is not None else old_role
@@ -727,7 +806,7 @@ def admin_update_user(user_id: int, body: UserUpdateBody, sess: dict = Depends(r
     if is_self and (new_role != old_role or new_active is False):
         cur.close(); conn.close()
         raise HTTPException(status_code=400, detail="אי אפשר לשנות את התפקיד או להשבית את החשבון של עצמך")
-    # תמיד חייב להישאר לפחות מנהל פעיל אחד
+    # There must always be at least one active admin
     if old_role == "admin" and old_active and (new_role != "admin" or not new_active):
         cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = TRUE AND id <> %s;", (user_id,))
         if cur.fetchone()[0] == 0:
@@ -738,7 +817,7 @@ def admin_update_user(user_id: int, body: UserUpdateBody, sess: dict = Depends(r
     cur.execute("UPDATE users SET name = %s, phone = %s, role = %s, active = %s WHERE id = %s;",
                 (name, phone, new_role, new_active, user_id))
     if new_role != old_role or new_active != old_active:
-        _drop_sessions(cur, user_id)      # משנה תפקיד או מושבת: מתנתק מיד
+        _drop_sessions(cur, user_id)      # Role changed or account disabled: sign out immediately
     conn.commit(); cur.close(); conn.close()
     changes = {}
     if name != old_name: changes["name"] = [old_name, name]
@@ -801,11 +880,11 @@ def admin_audit_log(limit: int = 100, sess: dict = Depends(require_admin)):
     return [{"id": r[0], "at": r[1].strftime("%d/%m/%Y %H:%M") if r[1] else "", "actor": r[2] or "",
              "action": r[3], "target_type": r[4], "target_id": r[5], "details": r[6]} for r in rows]
 
-# ===================== שעות עבודה ושכר =====================
+# ===================== Work hours and pay =====================
 MAX_SHIFT_HOURS = 24
 
 def _month_bounds(month: Optional[str]):
-    """'YYYY-MM' (שעון ישראל) -> (תחילת החודש, תחילת החודש הבא, המחרוזת)."""
+    """'YYYY-MM' (Israel time) -> (start of month, start of next month, the month string)."""
     now = datetime.now(ISRAEL_TZ)
     try:
         y, m = (int(x) for x in month.split("-")) if month else (now.year, now.month)
@@ -854,7 +933,7 @@ def _hours_payload(cur, user_id, month):
     return {"month": month_str, "items": items, "total_minutes": total_min, "total_pay": total_pay,
             "missing_rate": missing_rate}
 
-# ---------- עובד / מנהל: שעון נוכחות ושעות שלי ----------
+# ---------- Employee / admin: time clock and my hours ----------
 @app.get("/api/staff/clock")
 def staff_clock_status(sess: dict = Depends(require_staff)):
     conn = get_conn(); cur = conn.cursor()
@@ -901,7 +980,7 @@ def staff_my_hours(month: Optional[str] = None, sess: dict = Depends(require_sta
     data["current_rate"] = float(r) if r is not None else None
     return data
 
-# ---------- מנהל: שעות ושכר של כולם ----------
+# ---------- Admin: hours and pay for everyone ----------
 @app.get("/api/admin/hours-summary")
 def admin_hours_summary(month: Optional[str] = None, sess: dict = Depends(require_admin)):
     start, end, month_str = _month_bounds(month)
@@ -962,16 +1041,16 @@ def admin_set_rate(user_id: int, body: RateBody, sess: dict = Depends(require_ad
     cur.execute("UPDATE users SET hourly_rate = %s WHERE id = %s;", (rate, user_id))
     filled = 0
     if rate is not None:
-        # משמרות שנרשמו כשעוד לא היה תעריף מקבלות אותו. משמרות עם תעריף קודם לא משתנות.
+        # Shifts recorded before a rate existed get it now. Shifts that already have a rate don't change.
         cur.execute("UPDATE shifts SET hourly_rate = %s WHERE user_id = %s AND hourly_rate IS NULL;", (rate, user_id))
         filled = cur.rowcount
-        # משמרת פתוחה כרגע שנפתחה בתעריף אחר: מעדכנים גם אותה, כדי שלא תיחשב לפי תעריף ישן
+        # A currently open shift that started under another rate is updated too, so it isn't paid at the old rate
     conn.commit(); cur.close(); conn.close()
     _audit(sess, "rate_change", "user", user_id, {"hourly_rate": [old, rate], "filled_shifts": filled})
     return {"ok": True, "filled_shifts": filled}
 
 def _parse_local_dt(val: Optional[str]):
-    """'YYYY-MM-DDTHH:MM' בשעון ישראל."""
+    """'YYYY-MM-DDTHH:MM' in Israel time."""
     if not val:
         return None
     try:
@@ -1035,7 +1114,7 @@ def admin_create_shift(body: ShiftCreateBody, sess: dict = Depends(require_admin
 
 class ShiftUpdateBody(BaseModel):
     clock_in: Optional[str] = None
-    clock_out: Optional[str] = None      # מחרוזת ריקה = משמרת פתוחה
+    clock_out: Optional[str] = None      # Empty string = open shift
     hourly_rate: Optional[float] = None
     note: Optional[str] = None
 
@@ -1266,13 +1345,16 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 @app.post("/api/admin/upload-image")
 async def upload_image(file: UploadFile = File(...), sess: dict = Depends(require_admin)):
-    # רק קבצי תמונה, ועד 8MB. קובץ אחר (למשל HTML) היה מוגש מהאתר עצמו ויכול לשמש לפריצה.
+    # Images only, up to 8MB. Any other file (e.g. HTML) would be served from our own origin and could be used for an attack.
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ALLOWED_IMAGE_EXT:
         raise HTTPException(status_code=400, detail="אפשר להעלות רק תמונה (jpg, png, webp, gif)")
-    data = await file.read()
+    data = await file.read(MAX_IMAGE_BYTES + 1)
     if len(data) > MAX_IMAGE_BYTES:
         raise HTTPException(status_code=400, detail="התמונה גדולה מדי (עד 8MB)")
+    if not _image_kind(data):
+        # The extension alone isn't enough: check the file really is an image
+        raise HTTPException(status_code=400, detail="הקובץ לא נראה כמו תמונה תקינה")
     try:
         filename = f"{uuid.uuid4().hex}.{ext}"
         with open(os.path.join(IMAGES_DIR, filename), "wb") as f:
@@ -1358,7 +1440,7 @@ def get_products():
 
 @app.get("/api/products/new")
 def get_new_products(limit: int = 8):
-    """מוצרים שנוספו לאחרונה (45 הימים האחרונים), לשורת "חדש בחנות" בדף הבית."""
+    """Recently added products (last 45 days), for the "New in store" row on the home page."""
     limit = max(1, min(limit, 20))
     conn = get_conn(); cur = conn.cursor()
     cur.execute("""
@@ -1422,7 +1504,7 @@ class ProductUpdateBody(BaseModel):
 def admin_list_products(search: str = "", only_unsorted: bool = False,
                         limit: int = 30, offset: int = 0,
                         sess: dict = Depends(require_admin)):
-    """רשימת מוצרים מדופדפת לפאנל הניהול, עם חיפוש וסינון."""
+    """Paginated product list for the admin panel, with search and filtering."""
     limit = max(1, min(limit, 100))
     conn = get_conn(); cur = conn.cursor()
     conditions, params = [], []
@@ -1525,11 +1607,10 @@ def admin_delete_product(product_id: int, sess: dict = Depends(require_admin)):
 
 @app.post("/api/admin/products/{product_id}/duplicate")
 def admin_duplicate_product(product_id: int, sess: dict = Depends(require_admin)):
-    """
-    משכפל מוצר קיים (כולל תמונה, מחיר, קטגוריות, הערות וכו') למוצר חדש.
-    שימושי למוצרים שקיימים במלא גרסאות (למשל אבקת צבע מאכל בכמה צבעים) —
-    משכפלים פעם אחת, ואז רק משנים שם/גרם/צבע בכל עותק במקום להקליד הכל מחדש.
-    השם החדש מקבל אוטומטית "(עותק)" בסוף כדי שיהיה קל להבחין ולערוך.
+    """Duplicates a product (image, price, categories, notes etc.) into a new one.
+    Handy for products that come in many variants (e.g. food coloring in several colors):
+    duplicate once, then change only the name/weight/color of each copy.
+    The new name ends with "(עותק)" (copy) so it's easy to spot and edit.
     """
     conn = get_conn(); cur = conn.cursor()
     cur.execute(
@@ -1560,7 +1641,7 @@ def admin_duplicate_product(product_id: int, sess: dict = Depends(require_admin)
     )
     new_id = cur.fetchone()[0]
 
-    # מעתיקים גם את כל שיוכי הקטגוריות הנוספים (טבלת הקישור, לא רק הקטגוריה הראשית)
+    # Copy every extra category link too (the link table, not just the main category)
     cur.execute("SELECT category_id FROM product_categories WHERE product_id = %s;", (product_id,))
     for (cid,) in cur.fetchall():
         cur.execute(
@@ -1670,11 +1751,11 @@ def update_contact(body: ContactBody, sess: dict = Depends(require_admin)):
     conn.commit(); cur.close(); conn.close()
     return {"ok": True}
 
-# --- שאלות ותשובות נפוצות (FAQ) ---
+# --- FAQ ---
 
 @app.get("/api/faq")
 def get_faq():
-    """שאלות ותשובות מפורסמות בלבד — לתצוגה בדף הבית."""
+    """Published FAQ items only, for the home page."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT id, question, answer FROM faq_items WHERE published = TRUE ORDER BY sort_order, id;")
     rows = cur.fetchall(); cur.close(); conn.close()
@@ -1682,7 +1763,7 @@ def get_faq():
 
 @app.get("/api/admin/faq")
 def admin_list_faq(sess: dict = Depends(require_admin)):
-    """כל הפריטים כולל כאלה שעדיין לא פורסמו, עם מונה השאלות מהצ'אט."""
+    """All items, including unpublished ones, with the count of chat questions per topic."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("""
         SELECT id, topic_key, question, answer, hit_count, published, sort_order
@@ -1780,28 +1861,28 @@ def admin_delete_category(category_id: int, sess: dict = Depends(require_admin))
         raise HTTPException(status_code=404, detail="הקטגוריה לא נמצאה")
     return {"ok": True, "deleted": category_id}
 
-# ===================== התראות (Web Push) =====================
-# עקרונות:
-#  - לקוח מקבל התראה רק אם לחץ "אשר התראות" (notify_consent) וגם נתן הרשאה בדפדפן. בלי זה אף פעם לא נשלח כלום.
-#  - אחרי ביטול: המנוי נמחק והאישור מתאפס מיד.
-#  - הודעה אחת מרוכזת על מוצרים חדשים (לא הודעה לכל מוצר), לכל היותר אחת ל-12 שעות, רק בין 09:00 ל-20:00 וגם לא בשבת.
-# ---------- מייל (SMTP) ----------
-# הגדרה ב-Railway: SMTP_HOST, SMTP_PORT (465 או 587), SMTP_USER, SMTP_PASSWORD, SMTP_FROM (אופציונלי), SITE_URL (אופציונלי)
+# ===================== Notifications (Web Push) =====================
+# Principles:
+#  - A customer is notified only after opting in (notify_consent) AND granting browser permission. Otherwise nothing is ever sent.
+#  - Opting out deletes the subscriptions and resets the consent immediately.
+#  - One combined message about new products (not one per product), at most every 12 hours, 09:00-20:00 only, never on Saturday.
+# ---------- Email ----------
+# Railway settings: SMTP_HOST, SMTP_PORT (465 or 587), SMTP_USER, SMTP_PASSWORD, SMTP_FROM (optional), SITE_URL (optional)
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "465") or 465)
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "") or SMTP_USER
-# שליחה דרך Brevo (בחינם עד 300 מיילים ביום). עובד דרך האינטרנט (HTTPS) ולא דרך SMTP,
-# ולכן עובד גם כש-Railway חוסם SMTP. אם מוגדר BREVO_API_KEY, משתמשים בו במקום SMTP.
+# Sending through Brevo (free up to 300 emails a day). It works over HTTPS instead of SMTP,
+# so it also works where Railway blocks SMTP. When BREVO_API_KEY is set it is used instead of SMTP.
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "").strip()
 EMAIL_FROM = (os.environ.get("EMAIL_FROM", "") or SMTP_FROM).strip()
 SITE_URL = os.environ.get("SITE_URL", "https://www.bakeparty.co.il").rstrip("/")
 
-_LAST_EMAIL_ERROR = None      # הסיבה לכישלון השליחה האחרון (בלי סודות), מוצגת בפאנל הניהול
+_LAST_EMAIL_ERROR = None      # Reason for the last failed send (no secrets), shown in the admin panel
 
 def _log_notify(channel, recipient, subject, ok, error=None):
-    """רושם ביומן השליחות. אף פעם לא מפיל את השליחה עצמה."""
+    """Writes to the notification log. Never fails the send itself."""
     try:
         conn = get_conn(); cur = conn.cursor()
         cur.execute("INSERT INTO notification_log (channel, recipient, subject, ok, error) VALUES (%s,%s,%s,%s,%s);",
@@ -1828,7 +1909,7 @@ def _email_configured():
 EMAIL_NOT_CONFIGURED = "המייל לא מוגדר בשרת. צריך להוסיף ב-Railway את BREVO_API_KEY ו-EMAIL_FROM (או הגדרות SMTP)."
 
 class _Mailer:
-    """פותח חיבור פעם אחת (ב-SMTP) ושולח כמה מיילים. ב-Brevo כל מייל הוא בקשת HTTPS נפרדת."""
+    """Opens one connection (SMTP) and sends several emails. With Brevo, each email is its own HTTPS request."""
     def __enter__(self):
         self.mode = _email_mode()
         self.srv = None
@@ -1885,12 +1966,12 @@ def _unsub_token(user_id):
     return hmac.new(_unsub_secret().encode(), str(user_id).encode(), hashlib.sha256).hexdigest()[:32]
 
 def _send_emails(recipients, subject, text, url="/", promo=True):
-    """recipients: [(user_id, email, name)]. כל מייל כולל קישור הסרה אישי. מחזיר כמה נשלחו."""
+    """recipients: [(user_id, email, name)]. Every email has a personal unsubscribe link. Returns how many were sent."""
     global _LAST_EMAIL_ERROR
     if not _email_configured() or not recipients:
         return 0
     import time as _t
-    subj = ("פרסומת | " + subject) if promo else subject        # חוק התקשורת (סעיף 30א): הודעה פרסומית מסומנת
+    subj = ("פרסומת | " + subject) if promo else subject        # Israeli Communications Law (section 30A): promotional messages must be labeled
     sent = 0
     try:
         mailer = _Mailer().__enter__()
@@ -1928,14 +2009,14 @@ def _html_escape(t):
 
 def _consenting_customer_emails():
     conn = get_conn(); cur = conn.cursor()
-    # רק לקוחות. עובדות ומנהלות לא מקבלות הודעות פרסום ללקוחות
+    # Customers only. Staff never receive customer promotions
     cur.execute("SELECT id, email, name FROM users WHERE notify_consent = TRUE AND active = TRUE AND email IS NOT NULL AND role = 'customer';")
     rows = cur.fetchall(); cur.close(); conn.close()
     return rows
 
 def notify_customers(title, body, url="/", sync_limit=25):
-    """הודעה ללקוחות שאישרו: התראת טלפון + מייל. עד sync_limit נמענים שולחים מיד ומחזירים תוצאה אמיתית,
-    מעבר לזה ברקע. מחזיר (מכשירים, נמענים במייל, נשלחו בפועל או None אם ברקע)."""
+    """Message to opted-in customers: push + email. Up to sync_limit recipients are emailed immediately with a real result;
+    above that, in the background. Returns (devices, email recipients, emails actually sent or None if in background)."""
     pushed = push_to_consenting_customers(title, body, url)
     recips = _consenting_customer_emails() if _email_configured() else []
     sent = None
@@ -1960,7 +2041,7 @@ def _push_configured():
     return bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
 
 def _send_push_rows(rows, title, body, url="/", table="push_subscriptions"):
-    """rows: [(sub_id, endpoint, p256dh, auth)]. שולח, ומוחק מנויים שכבר לא תקפים. מחזיר כמה נשלחו."""
+    """rows: [(sub_id, endpoint, p256dh, auth)]. Sends, and deletes subscriptions that are no longer valid. Returns how many were sent."""
     if not rows:
         return 0
     if not _push_configured():
@@ -2001,7 +2082,7 @@ def push_to_consenting_customers(title, body, url="/"):
     return _send_push_rows(rows, title, body, url)
 
 def push_to_admins(title, body, url="/admin.html"):
-    """רק למנהלות פעילות (למשל ביקורת שממתינה לאישור, שרק מנהלת יכולה לאשר)."""
+    """Active admins only (e.g. a review waiting for approval, which only an admin can approve)."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("""SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
                    JOIN users u ON u.id = ps.user_id
@@ -2010,7 +2091,7 @@ def push_to_admins(title, body, url="/admin.html"):
     return _send_push_rows(rows, title, body, url)
 
 def push_to_staff(title, body, url="/staff.html"):
-    """לצוות (עובדים ומנהלים פעילים שהפעילו התראות במכשיר). ישמש להזמנות חדשות."""
+    """Active staff (employees and admins) who enabled notifications on a device. Used for new orders."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("""SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
                    JOIN users u ON u.id = ps.user_id
@@ -2028,22 +2109,22 @@ def _setting_set(cur, key, val):
     cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;", (key, val))
 
 def run_new_products_digest(now=None):
-    """בודק אם יש מוצרים חדשים שעוד לא הוכרזו, ואם כן שולח הודעה אחת מרוכזת. מחזיר מילון תוצאה (לבדיקות)."""
+    """Checks for new products not announced yet and, if any, sends one combined message. Returns a result dict (for tests)."""
     now = now or datetime.now(ISRAEL_TZ)
     if not (_push_configured() or _email_configured()):
         return {"skipped": "not_configured"}
-    if not (9 <= now.hour < 20) or now.weekday() == 5:      # weekday 5 = שבת
+    if not (9 <= now.hour < 20) or now.weekday() == 5:      # weekday 5 = Saturday
         return {"skipped": "quiet_hours"}
     conn = get_conn(); cur = conn.cursor()
     cursor_s = _setting_get(cur, "push_new_cursor"); last_s = _setting_get(cur, "push_new_last_sent")
-    if cursor_s is None:                                    # הפעלה ראשונה: לא מכריזים על מה שכבר קיים
+    if cursor_s is None:                                    # First run: don't announce products that already exist
         cur.execute("SELECT NOW()::timestamp;")
         _setting_set(cur, "push_new_cursor", cur.fetchone()[0].isoformat())
         conn.commit(); cur.close(); conn.close()
         return {"skipped": "initialized"}
     if last_s and (datetime.now(timezone.utc) - datetime.fromisoformat(last_s)).total_seconds() < PUSH_MIN_INTERVAL_HOURS * 3600:
         cur.close(); conn.close(); return {"skipped": "too_soon"}
-    # מוצרים חדשים וזמינים. השהיה של 30 דקות כדי שעבודת הוספה ארוכה תיספר כהודעה אחת
+    # New, in-stock products. A 30-minute delay so a long editing session becomes a single message
     cur.execute("""SELECT COUNT(*), MAX(created_at) FROM Products
                    WHERE created_at IS NOT NULL AND stock_quantity > 0
                      AND created_at > %s::timestamp
@@ -2093,7 +2174,7 @@ def notifications_status(sess: dict = Depends(require_auth)):
 
 @app.post("/api/notifications/consent")
 def notifications_consent(sess: dict = Depends(require_auth)):
-    """אישור קבלת התראות (מייל, ובנוסף התראות בטלפון אם המכשיר נרשם). הודעת תודה במייל נשלחת פעם אחת."""
+    """Opt in to notifications (email, plus push if the device subscribes). The welcome email is sent once."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("UPDATE users SET notify_consent = TRUE, notify_consent_at = NOW() WHERE id = %s AND notify_consent = FALSE RETURNING name, email;", (sess["user_id"],))
     first = cur.fetchone(); conn.commit(); cur.close(); conn.close()
@@ -2112,7 +2193,7 @@ def notifications_subscribe(body: PushSubBody, sess: dict = Depends(require_auth
                    RETURNING id, (xmax = 0);""", (sess["user_id"], body.endpoint, p256dh, auth))
     sub_id, inserted = cur.fetchone()
     if sess["role"] in STAFF_ROLES:
-        # מכשיר של עובדת/מנהלת: נרשם להתראות עבודה (הזמנות) בלבד, בלי הסכמה לפרסומות ובלי מייל "תודה שהצטרפת"
+        # A staff device: subscribed for work alerts (orders) only, without marketing consent or a welcome email
         conn.commit(); cur.close(); conn.close()
         if inserted:
             _send_push_rows([(sub_id, body.endpoint, p256dh, auth)], "התראות על הזמנות הופעלו ✅",
@@ -2123,7 +2204,7 @@ def notifications_subscribe(body: PushSubBody, sess: dict = Depends(require_auth
     conn.commit(); cur.close(); conn.close()
     if first and first[1]:
         threading.Thread(target=_send_welcome_email, args=(first[1], first[0], sess["user_id"]), daemon=True).start()
-    if inserted:      # הודעת תודה בטלפון: פעם אחת לכל מכשיר חדש
+    if inserted:      # Welcome push: once per new device
         name = (first[0] if first else None)
         hello = "תודה שהצטרפת! 🎉"
         _send_push_rows([(sub_id, body.endpoint, p256dh, auth)], hello,
@@ -2132,7 +2213,7 @@ def notifications_subscribe(body: PushSubBody, sess: dict = Depends(require_auth
 
 @app.post("/api/notifications/unsubscribe")
 def notifications_unsubscribe(sess: dict = Depends(require_auth)):
-    """ביטול מלא: מוחק את כל המכשירים של המשתמש ומאפס את האישור."""
+    """Full opt-out: deletes all of the user's devices and resets the consent."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("DELETE FROM push_subscriptions WHERE user_id = %s;", (sess["user_id"],))
     cur.execute("UPDATE users SET notify_consent = FALSE WHERE id = %s;", (sess["user_id"],))
@@ -2143,7 +2224,7 @@ from fastapi.responses import HTMLResponse
 
 @app.get("/unsubscribe", response_class=HTMLResponse)
 def unsubscribe_link(u: int, t: str):
-    """קישור הסרה מתוך מייל: בלי צורך להתחבר. מאפס אישור ומוחק מכשירים."""
+    """Unsubscribe link from an email, no sign-in needed. Resets consent and deletes devices."""
     ok = hmac.compare_digest(_unsub_token(u), t)
     if ok:
         conn = get_conn(); cur = conn.cursor()
@@ -2177,7 +2258,7 @@ class PushSendBody(BaseModel):
     body: str
     url: str = "/"
     audience: str = "customers"      # customers | staff
-    test_only: bool = False          # שליחה רק למכשירים של המנהל עצמו
+    test_only: bool = False          # Send only to the admin's own devices
 
 @app.post("/api/admin/push-send")
 def admin_push_send(b: PushSendBody, sess: dict = Depends(require_admin)):
@@ -2210,7 +2291,7 @@ def admin_push_send(b: PushSendBody, sess: dict = Depends(require_admin)):
                 email_error = _LAST_EMAIL_ERROR or "השליחה נכשלה בלי סיבה ידועה."
         return {"sent": pushed, "emails": mailed, "email_error": email_error,
                 "email_to": me[0] if me else None, "email_from": (EMAIL_FROM if _email_mode() == "brevo" else SMTP_FROM) or None, "test": True}
-    # הגנה מפני שליחה כפולה בטעות: הודעה לקהל אחת כל 5 דקות
+    # Guard against accidental double sends: one audience message every 5 minutes
     conn = get_conn(); cur = conn.cursor()
     last = _setting_get(cur, "push_manual_last")
     if last and (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() < 300:
@@ -2226,13 +2307,13 @@ def admin_push_send(b: PushSendBody, sess: dict = Depends(require_admin)):
     _audit(sess, "push_send", "push", None, {"audience": b.audience, "title": title, "sent": sent, "emails": emails, "emails_sent": mailed})
     return {"sent": sent, "emails": emails, "emails_sent": mailed, "email_error": _LAST_EMAIL_ERROR if (emails and mailed is not None and mailed < emails) else None, "test": False}
 
-# ===================== הזמנות לאיסוף עצמי =====================
-# עקרונות:
-#  - כל אחד יכול להזמין (שם וטלפון). משתמש מחובר מקושר להזמנה. אפשר להירשם תוך כדי הזמנה.
-#  - המחיר נקבע בשרת לפי המחיר במסד (לא סומכים על מה שהדפדפן שולח), ונשמר בהזמנה כמו שהיה ברגע ההזמנה.
-#  - התשלום בחנות בזמן האיסוף. אין מינימום הזמנה.
-#  - סטטוסים: new (התקבלה) -> preparing (בהכנה) -> ready (מוכנה לאיסוף) -> picked_up (נאספה). או cancelled (בוטלה).
-#  - כשההזמנה מוכנה הלקוח מקבל מייל (אם השאיר) והתראה בטלפון (אם הוא רשום והפעיל התראות), ויש דף מעקב.
+# ===================== Pickup orders =====================
+# Principles:
+#  - Anyone can order (name and phone). A signed-in user is linked to the order; signing up during checkout is possible.
+#  - Prices come from the database (never from the browser) and are stored on the order as they were at that moment.
+#  - Payment happens in the store at pickup. No minimum order.
+#  - Statuses: new -> preparing -> ready -> picked_up, or cancelled.
+#  - When the order is ready the customer gets an email (if given) and a push (if subscribed), and there is a tracking page.
 
 ORDER_STATUSES = ("new", "preparing", "ready", "picked_up", "cancelled")
 ORDER_STATUS_LABELS = {"new": "התקבלה", "preparing": "בהכנה", "ready": "מוכנה לאיסוף", "picked_up": "נאספה", "cancelled": "בוטלה"}
@@ -2261,7 +2342,7 @@ def _order_number(order_id):
     return 1000 + order_id
 
 def _send_order_email(to, subject, lines, link):
-    """מייל שירות על הזמנה (לא פרסומת): אישור הזמנה, הזמנה מוכנה וכו'."""
+    """Transactional order email (not marketing): order received, order ready, etc."""
     global _LAST_EMAIL_ERROR
     if not to:
         return False
@@ -2295,7 +2376,7 @@ def _push_to_user(user_id, title, body, url="/"):
     return _send_push_rows(rows, title, body, url)
 
 def _push_order(order_id, user_id, title, body, url="/"):
-    """התראה על הזמנה: למכשירים שנרשמו להזמנה הזו, ולמכשירים של הלקוח אם הוא רשום (בלי כפילויות)."""
+    """Order notification: to devices subscribed to this order, and to the customer's devices if registered (no duplicates)."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT id, endpoint, p256dh, auth FROM order_push_subs WHERE order_id = %s;", (order_id,))
     order_rows = cur.fetchall(); cur.close(); conn.close()
@@ -2360,7 +2441,7 @@ def orders_config():
 
 @app.post("/api/orders/{order_id}/push")
 def order_push_subscribe(order_id: int, t: str, body: PushSubBody):
-    """רישום המכשיר להתראות על ההזמנה הזו בלבד (מתאים גם ללקוח שלא נרשם)."""
+    """Subscribes this device to notifications for this order only (works for guests too)."""
     p256dh, auth = body.keys.get("p256dh"), body.keys.get("auth")
     if not (body.endpoint.startswith("https://") and p256dh and auth):
         raise HTTPException(status_code=400, detail="נתוני מנוי לא תקינים")
@@ -2433,7 +2514,7 @@ def create_order(body: OrderCreateBody, request: Request, authorization: str = H
                         (name, email, phone, hash_password(body.password), body.notify, body.notify))
             user_id = cur.fetchone()[0]
         elif sess:
-            # ממלאים לחשבון טלפון אם עוד לא היה, כדי שבפעם הבאה יהיה מוכן
+            # Save the phone on the account if it was empty, so it's prefilled next time
             cur.execute("UPDATE users SET phone = COALESCE(NULLIF(phone, ''), %s) WHERE id = %s;", (phone, user_id))
 
         token = secrets.token_urlsafe(16)
@@ -2488,7 +2569,7 @@ def create_order(body: OrderCreateBody, request: Request, authorization: str = H
 
 @app.get("/api/orders/{order_id}")
 def track_order(order_id: int, t: str):
-    """דף מעקב ללקוח. מוגן בקוד אקראי (t) שמופיע רק בקישור שהלקוח קיבל."""
+    """Customer tracking page. Protected by a random token (t) that appears only in the customer's link."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute(f"SELECT {_ORDER_COLS} FROM orders WHERE id = %s;", (order_id,))
     row = cur.fetchone()
@@ -2510,7 +2591,7 @@ def my_orders(sess: dict = Depends(require_auth)):
     cur.close(); conn.close()
     return out
 
-# ---------- צוות: ניהול הזמנות ----------
+# ---------- Staff: order management ----------
 @app.get("/api/staff/orders")
 def staff_orders(scope: str = "active", sess: dict = Depends(require_staff)):
     conn = get_conn(); cur = conn.cursor()
@@ -2566,7 +2647,7 @@ class OrderItemBody(BaseModel):
 
 @app.patch("/api/staff/orders/{order_id}/items/{item_id}")
 def staff_update_order_item(order_id: int, item_id: int, body: OrderItemBody, sess: dict = Depends(require_staff)):
-    """סימון מוצר שחסר בחנות. הסכום של ההזמנה מתעדכן בהתאם."""
+    """Marks an item missing in the store. The order total updates accordingly."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("UPDATE order_items SET missing = %s, customer_choice = NULL, customer_note = NULL "
                 "WHERE id = %s AND order_id = %s RETURNING name;", (body.missing, item_id, order_id))
@@ -2575,7 +2656,7 @@ def staff_update_order_item(order_id: int, item_id: int, body: OrderItemBody, se
         cur.close(); conn.close()
         raise HTTPException(status_code=404, detail="הפריט לא נמצא")
     if not body.missing:
-        # הפריט נמצא בכל זאת: תחליף שהלקוח בחר עבורו יורד מההזמנה
+        # The item turned up after all: drop the substitute the customer picked for it
         cur.execute("DELETE FROM order_items WHERE order_id = %s AND substitute_for = %s;", (order_id, item_id))
     _recalc_total(cur, order_id)
     cur.execute("SELECT total, status FROM orders WHERE id = %s;", (order_id,))
@@ -2586,7 +2667,7 @@ def staff_update_order_item(order_id: int, item_id: int, body: OrderItemBody, se
         _schedule_missing_notice(order_id)
     return {"ok": True, "total": total}
 
-# כשמסמנים פריט חסר, מחכים קצת לפני ההודעה ללקוח, כדי שכמה פריטים חסרים ייכנסו להודעה אחת
+# When an item is marked missing, wait a little before notifying the customer, so several missing items share one message
 MISSING_NOTICE_DELAY = int(os.environ.get("MISSING_NOTICE_DELAY", "45"))
 _missing_timers = {}
 _missing_lock = threading.Lock()
@@ -2632,7 +2713,7 @@ class MissingResponseBody(BaseModel):
 
 @app.post("/api/orders/{order_id}/respond")
 def customer_missing_response(order_id: int, t: str, body: MissingResponseBody):
-    """הלקוח עונה מה לעשות עם פריט חסר: להמשיך בלעדיו, תחליף (עם הערה), או לבטל את כל ההזמנה."""
+    """The customer decides about a missing item: continue without it, substitute (with a note), or cancel the whole order."""
     if body.choice not in ("remove", "replace", "cancel"):
         raise HTTPException(status_code=400, detail="בחירה לא תקינה")
     conn = get_conn(); cur = conn.cursor()
@@ -2659,7 +2740,7 @@ def customer_missing_response(order_id: int, t: str, body: MissingResponseBody):
         if not r:
             cur.close(); conn.close()
             raise HTTPException(status_code=404, detail="הפריט לא נמצא")
-        # הלקוח שינה את דעתו: תחליף שבחר קודם לפריט הזה יורד מההזמנה
+        # The customer changed their mind: drop the substitute they picked earlier for this item
         cur.execute("DELETE FROM order_items WHERE order_id = %s AND substitute_for = %s;", (order_id, body.item_id))
         _recalc_total(cur, order_id)
         msg = (f"#{number}: במקום \"{r[0]}\" הלקוח מבקש: {note}" if body.choice == "replace"
@@ -2677,7 +2758,7 @@ class SubstituteBody(BaseModel):
 
 @app.post("/api/orders/{order_id}/substitute")
 def customer_pick_substitute(order_id: int, t: str, body: SubstituteBody):
-    """הלקוח בוחר בעצמו מוצר מהחנות במקום פריט שחסר. המחיר נלקח מהמסד, והסכום מתעדכן."""
+    """The customer picks a store product to replace a missing item. Price comes from the database and the total updates."""
     if not (1 <= body.quantity <= ORDER_MAX_QTY):
         raise HTTPException(status_code=400, detail="כמות לא תקינה")
     conn = get_conn(); cur = conn.cursor()
@@ -2718,7 +2799,7 @@ class AddItemBody(BaseModel):
 
 @app.post("/api/staff/orders/{order_id}/items")
 def staff_add_order_item(order_id: int, body: AddItemBody, sess: dict = Depends(require_staff)):
-    """הוספת פריט להזמנה (בדרך כלל תחליף למוצר חסר). הסכום מתעדכן."""
+    """Adds an item to an order (usually a substitute for a missing one). The total updates."""
     name = (body.name or "").strip()[:300]
     if not name or body.unit_price < 0 or body.unit_price > 10000 or not (1 <= body.quantity <= ORDER_MAX_QTY):
         raise HTTPException(status_code=400, detail="צריך שם, מחיר וכמות תקינים")
@@ -2742,7 +2823,7 @@ def staff_add_order_item(order_id: int, body: AddItemBody, sess: dict = Depends(
 
 @app.delete("/api/staff/orders/{order_id}/items/{item_id}")
 def staff_remove_added_item(order_id: int, item_id: int, sess: dict = Depends(require_staff)):
-    """הסרת פריט שהצוות הוסיף (טעות בתחליף). פריטים שהלקוח הזמין לא נמחקים, רק מסומנים כחסרים."""
+    """Removes an item staff added (a wrong substitute). Items the customer ordered are never deleted, only marked missing."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("DELETE FROM order_items WHERE id = %s AND order_id = %s AND added_by_staff RETURNING name;", (item_id, order_id))
     r = cur.fetchone()
@@ -2756,7 +2837,7 @@ def staff_remove_added_item(order_id: int, item_id: int, sess: dict = Depends(re
 
 @app.get("/api/staff/product-search")
 def staff_product_search(q: str = "", sess: dict = Depends(require_staff)):
-    """חיפוש מוצר לבחירת תחליף."""
+    """Product search for choosing a substitute."""
     q = q.strip()
     if len(q) < 2:
         return []
@@ -2771,7 +2852,7 @@ class StockBody(BaseModel):
 
 @app.post("/api/staff/products/{product_id}/stock")
 def staff_set_stock(product_id: int, body: StockBody, sess: dict = Depends(require_staff)):
-    """עובדים יכולים לסמן מוצר כאזל (או חזר) כשהם מגלים את זה בזמן ליקוט הזמנה."""
+    """Staff can mark a product out of stock (or back) when they notice it while picking an order."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("UPDATE Products SET stock_quantity = %s WHERE id = %s RETURNING name;", (100 if body.in_stock else 0, product_id))
     r = cur.fetchone(); conn.commit(); cur.close(); conn.close()
@@ -2792,9 +2873,9 @@ def staff_set_orders_open(body: OrdersOpenBody, sess: dict = Depends(require_sta
     return {"ok": True}
 
 
-# ===================== ביקורות =====================
-# כל אחד יכול לכתוב ביקורת (0 עד 5 כוכבים). היא מופיעה באתר רק אחרי שמנהל מאשר.
-# כל אחד יכול להגיב על ביקורת שאושרה. תגובות מופיעות מיד, ומנהל יכול למחוק תגובה.
+# ===================== Reviews =====================
+# Signed-in customers can write a review (0-5 stars). It appears on the site only after an admin approves it.
+# Signed-in users can reply to approved reviews. Replies appear immediately, and admins can delete them.
 REVIEW_ATTEMPTS = defaultdict(list)
 REPLY_ATTEMPTS = defaultdict(list)
 
@@ -2806,7 +2887,7 @@ def _simple_rate_limit(bucket, ip, max_n, window, msg):
     bucket[ip].append(now)
 
 def _clean_text(t, max_len):
-    """מנקה רווחים מיותרים אבל משאיר ירידות שורה (עד שתיים ברצף)."""
+    """Trims extra whitespace but keeps line breaks (at most two in a row)."""
     lines = [" ".join(l.split()) for l in (t or "").splitlines()]
     out = "\n".join(lines).strip()
     while "\n\n\n" in out:
@@ -2818,7 +2899,7 @@ def _looks_like_spam(t):
     return bool(re.search(r"https?://|www\.|\.com\b|\.co\.il\b|t\.me/", t or "", re.I))
 
 def _short_name(name):
-    """שם פרטי + האות הראשונה של שם המשפחה ("שירה כ."), כדי שייראה אמיתי ועדיין ישמור על פרטיות."""
+    """First name + last-name initial ("שירה כ."), so it looks real while protecting privacy."""
     parts = (name or "").split()
     if not parts:
         return "לקוח/ה"
@@ -2828,24 +2909,29 @@ def _replies_for(cur, review_ids):
     if not review_ids:
         return {}
     cur.execute("""SELECT rr.id, rr.review_id, rr.name, rr.text, rr.is_store, rr.created_at,
-                          EXISTS (SELECT 1 FROM orders o WHERE o.user_id = rr.user_id AND o.status = 'picked_up')
-                   FROM review_replies rr WHERE rr.review_id = ANY(%s) ORDER BY rr.id;""", (review_ids,))
+                          EXISTS (SELECT 1 FROM orders o WHERE o.user_id = rr.user_id AND o.status = 'picked_up'),
+                          u.avatar_url
+                   FROM review_replies rr LEFT JOIN users u ON u.id = rr.user_id
+                   WHERE rr.review_id = ANY(%s) ORDER BY rr.id;""", (review_ids,))
     out = defaultdict(list)
     for r in cur.fetchall():
         out[r[1]].append({"id": r[0], "name": "Bake & Party" if r[4] else _short_name(r[2]), "text": r[3], "is_store": bool(r[4]),
-                          "verified": bool(r[6]), "created_at": _il(r[5]).strftime("%d/%m/%Y") if r[5] else ""})
+                          "verified": bool(r[6]), "avatar": None if r[4] else r[7],
+                          "created_at": _il(r[5]).strftime("%d/%m/%Y") if r[5] else ""})
     return out
 
 _REVIEW_SELECT = """SELECT r.id, r.name, r.rating, r.text, r.status, r.created_at, r.photo_url, r.user_id, u.created_at, u.email,
            EXISTS (SELECT 1 FROM orders o WHERE o.user_id = r.user_id AND o.status = 'picked_up'),
-           (SELECT COUNT(*) FROM reviews r2 WHERE r.user_id IS NOT NULL AND r2.user_id = r.user_id AND r2.status = 'approved')
+           (SELECT COUNT(*) FROM reviews r2 WHERE r.user_id IS NOT NULL AND r2.user_id = r.user_id AND r2.status = 'approved'),
+           u.avatar_url, u.google_sub IS NOT NULL
     FROM reviews r LEFT JOIN users u ON u.id = r.user_id"""
 
 def _review_dict(r, replies, admin=False):
     d = {"id": r[0], "name": _short_name(r[1]), "rating": r[2], "text": r[3] or "", "status": r[4],
          "created_at": _il(r[5]).strftime("%d/%m/%Y") if r[5] else "", "photo": r[6],
          "has_account": bool(r[7]), "verified": bool(r[10]), "user_reviews": int(r[11] or 0),
-         "member_since": r[8].strftime("%m/%Y") if r[8] else None, "replies": replies.get(r[0], [])}
+         "member_since": r[8].strftime("%m/%Y") if r[8] else None, "replies": replies.get(r[0], []),
+         "avatar": r[12], "google": bool(r[13])}
     if admin:
         d.update({"full_name": r[1], "email": r[9] or ""})
     return d
@@ -2869,7 +2955,7 @@ REVIEW_PHOTO_MAX = 6 * 1024 * 1024
 REVIEW_PHOTO_ATTEMPTS = defaultdict(list)
 
 def _image_kind(data):
-    """בודק לפי תוכן הקובץ (ולא רק לפי השם) שזו באמת תמונה."""
+    """Checks by the file's content (not just its name) that it really is an image."""
     if data[:3] == b"\xff\xd8\xff": return "jpg"
     if data[:8] == b"\x89PNG\r\n\x1a\n": return "png"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP": return "webp"
@@ -2878,7 +2964,7 @@ def _image_kind(data):
 
 @app.post("/api/reviews/photo")
 async def upload_review_photo(file: UploadFile = File(...), sess: dict = Depends(require_auth)):
-    """תמונה לביקורת (לא חובה). רק למשתמשים מחוברים, ומופיעה רק אחרי שהביקורת מאושרת."""
+    """Optional photo for a review. Signed-in users only; shown only once the review is approved."""
     _simple_rate_limit(REVIEW_PHOTO_ATTEMPTS, str(sess["user_id"]), 10, 3600, "הועלו הרבה תמונות. אפשר לנסות שוב מאוחר יותר.")
     data = await file.read(REVIEW_PHOTO_MAX + 1)
     if len(data) > REVIEW_PHOTO_MAX:
@@ -2895,12 +2981,12 @@ class ReviewBody(BaseModel):
     rating: int
     text: Optional[str] = None
     photo_url: Optional[str] = None
-    name: Optional[str] = None         # לא בשימוש: השם נלקח מהחשבון
-    website: Optional[str] = None      # מלכודת לרובוטים: שדה מוסתר שאדם לא ממלא
+    name: Optional[str] = None         # Not used: the name comes from the account
+    website: Optional[str] = None      # Honeypot for bots: a hidden field that people never fill in
 
 @app.post("/api/reviews")
 def create_review(body: ReviewBody, request: Request, authorization: str = Header(None)):
-    """ביקורת רק מחשבון רשום: השם נלקח מהפרופיל, כדי שהביקורות יהיו אמיתיות."""
+    """Reviews only from a registered account: the name comes from the profile, so reviews are genuine."""
     if body.website:
         return {"ok": True, "pending": True}
     sess = _session_from_header(authorization)
@@ -2933,7 +3019,7 @@ def create_review(body: ReviewBody, request: Request, authorization: str = Heade
 
 class ReplyBody(BaseModel):
     text: str
-    name: Optional[str] = None         # לא בשימוש: השם נלקח מהחשבון
+    name: Optional[str] = None         # Not used: the name comes from the account
     website: Optional[str] = None
 
 @app.post("/api/reviews/{review_id}/replies")
@@ -3014,7 +3100,7 @@ def admin_delete_reply(reply_id: int, sess: dict = Depends(require_admin)):
     return {"ok": True}
 
 
-# --- קבצי PWA: אפליקציה מותקנת + התראות ---
+# --- PWA files: installable app + notifications ---
 @app.get("/sw.js")
 def serve_sw():
     return FileResponse(os.path.join(STATIC_DIR, "sw.js"), media_type="application/javascript",
@@ -3036,8 +3122,8 @@ def serve_icon192():
 def serve_icon512():
     return FileResponse(os.path.join(STATIC_DIR, "icon-512.png"), media_type="image/png")
 
-# --- ייבוא מוצרים מאקסל של וולט (תצוגה מקדימה ואז אישור) ---
-# לא מוחק כלום: מוסיף מוצרים וקטגוריות חדשים בלבד. מוצר שכבר קיים (לפי שם) נשאר כמו שהוא.
+# --- Import products from a Wolt Excel export (preview, then apply) ---
+# Never deletes anything: only adds new products and categories. An existing product (matched by name) is left as is.
 _WOLT_PSEUDO_CATS = {"חדש בחנות", "חדש_בחנות", "מוצרים מובילים", "מוצרים_מובילים",
                      "חדש בחנות ומוצרים מובילים", "חדש_בחנות_ומוצרים_מובילים"}
 
@@ -3047,9 +3133,9 @@ def _wolt_price(raw, divide: bool, rounding: str):
     if divide:
         v = v / 1.3
     v = round(v, 2)
-    if rounding == "nine":      # ה-x.9 הקרוב כלפי מעלה (10.52 -> 10.9)
+    if rounding == "nine":      # Round up to the next x.9 (10.52 -> 10.9)
         v = max(0, math.ceil(round(v - 0.9, 2))) + 0.9
-    elif rounding == "tenth":   # עד 10 אגורות כלפי מעלה
+    elif rounding == "tenth":   # Round up to the next 10 agorot
         v = math.ceil(round(v * 10, 6)) / 10
     return round(v, 2)
 
@@ -3084,9 +3170,9 @@ async def admin_import_wolt(
 
     conn = get_conn(); cur = conn.cursor()
     try:
-        # ---------- קטגוריות ----------
-        # בקובץ חדש יותר של וולט אין עמודת id בגיליון הקטגוריות. לכן מזהים לפי שם:
-        # שם קטגוריה לכל id נלקח מהגיליון (אם יש id) או מעמודת category_id של המוצרים ("שם::id").
+        # ---------- Categories ----------
+        # Newer Wolt exports have no id column in the categories sheet, so categories are matched by name:
+        # each id's name comes from the sheet (when it has ids) or from the products' category_id column ("name::id").
         sheet_names = [str(n).strip() for n in df_cat["name"] if pd.notna(n)]
         id_to_name = {}
         if "id" in df_cat.columns:
@@ -3147,7 +3233,7 @@ async def admin_import_wolt(
                     name_to_db[nm] = cur.fetchone()[0]; cats_created += 1
             remaining = still
 
-        # ---------- מוצרים: איחוד כפילויות (אותו שם ואותו מחיר) ----------
+        # ---------- Products: merge duplicates (same name and price) ----------
         merged = {}
         for _, r in df_off.iterrows():
             if pd.isna(r["name"]) or pd.isna(r["price"]):
@@ -3185,12 +3271,12 @@ async def admin_import_wolt(
         cur.execute("SELECT COUNT(*) FROM Products;")
         site_was_empty = cur.fetchone()[0] == 0
         if site_was_empty:
-            as_new = False        # ייבוא ראשון לאתר ריק: לא "חדש בחנות" ולא התראה
+            as_new = False        # First import into an empty site: not "new in store" and no announcement
         added = skipped = updated = uncategorized = multi = 0
         samples = []
         for (nk, _), m in merged.items():
             price = _wolt_price(m["wolt_price"], divide, rounding)
-            if nk in existing:   # existing = מה שהיה באתר לפני הייבוא
+            if nk in existing:   # existing = what the site had before this import
                 skipped += 1
                 if update_prices:
                     cur.execute("UPDATE Products SET price = %s WHERE id = %s;", (price, existing[nk])); updated += 1
@@ -3230,7 +3316,7 @@ async def admin_import_wolt(
     return result
 
 
-# --- שיוך מהיר של מבצע מוכן ---
+# --- Quick assignment of a preset deal ---
 class QuickDealBody(BaseModel):
     product_ids: List[int]
     deal_type: str  # "6b55" | "4b25" | "8b40" | "clear"
@@ -3261,9 +3347,9 @@ def admin_quick_deal(body: QuickDealBody, sess: dict = Depends(require_admin)):
 
 
 
-# --- SEO: דפים שגוגל יכול לקרוא (מוצר, קטגוריה), מפת אתר ומידע על החנות ---
-# כל טקסט שמגיע מהמסד עובר html.escape, ו-JSON-LD נבנה עם json.dumps, כדי ששם עם מירכאות
-# (למשל 22*17 ס"מ) לא ישבור את הדף או את המידע שגוגל קורא.
+# --- SEO: crawlable product and category pages, sitemap and store information ---
+# All database text goes through html.escape, and JSON-LD is built with json.dumps, so a name with quotes
+# (e.g. 22*17 cm written with a Hebrew gershayim) can't break the page or the structured data.
 from fastapi.responses import Response
 import html as _html
 
@@ -3284,11 +3370,11 @@ def _abs_url(path_or_url):
     return SITE_URL + (path_or_url if path_or_url.startswith("/") else "/" + path_or_url)
 
 def _ld(obj):
-    # "</" בתוך JSON-LD היה סוגר את תגית ה-script, לכן מבריחים אותו
+    # "</" inside JSON-LD would close the script tag, so escape it
     return json.dumps(obj, ensure_ascii=False).replace("</", "<\\/")
 
 def _store_schema():
-    """מידע על החנות הפיזית בפורמט ש-Google מבין (LocalBusiness): כתובת, טלפון ושעות."""
+    """Physical store information in a format Google understands (LocalBusiness): address, phone and hours."""
     c = _get_contact()
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT day_of_week, is_closed, opening_time, closing_time FROM weekly_hours ORDER BY day_of_week;")
@@ -3405,7 +3491,7 @@ def _breadcrumb_ld(items):
 
 @app.get("/sitemap.xml")
 def sitemap():
-    """מפת אתר: דף הבית, כל הקטגוריות וכל המוצרים. גוגל קורא אותה כדי לדעת אילו דפים קיימים."""
+    """Sitemap: home page, every category and every product, so Google knows which pages exist."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT id FROM Categories ORDER BY id;")
     cats = [r[0] for r in cur.fetchall()]
@@ -3420,7 +3506,7 @@ def sitemap():
 
 @app.get("/product/{product_id}")
 def product_seo_page(product_id: int):
-    """דף מוצר שגוגל יכול לקרוא: כותרת, תיאור, מחיר, מלאי, ומידע מובנה (schema.org)."""
+    """Crawlable product page: title, description, price, stock and structured data (schema.org)."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT p.id, p.name, p.price, p.stock_quantity, p.category_id, p.image_url, p.notes, "
                 "p.weight_grams, p.units_per_package FROM Products p WHERE p.id = %s;", (product_id,))
@@ -3489,7 +3575,7 @@ def _url_quote(t):
 
 @app.get("/category/{category_id}")
 def category_seo_page(category_id: int):
-    """דף קטגוריה שגוגל יכול לקרוא: כל המוצרים בקטגוריה עם קישורים לדף של כל מוצר."""
+    """Crawlable category page: every product in the category, linking to each product page."""
     conn = get_conn(); cur = conn.cursor()
     chain = _category_chain(cur, category_id)
     if not chain:
@@ -3529,7 +3615,7 @@ def category_seo_page(category_id: int):
     return Response(content=html, media_type="text/html")
 
 def _render_index_html():
-    """index.html עם מידע על החנות לגוגל (Store) ותג אימות של Google Search Console אם הוגדר."""
+    """index.html with store information for Google (Store) and the Search Console verification tag if configured."""
     with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8") as f:
         page = f.read()
     extra = ""
@@ -3544,37 +3630,37 @@ def _render_index_html():
 
 
 # ============================================================
-#  🤖 עוזר ה-AI של Bake & Party   (POST /api/ai/chat)
+#  AI assistant for Bake & Party   (POST /api/ai/chat)
 # ============================================================
-# מה צריך כדי שזה יעבוד בשרת (Railway):
-#   1. להוסיף Variable בשם  ANTHROPIC_API_KEY  עם מפתח מ-console.anthropic.com
-#   2. (אופציונלי) AI_MODEL — לבחירת מודל אחר. ברירת המחדל היא מודל מהיר וזול.
-#   3. requirements.txt כבר כולל את החבילה "anthropic" — Railway יתקין לבד.
-# בלי מפתח ה-endpoint לא קורס: הוא מחזיר הודעה ידידותית שמפנה לטלפון/וואטסאפ.
+# Required on the server (Railway):
+#   1. A variable named ANTHROPIC_API_KEY with a key from console.anthropic.com
+#   2. (optional) AI_MODEL to choose another model. The default is a fast, low-cost model.
+#   3. requirements.txt already includes the "anthropic" package.
+# Without a key the endpoint doesn't crash: it returns a friendly message pointing to phone/WhatsApp.
 
 AI_MODEL = os.environ.get("AI_MODEL", "claude-haiku-4-5-20251001")
-AI_MAX_PRODUCTS = 40          # כמה מוצרים תואמים לצרף להקשר
-AI_MAX_MSG_CHARS = 1500       # אורך הודעה מקסימלי מהמשתמש (הגנה)
+AI_MAX_PRODUCTS = 40          # How many matching products to include in the context
+AI_MAX_MSG_CHARS = 1500       # Maximum length of a user message (abuse protection)
 
 # ============================================================
-#  🔍 בדיקת "מה אזל/חזר למלאי" מול וולט — למנהלים בלבד, admin.html
+#  Wolt stock check ("what went out of / back in stock"), admins only, in admin.html
 # ============================================================
-# הגרסה הקודמת קראה את דף וולט החי (scraping) — התבררה כלא אמינה, כי וולט
-# טוענים חלק מהמוצרים רק תוך כדי גלילה (JavaScript), וקריאת HTML רגיל לא
-# תופסת את כל הקטלוג. גרם לדיווחי-שווא על מוצרים שבפועל כן היו במלאי.
+# An earlier version scraped the live Wolt page. It proved unreliable: Wolt loads part of the
+# catalog only while scrolling (JavaScript), so plain HTML misses products and caused false
+# "out of stock" reports.
 #
-# הגרסה הזו משתמשת במקור אמת אמיתי מוולט: **אותו קובץ אקסל** שכבר מורידים
-# מוולט ומשמש את import_data.py. בעמודה "inventory_mode" וולט עצמם מסמנים
-# forced_out_of_stock לכל מוצר שאזל אצלם — בלי צורך "לנחש" מקריאת אתר.
+# This version uses Wolt's own data: the same Excel export used for imports. Wolt marks
+# every unavailable product with inventory_mode = forced_out_of_stock, so nothing is guessed.
 #
-# ההשוואה דו-כיוונית:
-#   1. מוצר שאצלנו "במלאי" אבל בקובץ וולט מסומן forced_out_of_stock
-#      → כנראה אזל בוולט, כדאי לסמן גם אצלנו.
-#   2. מוצר שאצלנו "אזל" אבל בקובץ וולט הוא כן זמין
-#      → כנראה חזר למלאי, כדאי להחזיר גם אצלנו.
+#
+# The comparison works both ways:
+#   1. In stock here but forced_out_of_stock on Wolt
+#      -> probably sold out, suggest marking it here too.
+#   2. Out of stock here but available on Wolt
+#      -> probably restocked, suggest bringing it back here too.
 
 def _normalize_name_tokens(name):
-    """מנקה שם מוצר למילים משמעותיות להשוואה (מסיר מספרים/יחידות/פיסוק)."""
+    """Reduces a product name to meaningful words for comparison (drops numbers, units and punctuation)."""
     import re
     text = re.sub(r"[\d.,%]+\s*(g|kg|ml|l|יח['\"]?|גרם|מ\"ל|מ״ל|ליטר)?", " ", name, flags=re.IGNORECASE)
     text = re.sub(r"[^\u0590-\u05FFA-Za-z\s]", " ", text)
@@ -3582,7 +3668,7 @@ def _normalize_name_tokens(name):
 
 
 def _best_name_match(target_tokens, candidates_with_tokens):
-    """מוצא את ההתאמה הכי טובה (Jaccard) מתוך רשימת (name, tokens). מחזיר (name, similarity) או (None, 0)."""
+    """Finds the best match (Jaccard) among (name, tokens) pairs. Returns (name, similarity) or (None, 0)."""
     best_name, best_sim = None, 0
     for cand_name, cand_tokens in candidates_with_tokens:
         if not cand_tokens or not target_tokens:
@@ -3594,26 +3680,18 @@ def _best_name_match(target_tokens, candidates_with_tokens):
 
 
 def compare_stock_with_wolt_file(file_path):
-    """
-    משווה בין קובץ האקסל שהורד מוולט (גיליון 'offers') לבין המוצרים שלנו.
-    "לא זמין בוולט" נקבע לפי **שני** סימנים ביחד (או-אחד-מהם מספיק):
-      - inventory_mode == 'forced_out_of_stock'  (אזל זמנית מהמלאי)
-      - enabled == False  (מוצר מושבת/לא פעיל בוולט לגמרי — יכול להיות
-        לא מסומן forced_out_of_stock בכלל, אבל עדיין לא ניתן לרכישה שם)
-    בלי לבדוק גם את enabled, מוצרים מושבתים-אבל-לא-"אזל-רשמית" היו "נעלמים"
-    מהבדיקה ונראים בטעות כזמינים.
+    """Compares a Wolt Excel export ('offers' sheet) with our products.
 
-    מחזיר dict עם שלוש רשימות:
-    - to_mark_out_of_stock: אצלנו "במלאי", בוולט לא זמין (אזל או מושבת)
-    - to_mark_back_in_stock: אצלנו "אזל", בוולט כן זמין ופעיל
-    - new_products_not_in_our_site: קיים בוולט, לא נמצא אצלנו בכלל
-      (בלי קשר לסטטוס המלאי שלנו — פשוט לא קיים בטבלת Products שלנו)
-    כל פריט: {"our_id", "our_name", "wolt_name", "similarity"} (לשתי הראשונות)
-    או {"wolt_name", "price", "available"} (לשלישית, אין "אצלנו" בכלל).
+    "Unavailable on Wolt" means either inventory_mode == 'forced_out_of_stock' or enabled == False
+    (a disabled product may not be marked out of stock but still can't be bought there).
 
-    זורק ValueError עם הודעה ברורה בעברית אם הקובץ מהסוג הלא נכון —
-    יש כמה סוגי ייצוא שונים בוולט, ורק אחד מהם (זה עם גיליון "offers"
-    ועמודת "inventory_mode") מתאים לבדיקת מלאי.
+    Returns a dict with three lists:
+    - to_mark_out_of_stock: in stock here, unavailable on Wolt
+    - to_mark_back_in_stock: out of stock here, available on Wolt
+    - new_products_not_in_our_site: on Wolt but not in our Products table at all
+
+    Raises ValueError with a clear (Hebrew, user-facing) message for the wrong kind of export:
+    only the export with an "offers" sheet and an "inventory_mode" column has stock data.
     """
     import pandas as pd
 
@@ -3640,13 +3718,13 @@ def compare_stock_with_wolt_file(file_path):
         if not name or name.lower() == "nan":
             continue
         is_forced_out = str(row.get("inventory_mode", "")) == "forced_out_of_stock"
-        # pandas מחזיר numpy.bool_ ולא bool של פייתון, ולכן "is False" אף פעם לא תפס מוצר מושבת
+        # pandas returns numpy.bool_, not a Python bool, so "is False" never matched a disabled product
         en = row.get("enabled") if has_enabled_col else None
         is_disabled = has_enabled_col and pd.notna(en) and str(en).strip().lower() in ("false", "0", "0.0")
         is_out = is_forced_out or is_disabled
         price = row.get("price")
         price = float(price) if pd.notna(price) else None
-        # וולט לפעמים מחזירים כמה תמונות מופרדות בפסיק — לוקחים את הראשונה (כמו ב-import_data.py)
+        # Wolt sometimes lists several comma-separated images; take the first
         raw_images = row.get("images")
         image_url = str(raw_images).split(",")[0].strip() if pd.notna(raw_images) else None
         weight = row.get("weight_in_grams")
@@ -3672,10 +3750,10 @@ def compare_stock_with_wolt_file(file_path):
             continue
 
         if (stock or 0) > 0:
-            # אצלנו במלאי — האם וולט מסמנים אותו כאזל?
+            # In stock here: does Wolt mark it as unavailable?
             match_name, sim = _best_name_match(our_tokens, wolt_out_of_stock)
             if sim >= SIM_THRESHOLD:
-                # לוודא שאין התאמה טובה יותר ברשימת הזמינים (אם יש התנגשות שם)
+                # Make sure there isn't a better match among the available items (name collisions)
                 avail_match, avail_sim = _best_name_match(our_tokens, wolt_available)
                 if avail_sim < sim:
                     to_mark_out.append({
@@ -3683,7 +3761,7 @@ def compare_stock_with_wolt_file(file_path):
                         "wolt_name": match_name, "similarity": round(sim, 2),
                     })
         else:
-            # אצלנו אזל — האם וולט מסמנים אותו כזמין?
+            # Out of stock here: does Wolt mark it as available?
             match_name, sim = _best_name_match(our_tokens, wolt_available)
             if sim >= SIM_THRESHOLD:
                 out_match, out_sim = _best_name_match(our_tokens, wolt_out_of_stock)
@@ -3693,7 +3771,7 @@ def compare_stock_with_wolt_file(file_path):
                         "wolt_name": match_name, "similarity": round(sim, 2),
                     })
 
-    # מוצרים שקיימים בוולט אבל אין להם שום התאמה אצלנו בכלל (לא "אזל", ממש חסרים)
+    # Products on Wolt with no match here at all (missing, not just out of stock)
     our_candidates = list(zip([name for _, name, _ in our_products], our_tokens_all))
     new_products = []
     for name, tokens, is_out, price, image_url, weight in wolt_items:
@@ -3704,7 +3782,7 @@ def compare_stock_with_wolt_file(file_path):
             new_products.append({
                 "wolt_name": name,
                 "price": price,
-                # וולט לוקחים 30% יותר. המחיר באתר = מחיר וולט חלקי 1.3, מעוגל ל-x.9 (כמו בייבוא)
+                # Wolt charges 30% more. Site price = Wolt price / 1.3, rounded up to x.9 (same as the import)
                 "site_price": _wolt_price(price, True, "nine") if price is not None else None,
                 "available": not is_out,
                 "image_url": image_url,
@@ -3720,20 +3798,20 @@ def compare_stock_with_wolt_file(file_path):
 
 @app.post("/api/admin/wolt-stock-check")
 async def admin_wolt_stock_check(file: UploadFile = File(...), sess: dict = Depends(require_admin)):
-    """
-    מקבל את קובץ האקסל שהורד מוולט (אותו קובץ ש-import_data.py משתמש בו)
-    ומחזיר השוואה דו-כיוונית מול המלאי שלנו. לא נוגע במסד הנתונים —
-    רק מחזיר הצעות; העדכון בפועל נעשה דרך admin.html בלחיצת כפתור נפרדת
-    (משתמש ב-endpoint הקיים של עדכון מוצר).
+    """Takes a Wolt Excel export and returns a two-way stock comparison.
+    Read-only: it only returns suggestions; admins apply them from admin.html.
     """
     tmp_path = f"/tmp/wolt_check_{uuid.uuid4().hex}.xlsx"
     try:
+        data = await file.read(15 * 1024 * 1024 + 1)
+        if len(data) > 15 * 1024 * 1024:
+            raise ValueError("הקובץ גדול מדי (עד 15MB)")
         with open(tmp_path, "wb") as f:
-            f.write(await file.read())
+            f.write(data)
         result = compare_stock_with_wolt_file(tmp_path)
         return result
     except ValueError as e:
-        # שגיאות ולידציה ברורות (סוג קובץ לא נכון) — ההודעה כבר מנוסחת בעברית ומוכנה להצגה
+        # Clear validation errors (wrong file type); the message is already user-facing Hebrew
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"שגיאה לא צפויה בקריאת הקובץ: {e}")
@@ -3815,10 +3893,10 @@ FAQ_TOPIC_KEYS = {
 }
 FAQ_AUTO_PUBLISH_THRESHOLD = 5
 
-# --- הגנה מפני שימוש לרעה בצ'אט ---
-AI_DAILY_LIMIT = int(os.environ.get("AI_DAILY_LIMIT", "30"))          # הודעות מקסימום ליום למשתמש
-AI_OFFTOPIC_BLOCK_THRESHOLD = 5                                       # כמה הודעות לא-קשורות ברצף עד חסימה
-AI_BLOCK_HOURS = 24                                                   # לכמה שעות החסימה תקפה
+# --- Chat abuse protection ---
+AI_DAILY_LIMIT = int(os.environ.get("AI_DAILY_LIMIT", "30"))          # Max messages per user per day
+AI_OFFTOPIC_BLOCK_THRESHOLD = 5                                       # Off-topic messages in a row before a block
+AI_BLOCK_HOURS = 24                                                   # Block length in hours
 
 
 class AiChatMsg(BaseModel):
@@ -3842,13 +3920,13 @@ def _ai_extract_keywords(text, min_len=2, max_words=8):
 
 
 def _ai_build_context(user_message):
-    """בונה טקסט הקשר: מבנה הקטגוריות + מוצרים שתואמים למילים בהודעה + פרטי קשר."""
+    """Builds the context text: category structure + products matching the message + contact details."""
     parts = []
     try:
         conn = get_conn()
         cur = conn.cursor()
 
-        # מבנה החנות: ראשיות -> תתי-קטגוריות
+        # Store structure: main categories -> subcategories
         cur.execute("SELECT id, name, parent_id FROM Categories ORDER BY parent_id NULLS FIRST, sort_order, id;")
         rows = cur.fetchall()
         mains = [(r[0], r[1]) for r in rows if r[2] is None]
@@ -3865,9 +3943,9 @@ def _ai_build_context(user_message):
         if struct_lines:
             parts.append("קטגוריות החנות:\n" + "\n".join(struct_lines))
 
-        # מוצרים שתואמים למילים בהודעת המשתמש — מחפשים גם בשם וגם בתיאור/הערות
-        # המוצר (לא רק בשם), כדי שהחיפוש יעבוד גם כשלקוח מתאר מוצר במילים
-        # משלו בלי לזכור את השם המדויק (למשל "הרוטב הוורוד לפונדו שוקולד").
+        # Products matching words in the user's message. Search both the name and the description/notes,
+        # so it also works when a customer describes a product in their own words
+        # without remembering its exact name.
         kws = _ai_extract_keywords(user_message)
         if kws:
             like = " OR ".join(["(p.name ILIKE %s OR p.notes ILIKE %s)"] * len(kws))
@@ -3902,7 +3980,7 @@ def _ai_build_context(user_message):
     except Exception as e:
         parts.append(f"(שגיאה בטעינת נתוני החנות: {e})")
 
-    # פרטי קשר
+    # Contact details
     try:
         c = _get_contact()
         parts.append(
@@ -3918,11 +3996,8 @@ def _ai_build_context(user_message):
 
 
 def _track_faq_topic(topic_key):
-    """
-    כל פעם ששאלה בצ'אט מסווגת לנושא קבוע, סופרים אותה. ברגע שנושא מסוים
-    חוצה את FAQ_AUTO_PUBLISH_THRESHOLD פעמים, הוא עולה אוטומטית לדף הבית
-    (published=TRUE) — עם השאלה/תשובה שכבר כתובות מראש בטבלה, לא טקסט
-    גולמי מהצ'אט. עוטפים בטיפול שגיאות כדי שתקלה כאן לעולם לא תפיל את הצ'אט.
+    """Counts each chat question by its topic. Once a topic passes FAQ_AUTO_PUBLISH_THRESHOLD,
+    its prepared question and answer are published on the home page. Errors here never break the chat.
     """
     if not topic_key or topic_key not in FAQ_TOPIC_KEYS:
         return
@@ -3944,9 +4019,8 @@ def _track_faq_topic(topic_key):
 
 
 def _ai_check_guard(user_id):
-    """
-    בודק לפני קריאה ל-AI: האם המשתמש חסום זמנית (בגלל הודעות לא-קשורות ברצף),
-    או שחרג ממכסת ההודעות היומית. מחזיר (allowed: bool, message: str|None).
+    """Before calling the AI: is the user temporarily blocked (repeated off-topic messages)
+    or over the daily limit? Returns (allowed: bool, message: str | None).
     """
     conn = get_conn(); cur = conn.cursor()
     try:
@@ -3973,10 +4047,8 @@ def _ai_check_guard(user_id):
 
 
 def _ai_record_usage_and_ontopic(user_id, on_topic):
-    """
-    רץ אחרי כל הודעה מוצלחת: סופר אותה במכסה היומית, ומעדכן את רצף
-    ההודעות הלא-קשורות (מאפס ברגע שיש הודעה קשורה, מגדיל אחרת) — וחוסם
-    זמנית אם הרצף חוצה את הסף.
+    """Runs after each successful message: counts it toward the daily limit and updates the
+    off-topic streak (reset by an on-topic message), blocking temporarily past the threshold.
     """
     conn = get_conn(); cur = conn.cursor()
     try:
@@ -4007,7 +4079,7 @@ def _ai_record_usage_and_ontopic(user_id, on_topic):
 
 
 def _ai_log_chat(user_id, message, reply, topic=None, on_topic=None, status="ok", error_text=None):
-    """שומר שורה ביומן השיחות. לעולם לא שובר את הצ'אט אם השמירה נכשלת."""
+    """Saves a row in the chat log. Never breaks the chat if saving fails."""
     try:
         conn = get_conn(); cur = conn.cursor()
         try:
@@ -4024,9 +4096,9 @@ def _ai_log_chat(user_id, message, reply, topic=None, on_topic=None, status="ok"
 
 
 def _parse_ai_reply(raw):
-    """מחלץ את התשובה מהפורמט המובנה {"reply","topic","on_topic"}.
-    המודל לא תמיד מחזיר JSON נקי (טקסט לפני/אחרי, ירידת שורה בתוך הטקסט, ```), ולכן מנסים כמה דרכים.
-    בשום מקרה לא מציגים ללקוח את ה-JSON עצמו."""
+    """Extracts the reply from the structured {"reply","topic","on_topic"} format.
+    The model doesn't always return clean JSON (text around it, line breaks inside strings, code fences),
+    so several strategies are tried. Raw JSON is never shown to the customer."""
     import re
     raw = (raw or "").strip()
     text = re.sub(r"```(?:json)?", "", raw).strip()
@@ -4035,7 +4107,7 @@ def _parse_ai_reply(raw):
     candidates.append(text)
     for c in candidates:
         try:
-            parsed = json.loads(c, strict=False)        # strict=False: מאפשר ירידות שורה בתוך הטקסט
+            parsed = json.loads(c, strict=False)        # strict=False allows line breaks inside strings
             if isinstance(parsed, dict) and parsed.get("reply"):
                 on_topic = parsed.get("on_topic")
                 if isinstance(on_topic, str):
@@ -4044,7 +4116,7 @@ def _parse_ai_reply(raw):
                         on_topic if isinstance(on_topic, bool) else None)
         except Exception:
             pass
-    # JSON שבור: מוציאים רק את הטקסט של reply
+    # Broken JSON: extract only the reply text
     m = re.search(r'"reply"\s*:\s*"(.*?)"\s*,\s*"(?:topic|on_topic)"', text, re.S) or re.search(r'"reply"\s*:\s*"(.*)', text, re.S)
     if m:
         val = m.group(1)
@@ -4057,13 +4129,13 @@ def _parse_ai_reply(raw):
         om = re.search(r'"on_topic"\s*:\s*(true|false)', text)
         return val.strip(), (tm.group(1) if tm else None), ({"true": True, "false": False}[om.group(1)] if om else None)
     if text.startswith("{"):
-        return "", None, None                            # נראה כמו JSON שאי אפשר לקרוא: עדיף הודעת ברירת מחדל
+        return "", None, None                            # Looks like JSON we can't read: better to show the default message
     return raw, None, None
 
 
 @app.get("/api/admin/ai-log")
 def admin_ai_log(limit: int = 200, only_failed: bool = False, sess: dict = Depends(require_admin)):
-    """השאלות האחרונות ששאלו את ה-AI (חדשות ראשונות), כולל שם/אימייל השואל וסטטוס."""
+    """Latest AI chat questions (newest first), including who asked and the status."""
     limit = max(1, min(limit, 500))
     conn = get_conn(); cur = conn.cursor()
     where = "WHERE l.status <> 'ok'" if only_failed else ""
@@ -4101,7 +4173,7 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         "ישירות בטלפון או בוואטסאפ ונשמח לעזור! 🧁"
     )
 
-    # בדיקת חסימה/מכסה יומית — לא חלה על מנהלים בכלל
+    # Block / daily limit check (never applies to admins)
     if not is_admin:
         allowed, guard_msg = _ai_check_guard(sess["user_id"])
         if not allowed:
@@ -4124,7 +4196,7 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
     context = _ai_build_context(user_message)
     system = AI_SYSTEM_PROMPT + "\n\n===== נתוני החנות (לשימושך בלבד) =====\n" + context
 
-    # בונים את שרשור השיחה (עד 8 הודעות אחרונות מההיסטוריה)
+    # Build the conversation (up to the last 8 messages of history)
     messages = []
     if body.history:
         for m in body.history[-8:]:
@@ -4144,10 +4216,9 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         )
         raw = "".join(block.text for block in resp.content if getattr(block, "type", "") == "text").strip()
 
-        # מנסים לפרש כ-JSON מובנה {"reply", "topic", "on_topic"}. אם המודל
-        # (בעיקר מודלים חינמיים) לא הצליח לשמור על הפורמט — נופלים בעדינות
-        # לטקסט הגולמי כתשובה רגילה, בלי לשבור את הצ'אט, ובלי סיווג/הגנה
-        # לאותה הודעה בודדת (עדיף לפספס הגנה אחת מאשר לשבור את החוויה).
+        # The model is asked for structured JSON {"reply", "topic", "on_topic"}. _parse_ai_reply handles
+        # imperfect output; if the format can't be read, the message is answered without classification
+        # rather than breaking the chat.
         reply, topic, on_topic = _parse_ai_reply(raw)
 
         if not reply:
@@ -4163,11 +4234,11 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         return {"reply": fallback, "ok": False, "reason": "api_error"}
 
 
-# --- הגשת קבצים סטטיים (HTML, לוגו, robots.txt) ---
+# --- Static files (HTML, logo, robots.txt) ---
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# מונע מהדפדפן (בעיקר בנייד) לשמור גרסה ישנה של ה-HTML במטמון.
-# ככה, מיד אחרי כל פרסום, המבקרים רואים את הגרסה החדשה בלי צורך לנקות cache.
+# Stop browsers (especially on phones) from caching old HTML,
+# so visitors see a new deploy right away without clearing the cache.
 _NO_CACHE_HTML = {"Cache-Control": "no-cache, no-store, must-revalidate"}
 
 @app.get("/")
@@ -4188,15 +4259,13 @@ def serve_ui_inputs():
 
 @app.get("/logo-web.jpg")
 def serve_logo_web():
-    # גרסה קלה של הלוגו (כ-50KB במקום 2MB) לשימוש באתר עצמו
+    # Optimized logo (~65KB instead of 2MB) for the site itself
     return FileResponse(os.path.join(STATIC_DIR, "logo-web.jpg"), headers={"Cache-Control": "public, max-age=604800"})
 
 @app.get("/logo.jpg")
 def serve_logo():
-    path = os.path.join(STATIC_DIR, "logo.jpg")
-    if os.path.exists(path):
-        return FileResponse(path)
-    raise HTTPException(status_code=404)
+    # Old links and social previews point here; serve the optimized logo
+    return FileResponse(os.path.join(STATIC_DIR, "logo-web.jpg"), headers={"Cache-Control": "public, max-age=604800"})
 
 @app.get("/robots.txt")
 def serve_robots():

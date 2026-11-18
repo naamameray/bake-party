@@ -1,5 +1,5 @@
-// Service worker של Bake & Party: התראות, ודף "אין חיבור" כשאין אינטרנט.
-// בכוונה בלי מטמון לתוכן, כדי שלא יוצגו מחירים או מלאי ישנים.
+// Bake & Party service worker: notifications, plus an offline page when there's no connection.
+// Intentionally no content cache, so old prices or stock are never shown.
 const OFFLINE_HTML = `<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>אין חיבור | Bake & Party</title><body style="font-family:Arial,sans-serif;background:#FFF9F5;color:#4A2E35;text-align:center;padding:70px 24px">
 <div style="font-size:56px">🧁</div><h2 style="color:#E05276">אין כרגע חיבור לאינטרנט</h2>
@@ -8,7 +8,7 @@ const OFFLINE_HTML = `<!doctype html><html lang="he" dir="rtl"><meta charset="ut
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', event => {
-  if (event.request.mode !== 'navigate') return;      // רק טעינת דף; שאר הבקשות עוברות כרגיל
+  if (event.request.mode !== 'navigate') return;      // page loads only; other requests pass through
   event.respondWith(fetch(event.request).catch(() => new Response(OFFLINE_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })));
 });
 self.addEventListener('push', event => {

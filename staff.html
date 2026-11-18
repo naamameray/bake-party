@@ -156,7 +156,7 @@ td.num,th.num{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
 </div>
 
 <script>
-const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // בפיתוח מקומי: השרת המקומי ולא האתר החי
+const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // Local development talks to the local server, not the live site
 const TOKEN_KEY = 'bp_token';
 const $ = id => document.getElementById(id);
 const token = () => { try { return localStorage.getItem(TOKEN_KEY); } catch(e) { return null; } };
@@ -260,7 +260,7 @@ $('m-prev').onclick = () => shiftMonth(-1);
 $('m-next').onclick = () => shiftMonth(1);
 $('month').onchange = loadHours;
 
-// ===================== אפליקציית צוות =====================
+// ===================== Staff app =====================
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 let deferredInstall = null;
 const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -271,7 +271,7 @@ $('install-btn').onclick = async () => {
   alert('באייפון: לוחצים על כפתור השיתוף ⬆️ ואז "הוספה למסך הבית". מהאפליקציה אפשר לקבל התראות על הזמנות חדשות.');
 };
 
-// ===================== הזמנות =====================
+// ===================== Orders =====================
 const ST_LABEL = { new: 'חדשה', preparing: 'בהכנה', ready: 'מוכנה לאיסוף', picked_up: 'נאספה', cancelled: 'בוטלה' };
 let pausePolling = false, ordersScope = 'active', ordersTimer = null, knownOrderIds = null, soundOn = false, audioCtx = null;
 function beep() {
@@ -311,7 +311,7 @@ $('orders-open').onchange = async e => {
   catch (err) { $('orders-error').textContent = err.message; }
   loadOrders();
 };
-// הודעת וואטסאפ מוכנה ללקוח (נשלחת מהטלפון של החנות, בחינם), לפי מצב ההזמנה
+// Prefilled WhatsApp message to the customer (sent from the store's phone, free), based on the order state
 function waHref(o) {
   const digits = (o.phone || '').replace(/\D/g, '');
   const intl = digits.startsWith('0') ? '972' + digits.slice(1) : digits;

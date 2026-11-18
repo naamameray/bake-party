@@ -1,7 +1,7 @@
-/* שדות תאריך / שעה / חודש עם אפשרות הקלדה.
-   כל שדה מסוג date / time / month / datetime-local מקבל תיבת הקלדה ליד כפתור לוח שנה.
-   השדה המקורי נשאר בדף (מוסתר), כך שכל הקוד הקיים שקורא ממנו .value ממשיך לעבוד.
-   אפשר להקליד בחופשיות: 25/12/2026, 25.12.26, 0930, 9:30, 12/2026 ועוד. */
+/* Typeable date / time / month inputs.
+   Every date, time, month and datetime-local input gets a text box next to a picker button.
+   The original input stays in the page (hidden), so existing code that reads .value keeps working.
+   Free typing is accepted: 25/12/2026, 25.12.26, 0930, 9:30, 12/2026 and so on. */
 (function () {
   const PH = { date: 'יום/חודש/שנה', time: 'שעה:דקות', month: 'חודש/שנה', 'datetime-local': 'יום/חודש/שנה שעה:דקות' };
   const ICON = { date: '📅', time: '🕒', month: '📅', 'datetime-local': '📅' };
@@ -70,7 +70,7 @@
     btn.style.cssText = 'border:1px solid #FFD1DC;background:#fff;border-radius:10px;padding:6px 8px;cursor:pointer;font-size:1em;line-height:1;flex:0 0 auto;';
     inp.parentNode.insertBefore(wrap, inp);
     wrap.appendChild(txt); wrap.appendChild(btn); wrap.appendChild(inp);
-    // השדה המקורי נשאר בדף אבל בלתי נראה, כדי שלוח השנה של הדפדפן יוכל להיפתח ממנו
+    // The original input stays in the page but invisible, so the browser's picker can still open from it
     inp.style.cssText += ';position:absolute;inset:auto 0 0 auto;width:1px;height:1px;opacity:0;pointer-events:none;border:0;padding:0;';
     inp.tabIndex = -1;
     let last = inp.value;
@@ -113,5 +113,5 @@
     setInterval(() => document.querySelectorAll(SEL).forEach(i => i._typedSync && i._typedSync()), 400);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
-  window.bpParseTyped = parse;   // לבדיקות
+  window.bpParseTyped = parse;   // for tests
 })();
