@@ -9,7 +9,7 @@
     <link rel="icon" type="image/png" href="/icon-192.png">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" href="/icon-192.png">
-    <meta name="theme-color" content="#E05276">
+    <meta name="theme-color" content="#E96A8D">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Bake & Party">
     <meta property="og:site_name" content="Bake & Party">
@@ -157,7 +157,7 @@
         .p-img-wrap { position: relative; aspect-ratio: 1; border-radius: 14px; background: #fff; overflow: hidden; display: flex; align-items: center; justify-content: center; }
         .product-img { width: 100%; height: 100%; object-fit: contain; }
         .product-card.out .product-img { filter: grayscale(0.9); opacity: 0.55; }
-        .out-tag { position: absolute; bottom: 8px; right: 8px; background: rgba(43,28,33,0.78); color: #fff; font-size: 0.75em; padding: 3px 9px; border-radius: 999px; }
+        .out-tag { position: absolute; bottom: 8px; left: 8px; background: rgba(43,28,33,0.78); color: #fff; font-size: 0.75em; padding: 3px 9px; border-radius: 999px; }
         .sale-badge { position: absolute; top: 8px; right: 8px; background: var(--sale); color: #fff; font-weight: 700; font-size: 0.75em; padding: 4px 9px; border-radius: 999px; z-index: 2; }
         .new-ribbon { position: absolute; top: 8px; left: 8px; background: var(--brand); color: #fff; font-size: 0.72em; font-weight: 700; padding: 3px 9px; border-radius: 999px; z-index: 2; }
         .price { font-size: 1.05em; color: var(--brand); font-weight: 700; }
@@ -318,6 +318,56 @@
         .footer-cats { display: flex; flex-wrap: wrap; gap: 4px 12px; }
         .footer-bottom { max-width: 1200px; margin: 22px auto 0; padding-top: 14px; border-top: 1px solid var(--line); text-align: center; font-size: 0.85em; color: var(--muted); }
 
+        /* ---------- עגלה והזמנות ---------- */
+        .add-btn { position: absolute; bottom: 8px; right: 8px; width: 38px; height: 38px; border-radius: 50%; border: none; background: var(--brand);
+            color: #fff; font-size: 1.5em; line-height: 1; cursor: pointer; box-shadow: 0 4px 12px rgba(224,82,118,.35); z-index: 3; display: flex; align-items: center; justify-content: center; }
+        .add-btn:hover { background: #c94166; }
+        .qty { display: inline-flex; align-items: center; gap: 2px; background: #fff; border-radius: 999px; box-shadow: 0 4px 12px rgba(0,0,0,.15); z-index: 3; }
+        .p-img-wrap .qty { position: absolute; bottom: 8px; right: 8px; }
+        .qty button { width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--brand-soft); color: var(--brand); font-size: 1.2em; font-weight: 700; cursor: pointer; }
+        .qty button:hover { background: #ffd3e0; }
+        .qty span { min-width: 26px; text-align: center; font-weight: 700; }
+        .product-card.in-cart { border-color: var(--brand-2); }
+        #cart-bar { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); width: min(520px, calc(100% - 24px)); z-index: 750;
+            background: var(--brand); color: #fff; border: none; border-radius: 999px; padding: 14px 22px; font-size: 1.02em; font-weight: 700; cursor: pointer;
+            display: none; justify-content: space-between; align-items: center; box-shadow: 0 10px 30px rgba(224,82,118,.45); }
+        #cart-bar .cnt { background: rgba(255,255,255,.25); border-radius: 999px; padding: 2px 10px; font-size: .9em; }
+        body.has-cart #cart-bar { display: flex; }
+        body.has-cart #wa-btn { bottom: 84px; } body.has-cart #a11y-btn { bottom: 144px; } body.has-cart #back-to-top { bottom: 84px; }
+        body.has-cart footer#site-footer { padding-bottom: 90px; }
+        .cart-modal { max-width: 520px; padding: 0; display: flex; flex-direction: column; }
+        .cart-head { padding: 20px 22px 10px; border-bottom: 1px solid var(--line); }
+        .cart-head h2 { text-align: right; margin: 0; }
+        .cart-body { padding: 10px 22px; overflow-y: auto; flex: 1; }
+        .cart-foot { padding: 14px 22px 20px; border-top: 1px solid var(--line); background: #fff; }
+        .cart-foot .btn { margin-top: 0; width: auto; } .cart-foot .btn-block { width: 100%; } .cart-foot .btn-ghost { flex: 0 0 auto; }
+        .cart-line { display: grid; grid-template-columns: 56px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+        .cart-line img { width: 56px; height: 56px; object-fit: contain; border-radius: 10px; border: 1px solid var(--line); background: #fff; }
+        .cart-line .nm { font-size: .92em; line-height: 1.35; }
+        .cart-line .pr { color: var(--brand); font-weight: 700; font-size: .92em; margin-top: 2px; }
+        .cart-line.bad { opacity: .55; }
+        .cart-line .qty { box-shadow: none; border: 1px solid var(--line); }
+        .cart-line .qty button { width: 30px; height: 30px; font-size: 1em; }
+        .sum-row { display: flex; justify-content: space-between; font-size: 1.1em; font-weight: 700; margin-bottom: 4px; }
+        .pay-note { font-size: .86em; color: var(--muted); margin: 0 0 12px; }
+        .info-box { background: #FFF6E5; color: #7A5410; border-radius: 12px; padding: 10px 12px; font-size: .88em; margin: 10px 0; }
+        .ok-box { background: #E7F5EC; color: #1F6B41; border-radius: 12px; padding: 10px 12px; font-size: .9em; margin: 10px 0; }
+        .check-row { display: flex !important; gap: 8px; align-items: flex-start; font-weight: 400 !important; font-size: .9em !important; }
+        .check-row input { width: auto !important; margin-top: 3px; }
+        .steps { display: flex; justify-content: space-between; margin: 18px 0 8px; position: relative; }
+        .steps::before { content: ''; position: absolute; top: 15px; right: 12%; left: 12%; height: 3px; background: var(--line); }
+        .step { flex: 1; text-align: center; font-size: .82em; color: var(--muted); position: relative; }
+        .step .b { width: 32px; height: 32px; border-radius: 50%; background: #fff; border: 3px solid var(--line); margin: 0 auto 6px; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+        .step.done .b { background: var(--brand); border-color: var(--brand); color: #fff; }
+        .step.done { color: var(--ink); font-weight: 500; }
+        .order-big { text-align: center; font-size: 1.15em; margin: 6px 0; }
+        .order-big strong { color: var(--brand); font-size: 1.5em; display: block; }
+        .my-order { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--line); cursor: pointer; font-size: .92em; }
+        .my-order:hover { color: var(--brand); }
+        .detail-buy { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+        .detail-buy .qty { box-shadow: none; border: 1px solid var(--line); }
+        .detail-buy .btn { flex: 1; margin: 0; }
+
         /* ---------- נייד ---------- */
         @media (max-width: 760px) {
             .topbar-in { grid-template-columns: auto 1fr auto; gap: 10px; padding: 8px 12px; }
@@ -342,6 +392,7 @@
             .category-circle { padding: 8px; }
             .cat-name { font-size: 0.82em; }
             .cat-count { display: none; }
+            #back-to-top { display: none !important; }
             .products-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
             .product-card { padding: 8px; }
             .modal-overlay { padding: 0; align-items: flex-end; }
@@ -353,6 +404,44 @@
             .cat-dropdown { left: 0 !important; right: 0 !important; top: auto !important; bottom: 0 !important; width: 100% !important;
                 max-height: 60vh; border-radius: 20px 20px 0 0; }
         }
+        /* ========== עיצוב "חגיגי" (נבחר): פס עליון ורוד, מסגרות ורודות, תחתית כהה ========== */
+        :root { --bg: #FFF9F5; --ink: #4A2E35; --muted: #9B7B82; --line: #FFD1DC; --brand: #E05276; --brand-2: #FF85A2; --brand-soft: #FFE4EC; }
+        .topbar { background: linear-gradient(120deg, #FF85A2, #E05276); border-bottom: none; backdrop-filter: none; }
+        .brand-text strong { color: #fff; }
+        .brand-text span { color: #FFE4EC; }
+        .icon-btn { background: rgba(255,255,255,.22); color: #fff; }
+        .icon-btn:hover { background: rgba(255,255,255,.32); }
+        .search-box input { background: #fff; border: none; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+        .search-box input:focus { box-shadow: 0 0 0 3px rgba(255,255,255,.6); }
+        .ha-btn { background: rgba(255,255,255,.2); color: #fff; border-color: rgba(255,255,255,.5); }
+        .ha-btn:hover { border-color: #fff; }
+        .ha-btn.primary { background: #fff; color: #E05276; border-color: #fff; }
+        .ha-hello { color: #fff; }
+        #status-bar { color: #fff; }
+        .status-pill { background: rgba(255,255,255,.18); border: none; color: #fff; }
+        .chip, .cat-menu-trigger { background: rgba(255,255,255,.92); border: none; color: #4A2E35; }
+        .chip:hover, .cat-menu-trigger:hover { background: #fff; color: #E05276; }
+        .chip.sale { color: #E5383B; } .chip.wolt { color: #009DE0; }
+        .cat-menu-item.active .cat-menu-trigger { background: #4A2E35; color: #fff; }
+        .hero { background: #fff; border: 2px dashed #FF85A2; }
+        #main-title, .section-head h3, #about-section h3, #faq-section h3 { color: #E05276; }
+        .feature-card, #about-section, .faq-item { border: 2px solid #FFD1DC; }
+        .category-circle { border: 2px solid #FFD1DC; }
+        .circle-img { border: 3px solid #FF85A2; border-radius: 24px; }
+        .product-card { border: 2px solid #FFD1DC; border-radius: 20px; text-align: center; }
+        .product-card:hover { border-color: #FF85A2; box-shadow: 0 8px 18px rgba(255,133,162,.25); }
+        .price { color: #E05276; font-size: 1.15em; }
+        .btn { background: #FF85A2; } .btn:hover { background: #E05276; }
+        .btn-ghost { background: #fff; color: #E05276; border: 2px solid #FF85A2; }
+        .btn-ghost:hover { background: #FFE4EC; }
+        .sale-badge { background: #FF4444; }
+        #cart-bar { background: #E05276; }
+        footer#site-footer { background: #4A2E35; border-top: none; }
+        footer#site-footer, footer#site-footer p, footer#site-footer a, footer#site-footer h4, footer#site-footer li, footer#site-footer span { color: #FFE4EC; }
+        footer#site-footer a:hover { color: #fff; }
+        .footer-brand strong { color: #FF85A2; }
+        .footer-hours-list li { border-bottom-color: rgba(255,228,236,.18); }
+        .footer-bottom { border-top-color: rgba(255,228,236,.18); color: #C9A9B1; }
     </style>
 </head>
 <body>
@@ -375,13 +464,14 @@
         </div>
         <div id="status-bar">
             <span class="status-pill"><span class="dot" id="status-dot"></span><span id="status-text">בודק אם החנות פתוחה...</span></span>
+            <span class="status-pill">🛍️ הזמנה באתר לאיסוף עצמי</span>
             <span class="status-pill">🚚 משלוחים בתיאום מעל 200 ₪</span>
         </div>
         <nav class="cat-menu-bar" id="cat-menu-bar" aria-label="קטגוריות"></nav>
     </header>
 
     <div id="construction-banner">
-        🚧 בקרוב: הזמנה ישירות דרך האתר! עד אז אפשר להזמין בטלפון, בוואטסאפ או בוולט.
+        🛍️ חדש! אפשר להזמין באתר לאיסוף עצמי מהחנות. מוסיפים לעגלה, ומשלמים בחנות באיסוף.
         <button class="cb-close" type="button" onclick="dismissConstructionBanner()" aria-label="סגירת הודעה">×</button>
     </div>
 
@@ -421,6 +511,9 @@
                 <p id="contact-msg" style="font-size:0.85em; text-align:center; margin:6px 0 0;"></p>
             </div>
         </div>
+
+        <button class="sidebar-item" type="button" onclick="toggleAccordion('info-orders'); loadMyOrders()">🧾 ההזמנות שלי <span>▾</span></button>
+        <div id="info-orders" class="sidebar-content"><div id="my-orders-list">טוען...</div></div>
 
         <button class="sidebar-item ai-btn" type="button" onclick="openAI()">✨ שאל/י את ה-AI שלנו <span></span></button>
     </aside>
@@ -550,6 +643,20 @@
         <div class="a11y-row"><span>עצירת אנימציות</span><button class="a11y-opt" data-a11y="a11y-noanim" onclick="a11yToggle('a11y-noanim')">הפעל</button></div>
         <div class="a11y-row"><span>גופן קריא</span><button class="a11y-opt" data-a11y="a11y-readable" onclick="a11yToggle('a11y-readable')">הפעל</button></div>
         <button id="a11y-reset" onclick="a11yReset()">איפוס כל ההגדרות</button>
+    </div>
+
+    <button id="cart-bar" type="button" onclick="openCart()" aria-label="פתיחת העגלה">
+        <span>🛒 לעגלה <span class="cnt" id="cart-count">0</span></span><span id="cart-sum">₪0.00</span>
+    </button>
+
+    <!-- עגלה, הזמנה ומעקב -->
+    <div class="modal-overlay" id="cart-modal">
+        <div class="modal cart-modal" role="dialog" aria-labelledby="cart-title">
+            <button class="close-x" type="button" onclick="closeCart()" aria-label="סגירה">×</button>
+            <div class="cart-head"><h2 id="cart-title">העגלה שלי</h2></div>
+            <div class="cart-body" id="cart-body"></div>
+            <div class="cart-foot" id="cart-foot"></div>
+        </div>
     </div>
 
     <!-- צ'אט AI -->
@@ -696,7 +803,7 @@
         }
 
         // ---------- באנר "בקרוב" ----------
-        const CB_KEY = 'bp_construction_dismissed_v5';
+        const CB_KEY = 'bp_construction_dismissed_v6';
         if (ls(CB_KEY)) document.getElementById('construction-banner').style.display = 'none';
         window.dismissConstructionBanner = function() { ls(CB_KEY, '1'); document.getElementById('construction-banner').style.display = 'none'; };
 
@@ -804,6 +911,10 @@
             routing = true;
             try {
                 const params = new URLSearchParams(base);
+                // יצאנו מדף מעקב הזמנה (למשל בכפתור "חזור"): סוגרים את חלון המעקב
+                if (!params.has('order') && cartStep === 'track' && document.getElementById('cart-modal').classList.contains('open')) {
+                    document.getElementById('cart-modal').classList.remove('open'); clearInterval(trackTimer); cartStep = 'cart';
+                }
                 if (params.has('c')) {
                     const f = findCategory(parseInt(params.get('c')));
                     if (!f) loadMainCategories();
@@ -814,6 +925,9 @@
                     if (f) openMainAll(f.main); else loadMainCategories();
                 } else if (params.has('q')) {
                     const q = params.get('q'); searchInput.value = q; syncSearchBox(); runSearch(q);
+                } else if (params.has('order')) {
+                    loadMainCategories();
+                    openTracking(parseInt(params.get('order')), params.get('t'));
                 } else if (params.has('sale')) openSales();
                 else if (params.has('all')) showAllProducts();
                 else { if (searchInput.value) { searchInput.value = ''; syncSearchBox(); } loadMainCategories(); }
@@ -983,6 +1097,7 @@
                 allCategories = cats; allProducts = prods;
                 await loadCategoryMenu();
                 loadFaq();
+                updateCartBar(); loadOrdersConfig();
                 const { p, base } = parseHash();
                 applyBase(base);
                 if (p) openProductDetail(p, true);
@@ -1005,7 +1120,7 @@
 
         function logout() {
             fetch(`${API}/api/logout`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token() } })
-                .finally(() => { clearToken(); currentUser = null; adminSubcategories = []; renderAccount(); closeSidebar(); });
+                .finally(() => { clearToken(); currentUser = null; adminSubcategories = []; renderAccount(); closeSidebar(); refreshAllCardControls(); });
         }
 
         // ===================== הוספת מוצר (מנהלים) =====================
@@ -1279,7 +1394,7 @@
         function productCard(p, isNew) {
             const a = document.createElement('a');
             a.className = 'product-card' + (p.in_stock ? '' : ' out');
-            a.href = `/product/${p.id}`;
+            a.href = `/product/${p.id}`; a.dataset.pid = p.id;
             const meta = p.weight_grams ? `${p.weight_grams} גרם` : (p.units_per_package ? `${p.units_per_package} יח'` : '');
             a.innerHTML = `
                 <div class="p-img-wrap">
@@ -1293,6 +1408,7 @@
                 ${meta ? `<div class="p-meta">${esc(meta)}</div>` : ''}`;
             a.querySelector('img').onerror = function () { this.onerror = null; this.src = PLACEHOLDER; };
             a.onclick = e => { if (e.metaKey || e.ctrlKey) return; e.preventDefault(); openProductDetail(p.id); };
+            renderCardControl(a, p);
             return a;
         }
         function renderProducts() {
@@ -1371,9 +1487,10 @@
                 if (p.units_per_package) meta += `<li><span>יחידות באריזה</span><span>${esc(p.units_per_package)}</span></li>`;
                 if (p.notes) meta += `<li style="flex-direction:column; align-items:start; gap:4px;"><span>פרטים</span><span style="color:var(--ink); white-space:pre-line;">${esc(p.notes)}</span></li>`;
                 document.getElementById('detail-meta').innerHTML = meta;
-                document.getElementById('detail-action').innerHTML = `<div class="detail-cta">
-                    <a class="btn" target="_blank" rel="noopener" href="${esc(waLink('שלום, אשמח להזמין: ' + p.name + ' (' + money(p.price) + ')'))}">הזמנה בוואטסאפ</a>
+                document.getElementById('detail-action').innerHTML = `<div id="detail-buy"></div><div class="detail-cta">
+                    <a class="btn btn-ghost" target="_blank" rel="noopener" href="${esc(waLink('שלום, יש לי שאלה על: ' + p.name))}">שאלה בוואטסאפ</a>
                     <a class="btn btn-ghost" target="_blank" rel="noopener" href="${WOLT_URL}">🛵 בוולט</a></div>`;
+                renderDetailBuy(p);
             }
         }
 
@@ -1488,7 +1605,7 @@
         async function afterAuth(d) {
             setToken(d.token); currentUser = d.user; closeAuth();
             if (currentUser.role === 'admin') await loadAdminCats();
-            renderAccount();
+            renderAccount(); refreshAllCardControls();
         }
         window.handleLogin = function(e) {
             e.preventDefault();
@@ -1582,6 +1699,315 @@
             document.getElementById('footer-hours-list').innerHTML = data.weekly.map(d =>
                 `<li><span>${esc(d.day_name)}</span><span>${d.is_closed ? 'סגור' : esc(d.opening_time + '-' + d.closing_time)}</span></li>`).join('');
         }).catch(e => console.error('שגיאה בטעינת לוח שעות:', e));
+
+        // ===================== עגלה והזמנה לאיסוף עצמי =====================
+        const CART_KEY = 'bp_cart', MY_ORDERS_KEY = 'bp_orders';
+        let cart = {}; try { cart = JSON.parse(ls(CART_KEY) || '{}') || {}; } catch (e) { cart = {}; }
+        let ordersConfig = { open: true };
+        let cartStep = 'cart';      // cart | checkout | done
+        let lastOrder = null;
+        function saveCart() { ls(CART_KEY, JSON.stringify(cart)); updateCartBar(); }
+        function productById(id) { return allProducts.find(p => p.id === Number(id)); }
+        function cartLines() {
+            return Object.entries(cart).map(([id, qty]) => ({ id: Number(id), qty, p: productById(id) }));
+        }
+        function cartTotals() {
+            let count = 0, sum = 0;
+            cartLines().forEach(l => { if (l.p && l.p.in_stock) { count += l.qty; sum += l.p.price * l.qty; } });
+            return { count, sum: Math.round(sum * 100) / 100 };
+        }
+        function setQty(id, qty) {
+            qty = Math.max(0, Math.min(99, qty));
+            if (qty) cart[id] = qty; else delete cart[id];
+            saveCart();
+            document.querySelectorAll(`.product-card[data-pid="${id}"]`).forEach(card => { const p = productById(id); if (p) renderCardControl(card, p); });
+            const dp = document.getElementById('detail-buy'); if (dp && Number(dp.dataset.pid) === Number(id)) renderDetailBuy(productById(id));
+            if (document.getElementById('cart-modal').classList.contains('open') && cartStep === 'cart') renderCart();
+        }
+        function qtyHtml(qty) { return `<button type="button" data-d="-1" aria-label="הפחתה">−</button><span>${qty}</span><button type="button" data-d="1" aria-label="הוספה">+</button>`; }
+        function bindQty(el, id) {
+            el.querySelectorAll('button[data-d]').forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); setQty(id, (cart[id] || 0) + Number(b.dataset.d)); });
+        }
+        function renderCardControl(card, p) {
+            const wrap = card.querySelector('.p-img-wrap');
+            wrap.querySelectorAll('.add-btn, .qty').forEach(x => x.remove());
+            card.classList.toggle('in-cart', !!cart[p.id]);
+            if (!p.in_stock || !ordersConfig.open || (currentUser && currentUser.role === 'admin')) return;
+            if (cart[p.id]) {
+                const q = document.createElement('div'); q.className = 'qty'; q.innerHTML = qtyHtml(cart[p.id]);
+                q.onclick = e => { e.preventDefault(); e.stopPropagation(); };
+                bindQty(q, p.id); wrap.appendChild(q);
+            } else {
+                const b = document.createElement('button'); b.type = 'button'; b.className = 'add-btn'; b.textContent = '+';
+                b.setAttribute('aria-label', 'הוספה לעגלה: ' + p.name);
+                b.onclick = e => { e.preventDefault(); e.stopPropagation(); setQty(p.id, 1); };
+                wrap.appendChild(b);
+            }
+        }
+        function renderDetailBuy(p) {
+            const box = document.getElementById('detail-buy'); if (!box || !p) return;
+            box.dataset.pid = p.id;
+            if (!ordersConfig.open) { box.innerHTML = '<div class="info-box">כרגע לא מקבלים הזמנות באתר. אפשר להזמין בטלפון או בוואטסאפ.</div>'; return; }
+            if (!p.in_stock) { box.innerHTML = '<div class="info-box">המוצר אזל כרגע ולכן אי אפשר להזמין אותו.</div>'; return; }
+            if (cart[p.id]) {
+                box.innerHTML = `<div class="detail-buy"><div class="qty">${qtyHtml(cart[p.id])}</div><button class="btn" type="button">לעגלה (${money(p.price * cart[p.id])})</button></div>`;
+                bindQty(box.querySelector('.qty'), p.id);
+                box.querySelector('.btn').onclick = () => { closeDetailQuiet(); openCart(); };
+            } else {
+                box.innerHTML = `<div class="detail-buy"><button class="btn" type="button">🛒 הוספה לעגלה · ${money(p.price)}</button></div>`;
+                box.querySelector('.btn').onclick = () => setQty(p.id, 1);
+            }
+        }
+        function updateCartBar() {
+            const t = cartTotals();
+            document.body.classList.toggle('has-cart', t.count > 0 && ordersConfig.open);
+            document.getElementById('cart-count').textContent = t.count;
+            document.getElementById('cart-sum').textContent = money(t.sum);
+        }
+        function refreshAllCardControls() {
+            document.querySelectorAll('.product-card[data-pid]').forEach(c => { const p = productById(c.dataset.pid); if (p) renderCardControl(c, p); });
+        }
+        async function loadOrdersConfig() {
+            try { ordersConfig = await fetch(`${API}/api/orders/config?_t=${Date.now()}`).then(r => r.json()); } catch (e) {}
+            refreshAllCardControls(); updateCartBar();
+        }
+
+        function openCart() { cartStep = 'cart'; renderCart(); document.getElementById('cart-modal').classList.add('open'); }
+        function closeCart() {
+            document.getElementById('cart-modal').classList.remove('open');
+            if (parseHash().base.startsWith('order=')) { history.replaceState(null, '', location.pathname); renderedBase = ''; }
+            clearInterval(trackTimer);
+        }
+        document.getElementById('cart-modal').addEventListener('click', e => { if (e.target.id === 'cart-modal') closeCart(); });
+
+        function renderCart() {
+            const body = document.getElementById('cart-body'), foot = document.getElementById('cart-foot');
+            document.getElementById('cart-title').textContent = 'העגלה שלי';
+            const lines = cartLines();
+            if (!lines.length) {
+                body.innerHTML = '<p class="state-msg">העגלה ריקה. אפשר להוסיף מוצרים בלחיצה על + 🙂</p>';
+                foot.innerHTML = `<button class="btn btn-block" type="button" onclick="closeCart()">להמשך קנייה</button>`;
+                return;
+            }
+            const bad = lines.filter(l => !l.p || !l.p.in_stock);
+            body.innerHTML = (bad.length ? `<div class="info-box">חלק מהמוצרים אזלו מאז שהוספת אותם, והם לא ייכללו בהזמנה.</div>` : '') +
+                lines.map(l => {
+                    const p = l.p;
+                    if (!p) return `<div class="cart-line bad"><img src="${PLACEHOLDER}" alt=""><div><div class="nm">מוצר שכבר לא קיים באתר</div></div>
+                        <button class="btn btn-ghost btn-sm" type="button" data-rm="${l.id}">הסרה</button></div>`;
+                    return `<div class="cart-line${p.in_stock ? '' : ' bad'}" data-id="${p.id}">
+                        <img src="${esc(imgUrl(p.image))}" alt="" loading="lazy">
+                        <div><div class="nm">${esc(p.name)}</div><div class="pr">${p.in_stock ? money(p.price * l.qty) + (l.qty > 1 ? ` <span style="color:var(--muted);font-weight:400">(${money(p.price)} ליח')</span>` : '') : 'אזל מהמלאי'}</div></div>
+                        ${p.in_stock ? `<div class="qty">${qtyHtml(l.qty)}</div>` : `<button class="btn btn-ghost btn-sm" type="button" data-rm="${p.id}">הסרה</button>`}
+                    </div>`;
+                }).join('');
+            body.querySelectorAll('.cart-line img').forEach(i => i.onerror = function () { this.onerror = null; this.src = PLACEHOLDER; });
+            body.querySelectorAll('.cart-line[data-id] .qty').forEach(q => bindQty(q, Number(q.closest('.cart-line').dataset.id)));
+            body.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => setQty(Number(b.dataset.rm), 0));
+            const t = cartTotals();
+            foot.innerHTML = `
+                <div class="sum-row"><span>סה"כ (${t.count} פריטים)</span><span>${money(t.sum)}</span></div>
+                <p class="pay-note">🛍️ איסוף עצמי מ${esc(ordersConfig.address || 'החנות')} · 💳 התשלום בחנות בזמן האיסוף.<br>מבצעי כמות (כמו 4 ב-25) מחושבים בקופה.</p>
+                ${ordersConfig.open ? `<button class="btn btn-block" type="button" ${t.count ? '' : 'disabled'} onclick="showCheckout()">להמשך הזמנה</button>`
+                    : `<div class="info-box">כרגע לא מקבלים הזמנות באתר. אפשר להזמין בטלפון או בוואטסאפ.</div>`}`;
+        }
+
+        function showCheckout() {
+            cartStep = 'checkout';
+            const u = currentUser || {};
+            const t = cartTotals();
+            document.getElementById('cart-title').textContent = 'פרטים להזמנה';
+            document.getElementById('cart-body').innerHTML = `
+                <form id="checkout-form" onsubmit="submitOrder(event)">
+                    <label for="co-name">שם מלא *</label>
+                    <input id="co-name" autocomplete="name" required value="${esc(u.name || ls('bp_co_name') || '')}">
+                    <label for="co-phone">טלפון *</label>
+                    <input id="co-phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="05X-XXXXXXX" value="${esc(u.phone || ls('bp_co_phone') || '')}">
+                    <label for="co-email">מייל ${currentUser ? '' : '(מומלץ, כדי שנעדכן כשההזמנה מוכנה)'}</label>
+                    <input id="co-email" type="email" autocomplete="email" value="${esc(u.email || ls('bp_co_email') || '')}">
+                    <label for="co-note">הערה להזמנה (לא חובה)</label>
+                    <textarea id="co-note" rows="2" placeholder="למשל: אגיע אחרי 17:00"></textarea>
+                    ${currentUser ? '' : `
+                    <label class="check-row" style="margin-top:14px;"><input type="checkbox" id="co-acct" onchange="document.getElementById('co-acct-box').style.display = this.checked ? 'block' : 'none'">
+                        <span>ליצור חשבון, כדי שבפעם הבאה ההזמנה תהיה מהירה יותר ותוכלו לראות את ההזמנות שלכם</span></label>
+                    <div id="co-acct-box" style="display:none;">
+                        <label for="co-pass">בחירת סיסמה (6 תווים לפחות)</label>
+                        <input id="co-pass" type="password" autocomplete="new-password" minlength="6">
+                        <label class="check-row"><input type="checkbox" id="co-notify"><span>אשמח לקבל התראות מהחנות במייל ובטלפון: מוצרים חדשים, עדכונים על הזמנות ועוד (אפשר לבטל בכל רגע)</span></label>
+                    </div>`}
+                    <p class="msg" id="co-msg"></p>
+                </form>`;
+            document.getElementById('cart-foot').innerHTML = `
+                <div class="sum-row"><span>לתשלום בחנות</span><span>${money(t.sum)}</span></div>
+                <p class="pay-note">🛍️ איסוף עצמי · נעדכן אותך כשההזמנה מוכנה</p>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn btn-ghost" type="button" onclick="openCart()">חזרה</button>
+                    <button class="btn" style="flex:1;" type="submit" form="checkout-form" id="co-submit">שליחת הזמנה</button>
+                </div>`;
+        }
+
+        async function submitOrder(e) {
+            e.preventDefault();
+            const msg = document.getElementById('co-msg'), btn = document.getElementById('co-submit');
+            const v = id => (document.getElementById(id) || {}).value || '';
+            const acct = !!(document.getElementById('co-acct') && document.getElementById('co-acct').checked);
+            const notify = !!(document.getElementById('co-notify') && document.getElementById('co-notify').checked);
+            const items = cartLines().filter(l => l.p && l.p.in_stock).map(l => ({ product_id: l.id, quantity: l.qty }));
+            if (!items.length) { msg.textContent = 'אין בעגלה מוצרים שאפשר להזמין.'; return; }
+            const body = { items, name: v('co-name').trim(), phone: v('co-phone').trim(), email: v('co-email').trim() || null,
+                note: v('co-note').trim() || null, create_account: acct, password: acct ? v('co-pass') : null, notify: acct && notify };
+            btn.disabled = true; btn.textContent = 'שולחים...'; msg.textContent = '';
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (token()) headers['Authorization'] = 'Bearer ' + token();
+                const res = await fetch(`${API}/api/orders`, { method: 'POST', headers, body: JSON.stringify(body) });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'לא הצלחנו לשלוח את ההזמנה. נסו שוב.');
+                ls('bp_co_name', body.name); ls('bp_co_phone', body.phone); if (body.email) ls('bp_co_email', body.email);
+                let mine = []; try { mine = JSON.parse(ls(MY_ORDERS_KEY) || '[]'); } catch (x) {}
+                mine.unshift({ id: d.id, t: d.token, number: d.number, at: new Date().toLocaleDateString('he-IL'), total: d.total });
+                ls(MY_ORDERS_KEY, JSON.stringify(mine.slice(0, 20)));
+                cart = {}; saveCart(); refreshAllCardControls();
+                if (d.auth_token) { setToken(d.auth_token); currentUser = d.user; renderAccount(); }
+                lastOrder = { ...d, email: body.email };
+                cartStep = 'done';
+                renderOrderDone(notify);
+            } catch (err) { msg.textContent = err.message; msg.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+            finally { btn.disabled = false; btn.textContent = 'שליחת הזמנה'; }
+        }
+
+        function renderOrderDone(wantsPush) {
+            const d = lastOrder;
+            document.getElementById('cart-title').textContent = 'ההזמנה התקבלה! 🎉';
+            document.getElementById('cart-body').innerHTML = `
+                <div class="order-big">מספר הזמנה<strong>#${d.number}</strong></div>
+                <div class="ok-box">קיבלנו את ההזמנה. נכין אותה ונעדכן ${d.email ? 'במייל ' : ''}כשהיא מוכנה לאיסוף. התשלום בחנות בזמן האיסוף (${money(d.total)}).</div>
+                <p style="font-size:.92em; color:var(--muted);">📍 ${esc(ordersConfig.address || '')}</p>
+                ${!d.email ? '<div class="info-box">לא השארת מייל, אז כדאי לשמור את הקישור למעקב (הוא שמור גם בתפריט, תחת "ההזמנות שלי").</div>' : ''}
+                <div id="push-offer"></div>`;
+            document.getElementById('cart-foot').innerHTML = `
+                <div style="display:flex; gap:8px;"><button class="btn btn-ghost" type="button" onclick="closeCart()">חזרה לחנות</button>
+                <button class="btn" style="flex:1;" type="button" onclick="openTracking(${d.id}, '${d.token}', true)">מעקב אחרי ההזמנה</button></div>`;
+            if (currentUser && pushSupported()) {
+                const box = document.getElementById('push-offer');
+                const enable = async () => { try { await notifApi('/api/notifications/consent', { method: 'POST' }); const r = await tryEnablePush(); box.innerHTML = r === 'ok' ? '<div class="ok-box">🔔 מעולה, נשלח לך התראה כשההזמנה מוכנה.</div>' : ''; } catch (e) { box.innerHTML = ''; } };
+                if (wantsPush) enable();
+                else {
+                    box.innerHTML = '<button class="btn btn-ghost btn-block" type="button">🔔 קבלת התראה בטלפון כשההזמנה מוכנה</button>';
+                    box.querySelector('button').onclick = enable;
+                }
+            }
+        }
+
+        let trackTimer = null, trackCtx = null;
+        async function openTracking(id, t, push) {
+            if (!id || !t) return;
+            cartStep = 'track';
+            document.getElementById('cart-modal').classList.add('open');
+            if (push) { history.pushState(null, '', `#order=${id}&t=${encodeURIComponent(t)}`); renderedBase = parseHash().base; }
+            trackCtx = { id, t };
+            const load = async () => {
+                try {
+                    const res = await fetch(`${API}/api/orders/${id}?t=${encodeURIComponent(t)}&_t=${Date.now()}`);
+                    if (!res.ok) throw new Error();
+                    renderTracking(await res.json());
+                } catch (e) {
+                    document.getElementById('cart-title').textContent = 'מעקב הזמנה';
+                    document.getElementById('cart-body').innerHTML = '<p class="state-msg">לא מצאנו את ההזמנה. אולי הקישור חסר?</p>';
+                    document.getElementById('cart-foot').innerHTML = '';
+                    clearInterval(trackTimer);
+                }
+            };
+            clearInterval(trackTimer);
+            await load();
+            trackTimer = setInterval(() => {
+                if (!(document.getElementById('cart-modal').classList.contains('open') && cartStep === 'track')) { clearInterval(trackTimer); return; }
+                // לא מרעננים בזמן שהלקוח כותב בקשה לתחליף
+                const typing = [...document.querySelectorAll('.miss-q textarea')].some(t => t.value.trim() || t === document.activeElement);
+                if (!typing) load();
+            }, 30000);
+        }
+        function renderTracking(o) {
+            const order = ['new', 'preparing', 'ready', 'picked_up'];
+            const idx = order.indexOf(o.status);
+            const names = ['התקבלה', 'בהכנה', 'מוכנה לאיסוף', 'נאספה'];
+            document.getElementById('cart-title').textContent = `הזמנה #${o.number}`;
+            const missing = o.items.filter(i => i.missing);
+            document.getElementById('cart-body').innerHTML = `
+                ${o.status === 'cancelled' ? `<div class="info-box">ההזמנה בוטלה. לשאלות: ${esc((contactInfo || {}).phone || '')}</div>` : `
+                <div class="steps">${names.map((n, i) => `<div class="step${i <= idx ? ' done' : ''}"><div class="b">${i < idx ? '✓' : i + 1}</div>${n}</div>`).join('')}</div>
+                ${o.status === 'ready' ? `<div class="ok-box">🎉 ההזמנה מוכנה! מחכה לך ב${esc(o.address)}. התשלום בחנות.</div>` : ''}
+                ${o.status === 'new' || o.status === 'preparing' ? '<div class="info-box">נעדכן כשההזמנה מוכנה לאיסוף. הדף מתעדכן לבד.</div>' : ''}`}
+                ${missingHtml(o, missing)}
+                ${o.items.map(i => `<div class="cart-line${i.missing ? ' bad' : ''}"><img src="${esc(imgUrl(i.image))}" alt="" loading="lazy">
+                    <div><div class="nm">${i.added_by_staff ? '🔄 ' : ''}${esc(i.name)}</div><div class="pr">${i.quantity} × ${money(i.unit_price)}${i.added_by_staff ? ' · תחליף' : ''}</div></div><div>${i.missing ? 'חסר' : money(i.line_total)}</div></div>`).join('')}
+                <p style="font-size:.85em; color:var(--muted);">הוזמן ב-${esc(o.created_at)}${o.note ? ' · הערה: ' + esc(o.note) : ''}</p>`;
+            document.getElementById('cart-body').querySelectorAll('img').forEach(i => i.onerror = function () { this.onerror = null; this.src = PLACEHOLDER; });
+            bindMissing();
+            document.getElementById('cart-foot').innerHTML = `<div class="sum-row"><span>לתשלום בחנות</span><span>${money(o.total)}</span></div>
+                <button class="btn btn-ghost btn-block" type="button" onclick="closeCart()">חזרה לחנות</button>`;
+        }
+
+        // פריט חסר: הלקוח בוחר להמשיך בלעדיו, לבקש תחליף, או לבטל את כל ההזמנה
+        function missingHtml(o, missing) {
+            if (!missing.length) return '';
+            const canAnswer = o.status === 'new' || o.status === 'preparing';
+            const label = { remove: 'ממשיכים בלי המוצר', replace: 'ביקשת תחליף' };
+            const rows = missing.map(i => {
+                if (i.choice || !canAnswer) {
+                    const what = i.choice === 'replace' ? `${label.replace}: ${esc(i.choice_note)}` : (i.choice ? label.remove : 'לא נכלל בסכום');
+                    return `<div style="margin:6px 0;"><strong>${esc(i.name)}</strong> · ${what}</div>`;
+                }
+                return `<div class="miss-q" data-item="${i.id}" style="background:#fff;border:1px solid #F5D9A8;border-radius:12px;padding:10px;margin:8px 0;">
+                    <div style="margin-bottom:8px;"><strong>${esc(i.name)}</strong> חסר בחנות. מה תעדיפו?</div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <button class="btn btn-sm" type="button" data-c="remove">להמשיך בלעדיו</button>
+                        <button class="btn btn-sm btn-ghost" type="button" data-c="replace-open">אשמח לתחליף</button>
+                    </div>
+                    <div class="rep" style="display:none;margin-top:8px;">
+                        <textarea rows="2" style="width:100%;padding:8px;border:1.5px solid var(--line);border-radius:10px;" placeholder="מה תרצו במקום? למשל: אותו דבר בצבע אחר, או מוצר דומה עד 20 ₪"></textarea>
+                        <button class="btn btn-sm" type="button" data-c="replace" style="margin-top:6px;">שליחה</button>
+                    </div>
+                </div>`;
+            }).join('');
+            const pending = canAnswer && missing.some(i => !i.choice);
+            return `<div class="info-box">${pending ? '⚠️ חסרים מוצרים בהזמנה. בחרו מה לעשות עם כל אחד (אם לא נשמע מכם, נמשיך בלי המוצר החסר):' : 'מוצרים שחסרו בחנות:'}${rows}
+                ${pending ? '<button class="btn btn-ghost btn-sm" type="button" id="cancel-order" style="margin-top:6px;">לבטל את כל ההזמנה</button>' : ''}<p class="msg" id="miss-msg" style="text-align:right;"></p></div>`;
+        }
+        async function sendMissing(body) {
+            const res = await fetch(`${API}/api/orders/${trackCtx.id}/respond?t=${encodeURIComponent(trackCtx.t)}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(d.detail || 'לא הצלחנו לשמור את הבחירה');
+            openTracking(trackCtx.id, trackCtx.t);
+        }
+        function bindMissing() {
+            const msg = document.getElementById('miss-msg');
+            const fail = e => { if (msg) msg.textContent = e.message; };
+            document.querySelectorAll('.miss-q').forEach(box => {
+                const item_id = Number(box.dataset.item);
+                box.querySelector('[data-c="remove"]').onclick = () => sendMissing({ choice: 'remove', item_id }).catch(fail);
+                box.querySelector('[data-c="replace-open"]').onclick = () => { box.querySelector('.rep').style.display = 'block'; box.querySelector('textarea').focus(); };
+                box.querySelector('[data-c="replace"]').onclick = () => sendMissing({ choice: 'replace', item_id, note: box.querySelector('textarea').value }).catch(fail);
+            });
+            const c = document.getElementById('cancel-order');
+            if (c) c.onclick = () => { if (confirm('לבטל את כל ההזמנה?')) sendMissing({ choice: 'cancel' }).catch(fail); };
+        }
+
+        async function loadMyOrders() {
+            const box = document.getElementById('my-orders-list');
+            let list = [];
+            try {
+                if (currentUser) {
+                    const res = await fetch(`${API}/api/my/orders?_t=${Date.now()}`, { headers: authHeaders() });
+                    if (res.ok) list = (await res.json()).map(o => ({ id: o.id, t: o.token, number: o.number, at: o.created_at, total: o.total, status: o.status_label }));
+                }
+            } catch (e) {}
+            if (!list.length) { try { list = JSON.parse(ls(MY_ORDERS_KEY) || '[]'); } catch (e) {} }
+            box.innerHTML = list.length ? list.map(o => `<div class="my-order" data-id="${o.id}" data-t="${esc(o.t)}"><span>#${o.number} · ${esc(o.at)}</span><span>${o.status ? esc(o.status) + ' · ' : ''}${money(o.total)}</span></div>`).join('')
+                : 'עוד אין הזמנות. מוסיפים מוצרים לעגלה בלחיצה על + 🙂';
+            box.querySelectorAll('.my-order').forEach(el => el.onclick = () => { closeSidebar(); openTracking(Number(el.dataset.id), el.dataset.t, true); });
+        }
 
         document.getElementById('f-year').textContent = new Date().getFullYear();
         renderSkeletonCategories();
