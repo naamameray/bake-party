@@ -6,3 +6,4 @@ openpyxl>=3.1,<4
 python-multipart>=0.0.9
 anthropic>=0.40,<1
 pywebpush>=1.14,<3
+qrcode>=7.4,<9

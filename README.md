@@ -66,6 +66,9 @@ flowchart LR
 
 - **Server-side pricing.** Order totals are always computed from the database and stored as a snapshot on the order; the browser only sends product ids and quantities.
 - **Auth.** PBKDF2-SHA256 password hashing, sessions stored as token hashes in the database, roles (`customer` / `employee` / `admin`) re-checked on every request, account lockout and rate limiting, forced password change for staff invites, Google ID tokens verified server-side.
+- **Two-factor authentication.** TOTP (RFC 6238) implemented from scratch for staff accounts, with replay protection, single-use hashed backup codes and short-lived login challenges. Password reset by email uses single-use, hashed, 30-minute tokens and never reveals whether an address is registered.
+- **Browser hardening.** Content-Security-Policy, HSTS, a CORS allowlist and standard security headers on every response.
+- **Backups.** One-click full export for the owner, plus an automatic weekly backup emailed to admins (secrets and session tokens are excluded).
 - **Safe rendering.** All user and catalog text is escaped on output; JSON-LD is built with `json.dumps`. Uploaded images are validated by file content, not just extension.
 - **Privacy.** Reviews show first name and last-name initial; marketing messages only with explicit opt-in, with a one-click unsubscribe link; per-order notifications don't count as marketing consent.
 - **Zero-touch migrations.** The schema is created and migrated idempotently on startup, so every deploy is a plain `git push`.

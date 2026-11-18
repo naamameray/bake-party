@@ -31,17 +31,48 @@ async def add_security_headers(request: Request, call_next):
     if request.url.scheme == "https":
         # Browsers remember to use HTTPS only for this site for a year
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    if response.headers.get("content-type", "").startswith("text/html"):
+        # Content-Security-Policy: the page may only load scripts, styles and frames from the listed places,
+        # so injected markup can't pull in a foreign script or send data to a foreign server.
+        header = "Content-Security-Policy-Report-Only" if CSP_REPORT_ONLY else "Content-Security-Policy"
+        response.headers.setdefault(header, CSP_POLICY)
     return response
+
+# Railway's own domain stays allowed, so the site keeps working if the custom domain has a problem
+_RAILWAY_ORIGIN = "https://bake-party-production.up.railway.app"
+CSP_POLICY = "; ".join([
+    "default-src 'self'",
+    # 'unsafe-inline': the pages use inline scripts and onclick handlers. Everything else is blocked.
+    "script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    # Product photos may come from Wolt's image servers and Google profile photos
+    "img-src 'self' data: blob: https:",
+    f"connect-src 'self' {_RAILWAY_ORIGIN} https://accounts.google.com/gsi/",
+    "frame-src https://accounts.google.com/gsi/",
+    "worker-src 'self'",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+])
+# CSP_REPORT_ONLY=1 only reports violations in the browser console instead of blocking (a safe fallback)
+CSP_REPORT_ONLY = os.environ.get("CSP_REPORT_ONLY", "").lower() in ("1", "true", "yes")
 
 from fastapi.middleware.gzip import GZipMiddleware
 # Compression: the product list drops from ~900KB to ~100KB, so the site loads much faster on phones
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+# Only our own sites may call the API from a browser. Override with ALLOWED_ORIGINS (comma separated).
+_DEFAULT_ORIGINS = ["https://www.bakeparty.co.il", "https://bakeparty.co.il", _RAILWAY_ORIGIN,
+                    "http://localhost:8000", "http://127.0.0.1:8000"]
+ALLOWED_ORIGINS = [o.strip().rstrip("/") for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()] or _DEFAULT_ORIGINS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    # Login uses an Authorization header, not cookies, so credentials mode isn't needed
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -137,6 +168,33 @@ try:
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(64);")
     init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;")
     init_cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL;")
+    # Two-factor authentication (authenticator app). totp_last_step blocks reusing the same code.
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending TEXT;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT FALSE;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT;")
+    init_cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS backup_codes TEXT;")
+    # Short-lived "password OK, waiting for the 2FA code" challenges
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS login_challenges (
+            token_hash VARCHAR(64) PRIMARY KEY,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            attempts   INTEGER NOT NULL DEFAULT 0,
+            expires_at TIMESTAMPTZ NOT NULL
+        );
+    """)
+    # Password reset links: only the token's hash is stored; single use; expire after 30 minutes
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS password_resets (
+            token_hash VARCHAR(64) PRIMARY KEY,
+            user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            used_at    TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("DELETE FROM password_resets WHERE expires_at < NOW() - INTERVAL '7 days';")
+    init_cur.execute("DELETE FROM login_challenges WHERE expires_at < NOW();")
     # Sessions live in the database (not in memory), so a new deploy doesn't log anyone out.
     # Only the token's hash is stored, never the token itself.
     init_cur.execute("""
@@ -617,10 +675,230 @@ def login(body: LoginBody, request: Request):
         raise HTTPException(status_code=403, detail="החשבון הושבת. יש לפנות למנהל.")
     cur.execute("UPDATE users SET failed_logins = 0, locked_until = NULL, last_login = NOW() WHERE id = %s;", (row[0],))
     conn.commit()
-    user = _fetch_user(cur, row[0])
     cur.close(); conn.close()
     LOGIN_ATTEMPTS.pop(ip, None)
-    return {"token": _issue_token(row[0]), "user": _user_public(user)}
+    return _finish_login(row[0])
+
+# ===================== Two-factor authentication and password reset =====================
+TOTP_STEP = 30
+CHALLENGE_MINUTES = 5
+RESET_MINUTES = 30
+TWOFA_ATTEMPTS = defaultdict(list)
+RESET_ATTEMPTS = defaultdict(list)
+
+def _finish_login(user_id, extra=None):
+    """Second step of every sign-in (password or Google): if the account has 2FA, return a challenge
+    instead of a session. The client then sends the code to /api/login/2fa."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT totp_enabled FROM users WHERE id = %s;", (user_id,))
+    has_2fa = bool(cur.fetchone()[0])
+    if has_2fa:
+        challenge = secrets.token_urlsafe(32)
+        cur.execute("INSERT INTO login_challenges (token_hash, user_id, expires_at) VALUES (%s, %s, NOW() + (%s || ' minutes')::interval);",
+                    (_token_hash(challenge), user_id, str(CHALLENGE_MINUTES)))
+        conn.commit(); cur.close(); conn.close()
+        return {"two_factor": True, "challenge": challenge, **(extra or {})}
+    user = _fetch_user(cur, user_id)
+    cur.close(); conn.close()
+    return {"token": _issue_token(user_id), "user": _user_public(user), **(extra or {})}
+
+def _b32_secret():
+    import base64
+    return base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+
+def _totp_at(secret, step):
+    import base64, struct
+    key = base64.b32decode(secret + "=" * ((8 - len(secret) % 8) % 8))
+    digest = hmac.new(key, struct.pack(">Q", step), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    return f"{(struct.unpack('>I', digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 1_000_000:06d}"
+
+def _totp_match(secret, code, last_step=None):
+    """Returns the matching time step (allowing one step of clock drift) or None. A step already used is rejected."""
+    code = "".join(ch for ch in (code or "") if ch.isdigit())
+    if len(code) != 6 or not secret:
+        return None
+    now = int(time_module.time() // TOTP_STEP)
+    for step in (now - 1, now, now + 1):
+        if last_step is not None and step <= last_step:
+            continue
+        if hmac.compare_digest(_totp_at(secret, step), code):
+            return step
+    return None
+
+def _new_backup_codes():
+    codes = [f"{secrets.randbelow(10**4):04d}-{secrets.randbelow(10**4):04d}" for _ in range(8)]
+    return codes, json.dumps([hashlib.sha256(c.encode()).hexdigest() for c in codes])
+
+def _qr_svg(text):
+    """QR code as inline SVG (for scanning into an authenticator app)."""
+    try:
+        import qrcode, qrcode.image.svg
+        img = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+        return img.to_string(encoding="unicode")
+    except Exception:
+        return None
+
+class TwoFactorCodeBody(BaseModel):
+    code: str
+
+class TwoFactorLoginBody(BaseModel):
+    challenge: str
+    code: str
+
+@app.post("/api/login/2fa")
+def login_2fa(body: TwoFactorLoginBody, request: Request):
+    """Second sign-in step: a 6-digit code from the authenticator app, or a one-time backup code."""
+    ip = request.client.host if request.client else "unknown"
+    _simple_rate_limit(TWOFA_ATTEMPTS, ip, 10, 300, "יותר מדי ניסיונות. נסו שוב בעוד כמה דקות.")
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT user_id, attempts FROM login_challenges WHERE token_hash = %s AND expires_at > NOW() FOR UPDATE;",
+                    (_token_hash(body.challenge or ""),))
+        ch = cur.fetchone()
+        if not ch or ch[1] >= 5:
+            raise HTTPException(status_code=401, detail="פג תוקף הכניסה. צריך להתחבר שוב.")
+        user_id = ch[0]
+        cur.execute("SELECT totp_secret, totp_last_step, backup_codes, active FROM users WHERE id = %s FOR UPDATE;", (user_id,))
+        secret, last_step, backup, active = cur.fetchone()
+        if not active:
+            raise HTTPException(status_code=403, detail="החשבון הושבת. יש לפנות למנהל.")
+        step = _totp_match(secret, body.code, last_step)
+        used_backup = False
+        if step is None:
+            typed = (body.code or "").strip()
+            hashes = json.loads(backup or "[]")
+            h = hashlib.sha256(typed.encode()).hexdigest()
+            if typed and h in hashes:
+                hashes.remove(h); used_backup = True
+                cur.execute("UPDATE users SET backup_codes = %s WHERE id = %s;", (json.dumps(hashes), user_id))
+            else:
+                cur.execute("UPDATE login_challenges SET attempts = attempts + 1 WHERE token_hash = %s;", (_token_hash(body.challenge),))
+                conn.commit()
+                raise HTTPException(status_code=401, detail="הקוד לא נכון. בודקים את הקוד העדכני באפליקציה ומנסים שוב.")
+        else:
+            cur.execute("UPDATE users SET totp_last_step = %s WHERE id = %s;", (step, user_id))
+        cur.execute("DELETE FROM login_challenges WHERE token_hash = %s;", (_token_hash(body.challenge),))
+        conn.commit()
+        user = _fetch_user(cur, user_id)
+    finally:
+        cur.close(); conn.close()
+    if used_backup:
+        _audit({"user_id": user_id, "name": user[1]}, "2fa_backup_code_used", "user", user_id)
+    return {"token": _issue_token(user_id), "user": _user_public(user)}
+
+@app.get("/api/2fa/status")
+def twofa_status(sess: dict = Depends(require_auth)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT totp_enabled, backup_codes FROM users WHERE id = %s;", (sess["user_id"],))
+    enabled, backup = cur.fetchone(); cur.close(); conn.close()
+    return {"enabled": bool(enabled), "backup_codes_left": len(json.loads(backup or "[]")) if enabled else 0}
+
+@app.post("/api/2fa/setup")
+def twofa_setup(sess: dict = Depends(require_staff)):
+    """Step 1: create a new secret and show it as a QR code. Nothing changes until the code is confirmed."""
+    secret = _b32_secret()
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("UPDATE users SET totp_pending = %s WHERE id = %s RETURNING email;", (secret, sess["user_id"]))
+    email = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    from urllib.parse import quote
+    uri = f"otpauth://totp/{quote('Bake & Party')}:{quote(email)}?secret={secret}&issuer={quote('Bake & Party')}&digits=6&period={TOTP_STEP}"
+    return {"secret": secret, "otpauth": uri, "qr_svg": _qr_svg(uri)}
+
+@app.post("/api/2fa/enable")
+def twofa_enable(body: TwoFactorCodeBody, sess: dict = Depends(require_staff)):
+    """Step 2: confirm with a code from the app. Returns one-time backup codes (shown once)."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT totp_pending FROM users WHERE id = %s FOR UPDATE;", (sess["user_id"],))
+    pending = cur.fetchone()[0]
+    step = _totp_match(pending, body.code)
+    if not pending or step is None:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=400, detail="הקוד לא נכון. סורקים שוב את הקוד ומקלידים את 6 הספרות שמופיעות באפליקציה.")
+    codes, hashed = _new_backup_codes()
+    cur.execute("UPDATE users SET totp_secret = totp_pending, totp_pending = NULL, totp_enabled = TRUE, totp_last_step = %s, "
+                "backup_codes = %s WHERE id = %s;", (step, hashed, sess["user_id"]))
+    _drop_sessions(cur, sess["user_id"], keep_token_hash=sess["token_hash"])
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "2fa_enabled", "user", sess["user_id"])
+    return {"ok": True, "backup_codes": codes}
+
+@app.post("/api/2fa/disable")
+def twofa_disable(body: TwoFactorCodeBody, sess: dict = Depends(require_staff)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT totp_secret, totp_last_step, backup_codes FROM users WHERE id = %s FOR UPDATE;", (sess["user_id"],))
+    secret, last_step, backup = cur.fetchone()
+    ok = _totp_match(secret, body.code, last_step) is not None or \
+         hashlib.sha256((body.code or "").strip().encode()).hexdigest() in json.loads(backup or "[]")
+    if not ok:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=400, detail="הקוד לא נכון")
+    cur.execute("UPDATE users SET totp_enabled = FALSE, totp_secret = NULL, totp_pending = NULL, backup_codes = NULL, "
+                "totp_last_step = NULL WHERE id = %s;", (sess["user_id"],))
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "2fa_disabled", "user", sess["user_id"])
+    return {"ok": True}
+
+class ForgotBody(BaseModel):
+    email: str
+
+class ResetBody(BaseModel):
+    token: str
+    password: str
+
+@app.post("/api/password/forgot")
+def password_forgot(body: ForgotBody, request: Request):
+    """Emails a single-use reset link. Always answers the same way, so it can't reveal which emails are registered."""
+    ip = request.client.host if request.client else "unknown"
+    email = (body.email or "").strip().lower()
+    _simple_rate_limit(RESET_ATTEMPTS, ip, 5, 900, "נשלחו הרבה בקשות. נסו שוב בעוד כמה דקות.")
+    _simple_rate_limit(RESET_ATTEMPTS, "email:" + email, 3, 3600, "כבר שלחנו כמה קישורים למייל הזה. כדאי לבדוק גם בספאם.")
+    answer = {"ok": True, "message": "אם המייל רשום אצלנו, שלחנו אליו קישור לבחירת סיסמה חדשה. הקישור תקף לחצי שעה."}
+    if "@" not in email:
+        return answer
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, name FROM users WHERE email = %s AND active = TRUE;", (email,))
+    u = cur.fetchone()
+    if not u:
+        cur.close(); conn.close()
+        return answer
+    token = secrets.token_urlsafe(32)
+    cur.execute("INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (%s, %s, NOW() + (%s || ' minutes')::interval);",
+                (_token_hash(token), u[0], str(RESET_MINUTES)))
+    conn.commit(); cur.close(); conn.close()
+    link = f"{SITE_URL}/#reset={token}"
+    first = (u[1] or "").split()[0] if (u[1] or "").split() else ""
+    threading.Thread(target=_send_order_email, args=(email, "בחירת סיסמה חדשה – Bake & Party",
+        [f"שלום {first},", "ביקשת לבחור סיסמה חדשה לחשבון שלך.", "לחצו על הכפתור למטה. הקישור תקף לחצי שעה ואפשר להשתמש בו פעם אחת.",
+         "אם לא ביקשת, אפשר להתעלם מהמייל הזה והסיסמה לא תשתנה."], link, "לבחירת סיסמה חדשה"), daemon=True).start()
+    return answer
+
+@app.post("/api/password/reset")
+def password_reset(body: ResetBody, request: Request):
+    ip = request.client.host if request.client else "unknown"
+    _simple_rate_limit(RESET_ATTEMPTS, "reset:" + ip, 10, 900, "יותר מדי ניסיונות. נסו שוב בעוד כמה דקות.")
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("""SELECT r.user_id, u.role, u.name FROM password_resets r JOIN users u ON u.id = r.user_id
+                       WHERE r.token_hash = %s AND r.used_at IS NULL AND r.expires_at > NOW() AND u.active = TRUE FOR UPDATE OF r;""",
+                    (_token_hash(body.token or ""),))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="הקישור כבר לא בתוקף. אפשר לבקש קישור חדש ב\"שכחתי סיסמה\".")
+        user_id, role, name = row
+        min_len = 8 if role in STAFF_ROLES else 6
+        if len(body.password or "") < min_len:
+            raise HTTPException(status_code=400, detail=f"הסיסמה צריכה להיות באורך {min_len} תווים לפחות")
+        cur.execute("UPDATE users SET password_hash = %s, must_change_password = FALSE, failed_logins = 0, locked_until = NULL WHERE id = %s;",
+                    (hash_password(body.password), user_id))
+        cur.execute("UPDATE password_resets SET used_at = NOW() WHERE user_id = %s AND used_at IS NULL;", (user_id,))
+        _drop_sessions(cur, user_id)          # sign out everywhere: whoever had the old password is out
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+    _audit({"user_id": user_id, "name": name}, "password_reset_by_email", "user", user_id)
+    return _finish_login(user_id)
 
 # ---------- Sign in with Google ----------
 # The browser gets a signed ID token from Google; the server checks it with Google before trusting it.
@@ -687,10 +965,9 @@ def auth_google(body: GoogleAuthBody, request: Request):
             user_id = cur.fetchone()[0]
             new_user = True
         conn.commit()
-        user = _fetch_user(cur, user_id)
     finally:
         cur.close(); conn.close()
-    return {"token": _issue_token(user_id), "user": _user_public(user), "new_user": new_user}
+    return _finish_login(user_id, {"new_user": new_user})
 
 @app.post("/api/logout")
 def logout(authorization: str = Header(None)):
@@ -837,7 +1114,9 @@ def admin_reset_password(user_id: int, sess: dict = Depends(require_admin)):
     if _r and _r[0] == "customer":
         cur.close(); conn.close()
         raise HTTPException(status_code=403, detail="לקוחות הם לקריאה בלבד. אי אפשר לאפס להם סיסמה.")
-    cur.execute("UPDATE users SET password_hash = %s, must_change_password = TRUE, failed_logins = 0, locked_until = NULL "
+    # Also turns off 2FA, so a staff member who lost their phone can set it up again
+    cur.execute("UPDATE users SET password_hash = %s, must_change_password = TRUE, failed_logins = 0, locked_until = NULL, "
+                "totp_enabled = FALSE, totp_secret = NULL, totp_pending = NULL, backup_codes = NULL, totp_last_step = NULL "
                 "WHERE id = %s RETURNING id;", (hash_password(temp), user_id))
     if not cur.fetchone():
         cur.close(); conn.close()
@@ -1922,13 +2201,16 @@ class _Mailer:
             self.srv.login(SMTP_USER, SMTP_PASSWORD)
         return self
 
-    def send(self, to, subject, text, html, headers=None):
+    def send(self, to, subject, text, html, headers=None, attachments=None):
+        """attachments: [(filename, bytes)]"""
         if self.mode == "brevo":
-            import urllib.request, urllib.error
+            import urllib.request, urllib.error, base64
             body = {"sender": {"name": "Bake & Party", "email": EMAIL_FROM}, "to": [{"email": to}],
                     "subject": subject, "textContent": text, "htmlContent": html}
             if headers:
                 body["headers"] = headers
+            if attachments:
+                body["attachment"] = [{"name": n, "content": base64.b64encode(b).decode()} for n, b in attachments]
             req = urllib.request.Request(os.environ.get("BREVO_API_URL", "https://api.brevo.com/v3/smtp/email"), data=json.dumps(body).encode(),
                                          headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json", "Accept": "application/json"})
             try:
@@ -1947,6 +2229,8 @@ class _Mailer:
             msg[k] = v
         msg.set_content(text)
         msg.add_alternative(html, subtype="html")
+        for n, b in (attachments or []):
+            msg.add_attachment(b, maintype="application", subtype="zip", filename=n)
         self.srv.send_message(msg)
 
     def __exit__(self, *a):
@@ -2157,6 +2441,7 @@ async def _digest_loop():
 async def _start_background_jobs():
     import asyncio
     asyncio.create_task(_digest_loop())
+    asyncio.create_task(_backup_loop())
 
 class PushSubBody(BaseModel):
     endpoint: str
@@ -2341,7 +2626,7 @@ def _orders_open(cur):
 def _order_number(order_id):
     return 1000 + order_id
 
-def _send_order_email(to, subject, lines, link):
+def _send_order_email(to, subject, lines, link, button="למעקב אחרי ההזמנה", attachments=None):
     """Transactional order email (not marketing): order received, order ready, etc."""
     global _LAST_EMAIL_ERROR
     if not to:
@@ -2351,14 +2636,14 @@ def _send_order_email(to, subject, lines, link):
         return False
     try:
         text = "\n".join(lines)
-        plain = f"{text}\n\nלמעקב אחרי ההזמנה: {link}\n\nBake & Party, {_get_contact()['address']}"
+        plain = f"{text}\n\n{button}: {link}\n\nBake & Party, {_get_contact()['address']}"
         body_html = "".join(f'<p style="margin:0 0 8px">{_html_escape(l)}</p>' for l in lines)
         html = (f'<div dir="rtl" style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#4A2E35">'
                 f'<h2 style="color:#E05276">Bake &amp; Party 🎉</h2>{body_html}'
-                f'<p><a href="{link}" style="background:#E05276;color:#fff;padding:10px 20px;border-radius:18px;text-decoration:none;font-weight:bold">למעקב אחרי ההזמנה</a></p>'
+                f'<p><a href="{link}" style="background:#E05276;color:#fff;padding:10px 20px;border-radius:18px;text-decoration:none;font-weight:bold">{_html_escape(button)}</a></p>'
                 f'<hr style="border:none;border-top:1px solid #FFD1DC"><p style="font-size:12px;color:#9B7B82">Bake &amp; Party · {_html_escape(_get_contact()["address"])} · {_html_escape(_get_contact()["phone"])}</p></div>')
         with _Mailer() as m:
-            m.send(to, subject, plain, html)
+            m.send(to, subject, plain, html, attachments=attachments)
         _log_notify("email", to, subject, True)
         return True
     except Exception as e:
@@ -4232,6 +4517,89 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         print(f"[AI] error: {e}")
         _ai_log_chat(sess["user_id"], user_message, fallback, status="api_error", error_text=f"{type(e).__name__}: {e}")
         return {"reply": fallback, "ok": False, "reason": "api_error"}
+
+
+# --- Backups ---
+# Never exported: login sessions and one-time tokens (useless after a restore, and dangerous if leaked)
+_BACKUP_SKIP_TABLES = {"sessions", "login_challenges", "password_resets"}
+# Secrets removed from the export: 2FA keys (staff re-enroll after a restore) and the unsubscribe-link key
+_BACKUP_SKIP_COLUMNS = {"users": {"totp_secret", "totp_pending", "backup_codes"}}
+_BACKUP_SKIP_SETTINGS = {"unsub_secret"}
+AUTO_BACKUP_DAYS = int(os.environ.get("AUTO_BACKUP_DAYS", "7") or 0)   # 0 turns the emailed backup off
+_BACKUP_EMAIL_MAX = 9 * 1024 * 1024
+
+def _build_backup():
+    """All tables as JSON inside a zip. Returns (filename, bytes, table_counts)."""
+    import io, zipfile
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name;")
+    tables = [r[0] for r in cur.fetchall() if r[0] not in _BACKUP_SKIP_TABLES]
+    data, counts = {}, {}
+    for t in tables:
+        cur.execute(f'SELECT * FROM "{t}";')   # names come from the catalog, not from the user
+        cols = [d[0] for d in cur.description]
+        skip = _BACKUP_SKIP_COLUMNS.get(t, set())
+        rows = [{c: v for c, v in zip(cols, r) if c not in skip} for r in cur.fetchall()]
+        if t == "settings":
+            rows = [r for r in rows if r.get("key") not in _BACKUP_SKIP_SETTINGS]
+        data[t] = rows; counts[t] = len(rows)
+    cur.close(); conn.close()
+    now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+    doc = {"app": "bake-party", "format": 1, "created_at": now.isoformat(timespec="seconds"), "tables": data}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("backup.json", json.dumps(doc, ensure_ascii=False, default=str, indent=1))
+    return f"bake-party-backup-{now:%Y-%m-%d}.zip", buf.getvalue(), counts
+
+@app.get("/api/admin/backup")
+def admin_backup(sess: dict = Depends(require_admin)):
+    """Download a full backup of the database (admins only, audited)."""
+    from fastapi.responses import Response
+    name, blob, counts = _build_backup()
+    _audit(sess, "backup_download", "backup", None, {"size_kb": len(blob) // 1024, "rows": sum(counts.values())})
+    return Response(blob, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+def run_auto_backup(force=False):
+    """Email a backup to every active admin once every AUTO_BACKUP_DAYS days."""
+    if (AUTO_BACKUP_DAYS <= 0 and not force) or not _email_configured():
+        return False
+    conn = get_conn(); cur = conn.cursor()
+    last = _setting_get(cur, "last_auto_backup")
+    if not force and last:
+        try:
+            if datetime.now(timezone.utc) - datetime.fromisoformat(last) < timedelta(days=AUTO_BACKUP_DAYS):
+                cur.close(); conn.close(); return False
+        except ValueError:
+            pass
+    # Claim this run first, so two server instances don't both send
+    _setting_set(cur, "last_auto_backup", datetime.now(timezone.utc).isoformat()); conn.commit()
+    cur.execute("SELECT email FROM users WHERE role = 'admin' AND active AND email IS NOT NULL;")
+    admins = [r[0] for r in cur.fetchall()]
+    cur.close(); conn.close()
+    name, blob, counts = _build_backup()
+    total = sum(counts.values())
+    lines = [f"מצורף גיבוי אוטומטי של כל נתוני האתר ({len(blob) // 1024} KB, {total} רשומות).",
+             "כדאי לשמור את הקובץ במקום בטוח (למשל ב-Google Drive). אין צורך לפתוח אותו.",
+             "בקובץ אין סיסמאות גלויות: הסיסמאות שמורות בו בצורה מוצפנת בלבד."]
+    attach = [(name, blob)]
+    if len(blob) > _BACKUP_EMAIL_MAX:
+        lines = ["הגיבוי השבועי גדול מדי לשליחה במייל.", "אפשר להוריד אותו מפאנל הניהול: צוות ומשתמשים ← גיבוי."]
+        attach = None
+    for to in admins:
+        _send_order_email(to, f"💾 גיבוי שבועי – Bake & Party", lines, SITE_URL.rstrip("/") + "/admin.html",
+                          button="לפאנל הניהול", attachments=attach)
+    return True
+
+async def _backup_loop():
+    import asyncio
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, run_auto_backup)
+        except Exception as e:
+            print(f"[BACKUP] error: {e}")
+        await asyncio.sleep(3600)
 
 
 # --- Static files (HTML, logo, robots.txt) ---

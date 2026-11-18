@@ -88,7 +88,13 @@ td.num,th.num{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
     <label for="email">אימייל</label><input id="email" type="email" autocomplete="username">
     <label for="password">סיסמה</label><input id="password" type="password" autocomplete="current-password">
     <button class="btn block" id="login-btn" type="button">כניסה</button>
+    <div id="twofa-box" hidden style="margin-top:14px">
+      <label for="twofa-code">קוד מאפליקציית האימות (או קוד גיבוי)</label>
+      <input id="twofa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" style="letter-spacing:4px;text-align:center;font-size:1.2em">
+      <button class="btn block" id="twofa-btn" type="button">אישור</button>
+    </div>
     <p class="err" id="login-error"></p>
+    <p style="text-align:center;margin:6px 0 0"><a href="/#forgot" style="color:var(--pink-dark)">שכחתי סיסמה</a></p>
   </div>
 </div>
 
@@ -156,7 +162,7 @@ td.num,th.num{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
 </div>
 
 <script>
-const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // Local development talks to the local server, not the live site
+const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$|(^|\.)bakeparty\.co\.il$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // Same server as the page (our domain, Railway or local dev); anywhere else, the live API
 const TOKEN_KEY = 'bp_token';
 const $ = id => document.getElementById(id);
 const token = () => { try { return localStorage.getItem(TOKEN_KEY); } catch(e) { return null; } };
@@ -176,19 +182,24 @@ async function api(path, opts = {}) {
   return d;
 }
 
-$('login-btn').onclick = async () => {
+// The account may need a second step: a code from the authenticator app
+let twoFactorChallenge = null;
+async function loginStep(path, body) {
   $('login-error').textContent = '';
   try {
-    const res = await fetch(API + '/api/login', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value }) });
+    const res = await fetch(API + path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     const d = await res.json();
     if (!res.ok) throw new Error(d.detail || 'שגיאה');
+    if (d.two_factor) { twoFactorChallenge = d.challenge; $('twofa-box').hidden = false; $('twofa-code').focus(); return; }
     if (!['employee','admin'].includes(d.user.role)) throw new Error('האזור הזה מיועד לצוות בלבד');
     setToken(d.token);
     if (d.user.must_change_password) { $('pw-old').value = $('password').value; show('pw-view'); return; }
     start(d.user);
   } catch (e) { $('login-error').textContent = e.message; }
-};
+}
+$('login-btn').onclick = () => loginStep('/api/login', { email: $('email').value.trim(), password: $('password').value });
+$('twofa-btn').onclick = () => loginStep('/api/login/2fa', { challenge: twoFactorChallenge, code: $('twofa-code').value });
+$('twofa-code').addEventListener('keydown', e => { if (e.key === 'Enter') $('twofa-btn').click(); });
 $('password').addEventListener('keydown', e => { if (e.key === 'Enter') $('login-btn').click(); });
 
 $('pw-btn').onclick = async () => {
