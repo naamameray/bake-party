@@ -255,7 +255,7 @@ $('month').onchange = loadHours;
 
 // ===================== הזמנות =====================
 const ST_LABEL = { new: 'חדשה', preparing: 'בהכנה', ready: 'מוכנה לאיסוף', picked_up: 'נאספה', cancelled: 'בוטלה' };
-let ordersScope = 'active', ordersTimer = null, knownOrderIds = null, soundOn = false, audioCtx = null;
+let pausePolling = false, ordersScope = 'active', ordersTimer = null, knownOrderIds = null, soundOn = false, audioCtx = null;
 function beep() {
   if (!soundOn) return;
   try {
@@ -301,9 +301,20 @@ function orderHtml(o) {
       <span class="o-badge ${o.status}">${ST_LABEL[o.status] || o.status}</span></div>
     <div class="o-cust"><strong>${esc(o.name)}</strong> · <a href="tel:${esc(o.phone)}">${esc(o.phone)}</a>${o.email ? ' · ' + esc(o.email) : ''}</div>
     ${o.note ? `<div class="o-note">📝 ${esc(o.note)}</div>` : ''}
-    <ul class="o-items">${o.items.map(i => `<li class="${i.missing ? 'miss' : ''}"><span class="q">${i.quantity}×</span><span class="nm">${esc(i.name)}</span>
+    ${o.awaiting_customer ? '<div class="o-note" style="background:#FFE9D6;color:#8A4B00">⏳ ממתינים לתשובת הלקוח על מוצר חסר (נשלחה לו הודעה). אם לא יענה, ממשיכים בלי המוצר.</div>' : ''}
+    <ul class="o-items">${o.items.map(i => `<li class="${i.missing ? 'miss' : ''}" style="flex-wrap:wrap"><span class="q">${i.quantity}×</span><span class="nm">${i.added_by_staff ? '🔄 ' : ''}${esc(i.name)}</span>
       <span class="num">₪${(i.unit_price * i.quantity).toFixed(2)}</span>
-      ${active ? `<button class="mini${i.missing ? ' on' : ''}" type="button" data-item="${i.id}" data-missing="${i.missing ? 0 : 1}" data-pid="${i.product_id || ''}">${i.missing ? 'חסר ✕' : 'חסר?'}</button>` : ''}</li>`).join('')}</ul>
+      ${active && !i.added_by_staff ? `<button class="mini${i.missing ? ' on' : ''}" type="button" data-item="${i.id}" data-missing="${i.missing ? 0 : 1}" data-pid="${i.product_id || ''}">${i.missing ? 'חסר ✕' : 'חסר?'}</button>` : ''}
+      ${active && i.added_by_staff ? `<button class="mini" type="button" data-del="${i.id}">הסרה</button>` : ''}
+      ${i.missing ? `<div style="width:100%;font-size:.86em;margin-top:4px;color:${i.choice ? 'var(--ok)' : '#9A5B00'}">${
+        i.choice === 'replace' ? '💬 הלקוח מבקש תחליף: <strong>' + esc(i.choice_note) + '</strong>' : i.choice === 'remove' ? '💬 הלקוח: להמשיך בלי המוצר' : 'ממתין לתשובת הלקוח'}</div>` : ''}</li>`).join('')}</ul>
+    ${active ? `<details class="add-sub"><summary style="cursor:pointer;color:var(--pink-dark);font-weight:600;margin:4px 0 10px">➕ הוספת פריט / תחליף</summary>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <input class="sub-q" placeholder="חיפוש מוצר בחנות..." style="flex:2;min-width:160px;margin:0">
+        <input class="sub-price" type="number" step="0.1" placeholder="מחיר" style="width:90px;margin:0">
+        <input class="sub-qty" type="number" value="1" min="1" style="width:64px;margin:0">
+        <button class="btn small" type="button" data-addsub>הוספה</button>
+      </div><div class="sub-results" style="margin-top:6px"></div></details>` : ''}
     <div class="o-actions"><div class="total" style="margin:0;padding:8px 14px">לתשלום: <span class="sum" style="margin-right:6px">₪${o.total.toFixed(2)}</span></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">${next ? `<button class="btn ${next[0] === 'preparing' ? '' : 'green'}" type="button" data-st="${next[0]}">${next[1]}</button>` : ''}
       ${active ? `<button class="btn ghost small" type="button" data-st="cancelled">ביטול</button>` : ''}</div></div>
@@ -333,6 +344,34 @@ async function loadOrders() {
   } catch (e) { $('orders-error').textContent = e.message; }
 }
 function bindOrderButtons() {
+  document.querySelectorAll('.order [data-del]').forEach(b => b.onclick = async () => {
+    const id = b.closest('.order').dataset.id;
+    try { await api(`/api/staff/orders/${id}/items/${b.dataset.del}`, { method: 'DELETE' }); } catch (e) { $('orders-error').textContent = e.message; }
+    loadOrders();
+  });
+  document.querySelectorAll('.order .add-sub').forEach(box => {
+    const q = box.querySelector('.sub-q'), price = box.querySelector('.sub-price'), qty = box.querySelector('.sub-qty'), res = box.querySelector('.sub-results');
+    let picked = null, t = null;
+    box.addEventListener('toggle', () => { if (box.open) pausePolling = true; });
+    q.oninput = () => {
+      picked = null; clearTimeout(t);
+      t = setTimeout(async () => {
+        if (q.value.trim().length < 2) { res.innerHTML = ''; return; }
+        try {
+          const list = await api('/api/staff/product-search?q=' + encodeURIComponent(q.value.trim()));
+          res.innerHTML = list.map(p => `<button type="button" class="mini" style="margin:2px" data-pid="${p.id}" data-name="${esc(p.name)}" data-price="${p.price}">${esc(p.name)} · ₪${p.price.toFixed(2)}${p.in_stock ? '' : ' (אזל)'}</button>`).join('') || '<span class="note">לא נמצא. אפשר לכתוב שם ומחיר ידנית.</span>';
+          res.querySelectorAll('[data-pid]').forEach(b => b.onclick = () => { picked = Number(b.dataset.pid); q.value = b.dataset.name; price.value = b.dataset.price; res.innerHTML = ''; });
+        } catch (e) {}
+      }, 300);
+    };
+    box.querySelector('[data-addsub]').onclick = async () => {
+      const id = box.closest('.order').dataset.id;
+      try {
+        await api(`/api/staff/orders/${id}/items`, { method: 'POST', body: JSON.stringify({ name: q.value.trim(), unit_price: parseFloat(price.value), quantity: parseInt(qty.value) || 1, product_id: picked }) });
+        pausePolling = false; loadOrders();
+      } catch (e) { $('orders-error').textContent = e.message; }
+    };
+  });
   document.querySelectorAll('.order [data-st]').forEach(b => b.onclick = async () => {
     const id = b.closest('.order').dataset.id;
     if (b.dataset.st === 'cancelled' && !confirm('לבטל את ההזמנה? הלקוח יקבל עדכון.')) return;
@@ -355,7 +394,7 @@ function startOrders() {
   try { soundOn = !!localStorage.getItem('bp_staff_sound'); } catch (e) {}
   $('sound-btn').textContent = soundOn ? '🔊 צליל פעיל (לחיצה לכיבוי)' : '🔇 הפעלת צליל להזמנה חדשה';
   loadOrders(); clearInterval(ordersTimer);
-  ordersTimer = setInterval(() => { if (ordersScope === 'active') loadOrders(); }, 20000);
+  ordersTimer = setInterval(() => { if (ordersScope === 'active' && !(pausePolling && document.querySelector('.add-sub[open]'))) loadOrders(); }, 20000);
 }
 
 function start(user) {

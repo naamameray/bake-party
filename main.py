@@ -322,6 +322,10 @@ try:
         );
     """)
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);")
+    # פריט חסר: הלקוח בוחר מה לעשות (remove = להמשיך בלעדיו, replace = תחליף + הערה). פריט שהצוות הוסיף (תחליף) מסומן.
+    init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_choice VARCHAR(20);")
+    init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_note TEXT;")
+    init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS added_by_staff BOOLEAN NOT NULL DEFAULT FALSE;")
     # עכשיו יש הזמנות באתר: מעדכנים את תשובת ה-FAQ הישנה ("אין הזמנות באתר") אם לא נערכה ידנית
     init_cur.execute("""UPDATE faq_items SET question = 'איך מזמינים? אפשר להזמין דרך האתר?',
         answer = 'כן! מוסיפים מוצרים לעגלה באתר ושולחים הזמנה לאיסוף עצמי מהחנות. כשההזמנה מוכנה נעדכן אתכם, והתשלום בחנות בזמן האיסוף. אפשר להזמין גם בטלפון, בוואטסאפ או בוולט.',
@@ -2163,10 +2167,13 @@ def _order_dict(cur, row, with_items=True, staff=False):
     if staff:
         d.update({"phone": phone, "email": email or "", "registered": bool(user_id)})
     if with_items:
-        cur.execute("SELECT id, product_id, name, unit_price, quantity, missing, image_url FROM order_items WHERE order_id = %s ORDER BY id;", (oid,))
+        cur.execute("SELECT id, product_id, name, unit_price, quantity, missing, image_url, customer_choice, customer_note, added_by_staff "
+                    "FROM order_items WHERE order_id = %s ORDER BY id;", (oid,))
         d["items"] = [{"id": r[0], "product_id": r[1], "name": r[2], "unit_price": float(r[3]), "quantity": r[4],
-                       "line_total": round(float(r[3]) * r[4], 2), "missing": bool(r[5]), "image": r[6] or PLACEHOLDER}
+                       "line_total": round(float(r[3]) * r[4], 2), "missing": bool(r[5]), "image": r[6] or PLACEHOLDER,
+                       "choice": r[7], "choice_note": r[8] or "", "added_by_staff": bool(r[9])}
                       for r in cur.fetchall()]
+        d["awaiting_customer"] = status in ORDER_ACTIVE and any(i["missing"] and not i["choice"] for i in d["items"])
     return d
 
 _ORDER_COLS = "id, token, user_id, customer_name, phone, email, note, status, total, created_at, updated_at, ready_at, picked_up_at"
@@ -2382,17 +2389,157 @@ class OrderItemBody(BaseModel):
 def staff_update_order_item(order_id: int, item_id: int, body: OrderItemBody, sess: dict = Depends(require_staff)):
     """סימון מוצר שחסר בחנות. הסכום של ההזמנה מתעדכן בהתאם."""
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("UPDATE order_items SET missing = %s WHERE id = %s AND order_id = %s RETURNING name;", (body.missing, item_id, order_id))
+    cur.execute("UPDATE order_items SET missing = %s, customer_choice = NULL, customer_note = NULL "
+                "WHERE id = %s AND order_id = %s RETURNING name;", (body.missing, item_id, order_id))
     r = cur.fetchone()
     if not r:
         cur.close(); conn.close()
         raise HTTPException(status_code=404, detail="הפריט לא נמצא")
     _recalc_total(cur, order_id)
-    cur.execute("SELECT total FROM orders WHERE id = %s;", (order_id,))
-    total = float(cur.fetchone()[0])
+    cur.execute("SELECT total, status FROM orders WHERE id = %s;", (order_id,))
+    total, status = cur.fetchone(); total = float(total)
     conn.commit(); cur.close(); conn.close()
     _audit(sess, "order_item_missing", "order", order_id, {"item": r[0], "missing": body.missing})
+    if body.missing and status in ORDER_ACTIVE:
+        _schedule_missing_notice(order_id)
     return {"ok": True, "total": total}
+
+# כשמסמנים פריט חסר, מחכים קצת לפני ההודעה ללקוח, כדי שכמה פריטים חסרים ייכנסו להודעה אחת
+MISSING_NOTICE_DELAY = int(os.environ.get("MISSING_NOTICE_DELAY", "45"))
+_missing_timers = {}
+_missing_lock = threading.Lock()
+
+def _schedule_missing_notice(order_id):
+    with _missing_lock:
+        if order_id in _missing_timers:
+            return
+        t = threading.Timer(MISSING_NOTICE_DELAY, _send_missing_notice, args=(order_id,))
+        t.daemon = True
+        _missing_timers[order_id] = t
+        t.start()
+
+def _send_missing_notice(order_id):
+    with _missing_lock:
+        _missing_timers.pop(order_id, None)
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT token, user_id, customer_name, email, status FROM orders WHERE id = %s;", (order_id,))
+        o = cur.fetchone()
+        cur.execute("SELECT name FROM order_items WHERE order_id = %s AND missing AND customer_choice IS NULL ORDER BY id;", (order_id,))
+        names = [r[0] for r in cur.fetchall()]
+        cur.close(); conn.close()
+        if not o or o[4] not in ORDER_ACTIVE or not names:
+            return
+        token, user_id, name, email, _ = o
+        number, link = _order_number(order_id), _track_link(order_id, token)
+        listed = ", ".join(names[:5]) + ("..." if len(names) > 5 else "")
+        title = f"חסר מוצר בהזמנה #{number}"
+        text = f"לצערנו חסר בחנות: {listed}. מה תעדיפו? להמשיך בלעדיו, לבקש תחליף, או לבטל את ההזמנה. בוחרים בקישור."
+        _push_to_user(user_id, title, text, f"/#order={order_id}&t={token}")
+        if email:
+            _send_order_email(email, title, [f"שלום {name.split()[0] if name.split() else ''},", f"לצערנו חסר בחנות: {listed}.",
+                                             "מה תעדיפו? להמשיך בלי המוצר, לבקש תחליף, או לבטל את ההזמנה.",
+                                             "בוחרים בלחיצה על הכפתור למטה. אם לא נשמע מכם, נמשיך בלי המוצר החסר."], link)
+    except Exception as e:
+        print(f"[ORDER] missing notice failed: {e}")
+
+class MissingResponseBody(BaseModel):
+    choice: str                     # remove | replace | cancel
+    item_id: Optional[int] = None
+    note: Optional[str] = None
+
+@app.post("/api/orders/{order_id}/respond")
+def customer_missing_response(order_id: int, t: str, body: MissingResponseBody):
+    """הלקוח עונה מה לעשות עם פריט חסר: להמשיך בלעדיו, תחליף (עם הערה), או לבטל את כל ההזמנה."""
+    if body.choice not in ("remove", "replace", "cancel"):
+        raise HTTPException(status_code=400, detail="בחירה לא תקינה")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT token, status FROM orders WHERE id = %s FOR UPDATE;", (order_id,))
+    o = cur.fetchone()
+    if not o or not hmac.compare_digest(o[0], t or ""):
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="ההזמנה לא נמצאה")
+    if o[1] not in ("new", "preparing"):
+        cur.close(); conn.close()
+        raise HTTPException(status_code=409, detail="ההזמנה כבר מוכנה או סגורה, ולכן אי אפשר לשנות אותה מכאן. אפשר להתקשר אלינו.")
+    number = _order_number(order_id)
+    if body.choice == "cancel":
+        cur.execute("UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = %s;", (order_id,))
+        msg = f"הלקוח ביטל את הזמנה #{number} בגלל פריט חסר"
+    else:
+        note = (body.note or "").strip()[:300] or None
+        if body.choice == "replace" and not note:
+            cur.close(); conn.close()
+            raise HTTPException(status_code=400, detail="כתבו מה תרצו במקום, כדי שנדע מה להכין")
+        cur.execute("UPDATE order_items SET customer_choice = %s, customer_note = %s WHERE id = %s AND order_id = %s AND missing RETURNING name;",
+                    (body.choice, note if body.choice == "replace" else None, body.item_id, order_id))
+        r = cur.fetchone()
+        if not r:
+            cur.close(); conn.close()
+            raise HTTPException(status_code=404, detail="הפריט לא נמצא")
+        msg = (f"#{number}: במקום \"{r[0]}\" הלקוח מבקש: {note}" if body.choice == "replace"
+               else f"#{number}: הלקוח ממשיך בלי \"{r[0]}\"")
+        cur.execute("UPDATE orders SET updated_at = NOW() WHERE id = %s;", (order_id,))
+    conn.commit(); cur.close(); conn.close()
+    _audit(None, "order_customer_response", "order", order_id, {"choice": body.choice, "item_id": body.item_id})
+    threading.Thread(target=push_to_staff, args=("💬 תשובה מלקוח", msg[:180], "/staff.html"), daemon=True).start()
+    return {"ok": True}
+
+class AddItemBody(BaseModel):
+    name: str
+    unit_price: float
+    quantity: int = 1
+    product_id: Optional[int] = None
+
+@app.post("/api/staff/orders/{order_id}/items")
+def staff_add_order_item(order_id: int, body: AddItemBody, sess: dict = Depends(require_staff)):
+    """הוספת פריט להזמנה (בדרך כלל תחליף למוצר חסר). הסכום מתעדכן."""
+    name = (body.name or "").strip()[:300]
+    if not name or body.unit_price < 0 or body.unit_price > 10000 or not (1 <= body.quantity <= ORDER_MAX_QTY):
+        raise HTTPException(status_code=400, detail="צריך שם, מחיר וכמות תקינים")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT status FROM orders WHERE id = %s FOR UPDATE;", (order_id,))
+    o = cur.fetchone()
+    if not o or o[0] not in ORDER_ACTIVE:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=409, detail="אפשר להוסיף פריטים רק להזמנה פעילה")
+    img = None
+    if body.product_id:
+        cur.execute("SELECT image_url FROM Products WHERE id = %s;", (body.product_id,))
+        r = cur.fetchone(); img = r[0] if r else None
+    cur.execute("INSERT INTO order_items (order_id, product_id, name, unit_price, quantity, image_url, added_by_staff) "
+                "VALUES (%s,%s,%s,%s,%s,%s,TRUE) RETURNING id;", (order_id, body.product_id, name, round(body.unit_price, 2), body.quantity, img))
+    new_id = cur.fetchone()[0]
+    _recalc_total(cur, order_id)
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "order_item_add", "order", order_id, {"name": name, "price": body.unit_price, "qty": body.quantity})
+    return {"ok": True, "id": new_id}
+
+@app.delete("/api/staff/orders/{order_id}/items/{item_id}")
+def staff_remove_added_item(order_id: int, item_id: int, sess: dict = Depends(require_staff)):
+    """הסרת פריט שהצוות הוסיף (טעות בתחליף). פריטים שהלקוח הזמין לא נמחקים, רק מסומנים כחסרים."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM order_items WHERE id = %s AND order_id = %s AND added_by_staff RETURNING name;", (item_id, order_id))
+    r = cur.fetchone()
+    if not r:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="אפשר להסיר רק פריט שהצוות הוסיף")
+    _recalc_total(cur, order_id)
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "order_item_remove", "order", order_id, {"name": r[0]})
+    return {"ok": True}
+
+@app.get("/api/staff/product-search")
+def staff_product_search(q: str = "", sess: dict = Depends(require_staff)):
+    """חיפוש מוצר לבחירת תחליף."""
+    q = q.strip()
+    if len(q) < 2:
+        return []
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, name, price, stock_quantity > 0 FROM Products WHERE name ILIKE %s AND category_id IS NOT NULL "
+                "ORDER BY (stock_quantity > 0) DESC, name LIMIT 12;", (f"%{q}%",))
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return [{"id": r[0], "name": r[1], "price": float(r[2]), "in_stock": bool(r[3])} for r in rows]
 
 class StockBody(BaseModel):
     in_stock: bool

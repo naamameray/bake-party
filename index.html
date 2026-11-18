@@ -9,7 +9,7 @@
     <link rel="icon" type="image/png" href="/icon-192.png">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" href="/icon-192.png">
-    <meta name="theme-color" content="#E05276">
+    <meta name="theme-color" content="#E96A8D">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Bake & Party">
     <meta property="og:site_name" content="Bake & Party">
@@ -157,7 +157,7 @@
         .p-img-wrap { position: relative; aspect-ratio: 1; border-radius: 14px; background: #fff; overflow: hidden; display: flex; align-items: center; justify-content: center; }
         .product-img { width: 100%; height: 100%; object-fit: contain; }
         .product-card.out .product-img { filter: grayscale(0.9); opacity: 0.55; }
-        .out-tag { position: absolute; bottom: 8px; right: 8px; background: rgba(43,28,33,0.78); color: #fff; font-size: 0.75em; padding: 3px 9px; border-radius: 999px; }
+        .out-tag { position: absolute; bottom: 8px; left: 8px; background: rgba(43,28,33,0.78); color: #fff; font-size: 0.75em; padding: 3px 9px; border-radius: 999px; }
         .sale-badge { position: absolute; top: 8px; right: 8px; background: var(--sale); color: #fff; font-weight: 700; font-size: 0.75em; padding: 4px 9px; border-radius: 999px; z-index: 2; }
         .new-ribbon { position: absolute; top: 8px; left: 8px; background: var(--brand); color: #fff; font-size: 0.72em; font-weight: 700; padding: 3px 9px; border-radius: 999px; z-index: 2; }
         .price { font-size: 1.05em; color: var(--brand); font-weight: 700; }
@@ -319,11 +319,11 @@
         .footer-bottom { max-width: 1200px; margin: 22px auto 0; padding-top: 14px; border-top: 1px solid var(--line); text-align: center; font-size: 0.85em; color: var(--muted); }
 
         /* ---------- עגלה והזמנות ---------- */
-        .add-btn { position: absolute; bottom: 8px; left: 8px; width: 38px; height: 38px; border-radius: 50%; border: none; background: var(--brand);
+        .add-btn { position: absolute; bottom: 8px; right: 8px; width: 38px; height: 38px; border-radius: 50%; border: none; background: var(--brand);
             color: #fff; font-size: 1.5em; line-height: 1; cursor: pointer; box-shadow: 0 4px 12px rgba(224,82,118,.35); z-index: 3; display: flex; align-items: center; justify-content: center; }
         .add-btn:hover { background: #c94166; }
         .qty { display: inline-flex; align-items: center; gap: 2px; background: #fff; border-radius: 999px; box-shadow: 0 4px 12px rgba(0,0,0,.15); z-index: 3; }
-        .p-img-wrap .qty { position: absolute; bottom: 8px; left: 8px; }
+        .p-img-wrap .qty { position: absolute; bottom: 8px; right: 8px; }
         .qty button { width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--brand-soft); color: var(--brand); font-size: 1.2em; font-weight: 700; cursor: pointer; }
         .qty button:hover { background: #ffd3e0; }
         .qty span { min-width: 26px; text-align: center; font-weight: 700; }
@@ -392,6 +392,7 @@
             .category-circle { padding: 8px; }
             .cat-name { font-size: 0.82em; }
             .cat-count { display: none; }
+            #back-to-top { display: none !important; }
             .products-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
             .product-card { padding: 8px; }
             .modal-overlay { padding: 0; align-items: flex-end; }
@@ -403,6 +404,44 @@
             .cat-dropdown { left: 0 !important; right: 0 !important; top: auto !important; bottom: 0 !important; width: 100% !important;
                 max-height: 60vh; border-radius: 20px 20px 0 0; }
         }
+        /* ========== עיצוב "חגיגי" (נבחר): פס עליון ורוד, מסגרות ורודות, תחתית כהה ========== */
+        :root { --bg: #FFF9F5; --ink: #4A2E35; --muted: #9B7B82; --line: #FFD1DC; --brand: #E05276; --brand-2: #FF85A2; --brand-soft: #FFE4EC; }
+        .topbar { background: linear-gradient(120deg, #FF85A2, #E05276); border-bottom: none; backdrop-filter: none; }
+        .brand-text strong { color: #fff; }
+        .brand-text span { color: #FFE4EC; }
+        .icon-btn { background: rgba(255,255,255,.22); color: #fff; }
+        .icon-btn:hover { background: rgba(255,255,255,.32); }
+        .search-box input { background: #fff; border: none; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+        .search-box input:focus { box-shadow: 0 0 0 3px rgba(255,255,255,.6); }
+        .ha-btn { background: rgba(255,255,255,.2); color: #fff; border-color: rgba(255,255,255,.5); }
+        .ha-btn:hover { border-color: #fff; }
+        .ha-btn.primary { background: #fff; color: #E05276; border-color: #fff; }
+        .ha-hello { color: #fff; }
+        #status-bar { color: #fff; }
+        .status-pill { background: rgba(255,255,255,.18); border: none; color: #fff; }
+        .chip, .cat-menu-trigger { background: rgba(255,255,255,.92); border: none; color: #4A2E35; }
+        .chip:hover, .cat-menu-trigger:hover { background: #fff; color: #E05276; }
+        .chip.sale { color: #E5383B; } .chip.wolt { color: #009DE0; }
+        .cat-menu-item.active .cat-menu-trigger { background: #4A2E35; color: #fff; }
+        .hero { background: #fff; border: 2px dashed #FF85A2; }
+        #main-title, .section-head h3, #about-section h3, #faq-section h3 { color: #E05276; }
+        .feature-card, #about-section, .faq-item { border: 2px solid #FFD1DC; }
+        .category-circle { border: 2px solid #FFD1DC; }
+        .circle-img { border: 3px solid #FF85A2; border-radius: 24px; }
+        .product-card { border: 2px solid #FFD1DC; border-radius: 20px; text-align: center; }
+        .product-card:hover { border-color: #FF85A2; box-shadow: 0 8px 18px rgba(255,133,162,.25); }
+        .price { color: #E05276; font-size: 1.15em; }
+        .btn { background: #FF85A2; } .btn:hover { background: #E05276; }
+        .btn-ghost { background: #fff; color: #E05276; border: 2px solid #FF85A2; }
+        .btn-ghost:hover { background: #FFE4EC; }
+        .sale-badge { background: #FF4444; }
+        #cart-bar { background: #E05276; }
+        footer#site-footer { background: #4A2E35; border-top: none; }
+        footer#site-footer, footer#site-footer p, footer#site-footer a, footer#site-footer h4, footer#site-footer li, footer#site-footer span { color: #FFE4EC; }
+        footer#site-footer a:hover { color: #fff; }
+        .footer-brand strong { color: #FF85A2; }
+        .footer-hours-list li { border-bottom-color: rgba(255,228,236,.18); }
+        .footer-bottom { border-top-color: rgba(255,228,236,.18); color: #C9A9B1; }
     </style>
 </head>
 <body>
@@ -872,6 +911,10 @@
             routing = true;
             try {
                 const params = new URLSearchParams(base);
+                // יצאנו מדף מעקב הזמנה (למשל בכפתור "חזור"): סוגרים את חלון המעקב
+                if (!params.has('order') && cartStep === 'track' && document.getElementById('cart-modal').classList.contains('open')) {
+                    document.getElementById('cart-modal').classList.remove('open'); clearInterval(trackTimer); cartStep = 'cart';
+                }
                 if (params.has('c')) {
                     const f = findCategory(parseInt(params.get('c')));
                     if (!f) loadMainCategories();
@@ -1856,12 +1899,13 @@
             }
         }
 
-        let trackTimer = null;
+        let trackTimer = null, trackCtx = null;
         async function openTracking(id, t, push) {
             if (!id || !t) return;
             cartStep = 'track';
             document.getElementById('cart-modal').classList.add('open');
             if (push) { history.pushState(null, '', `#order=${id}&t=${encodeURIComponent(t)}`); renderedBase = parseHash().base; }
+            trackCtx = { id, t };
             const load = async () => {
                 try {
                     const res = await fetch(`${API}/api/orders/${id}?t=${encodeURIComponent(t)}&_t=${Date.now()}`);
@@ -1876,7 +1920,12 @@
             };
             clearInterval(trackTimer);
             await load();
-            trackTimer = setInterval(() => { if (document.getElementById('cart-modal').classList.contains('open') && cartStep === 'track') load(); else clearInterval(trackTimer); }, 30000);
+            trackTimer = setInterval(() => {
+                if (!(document.getElementById('cart-modal').classList.contains('open') && cartStep === 'track')) { clearInterval(trackTimer); return; }
+                // לא מרעננים בזמן שהלקוח כותב בקשה לתחליף
+                const typing = [...document.querySelectorAll('.miss-q textarea')].some(t => t.value.trim() || t === document.activeElement);
+                if (!typing) load();
+            }, 30000);
         }
         function renderTracking(o) {
             const order = ['new', 'preparing', 'ready', 'picked_up'];
@@ -1889,13 +1938,60 @@
                 <div class="steps">${names.map((n, i) => `<div class="step${i <= idx ? ' done' : ''}"><div class="b">${i < idx ? '✓' : i + 1}</div>${n}</div>`).join('')}</div>
                 ${o.status === 'ready' ? `<div class="ok-box">🎉 ההזמנה מוכנה! מחכה לך ב${esc(o.address)}. התשלום בחנות.</div>` : ''}
                 ${o.status === 'new' || o.status === 'preparing' ? '<div class="info-box">נעדכן כשההזמנה מוכנה לאיסוף. הדף מתעדכן לבד.</div>' : ''}`}
-                ${missing.length ? `<div class="info-box">חסרים בחנות ולא נכללו בסכום: ${missing.map(i => esc(i.name)).join(', ')}</div>` : ''}
+                ${missingHtml(o, missing)}
                 ${o.items.map(i => `<div class="cart-line${i.missing ? ' bad' : ''}"><img src="${esc(imgUrl(i.image))}" alt="" loading="lazy">
-                    <div><div class="nm">${esc(i.name)}</div><div class="pr">${i.quantity} × ${money(i.unit_price)}</div></div><div>${i.missing ? 'חסר' : money(i.line_total)}</div></div>`).join('')}
+                    <div><div class="nm">${i.added_by_staff ? '🔄 ' : ''}${esc(i.name)}</div><div class="pr">${i.quantity} × ${money(i.unit_price)}${i.added_by_staff ? ' · תחליף' : ''}</div></div><div>${i.missing ? 'חסר' : money(i.line_total)}</div></div>`).join('')}
                 <p style="font-size:.85em; color:var(--muted);">הוזמן ב-${esc(o.created_at)}${o.note ? ' · הערה: ' + esc(o.note) : ''}</p>`;
             document.getElementById('cart-body').querySelectorAll('img').forEach(i => i.onerror = function () { this.onerror = null; this.src = PLACEHOLDER; });
+            bindMissing();
             document.getElementById('cart-foot').innerHTML = `<div class="sum-row"><span>לתשלום בחנות</span><span>${money(o.total)}</span></div>
                 <button class="btn btn-ghost btn-block" type="button" onclick="closeCart()">חזרה לחנות</button>`;
+        }
+
+        // פריט חסר: הלקוח בוחר להמשיך בלעדיו, לבקש תחליף, או לבטל את כל ההזמנה
+        function missingHtml(o, missing) {
+            if (!missing.length) return '';
+            const canAnswer = o.status === 'new' || o.status === 'preparing';
+            const label = { remove: 'ממשיכים בלי המוצר', replace: 'ביקשת תחליף' };
+            const rows = missing.map(i => {
+                if (i.choice || !canAnswer) {
+                    const what = i.choice === 'replace' ? `${label.replace}: ${esc(i.choice_note)}` : (i.choice ? label.remove : 'לא נכלל בסכום');
+                    return `<div style="margin:6px 0;"><strong>${esc(i.name)}</strong> · ${what}</div>`;
+                }
+                return `<div class="miss-q" data-item="${i.id}" style="background:#fff;border:1px solid #F5D9A8;border-radius:12px;padding:10px;margin:8px 0;">
+                    <div style="margin-bottom:8px;"><strong>${esc(i.name)}</strong> חסר בחנות. מה תעדיפו?</div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <button class="btn btn-sm" type="button" data-c="remove">להמשיך בלעדיו</button>
+                        <button class="btn btn-sm btn-ghost" type="button" data-c="replace-open">אשמח לתחליף</button>
+                    </div>
+                    <div class="rep" style="display:none;margin-top:8px;">
+                        <textarea rows="2" style="width:100%;padding:8px;border:1.5px solid var(--line);border-radius:10px;" placeholder="מה תרצו במקום? למשל: אותו דבר בצבע אחר, או מוצר דומה עד 20 ₪"></textarea>
+                        <button class="btn btn-sm" type="button" data-c="replace" style="margin-top:6px;">שליחה</button>
+                    </div>
+                </div>`;
+            }).join('');
+            const pending = canAnswer && missing.some(i => !i.choice);
+            return `<div class="info-box">${pending ? '⚠️ חסרים מוצרים בהזמנה. בחרו מה לעשות עם כל אחד (אם לא נשמע מכם, נמשיך בלי המוצר החסר):' : 'מוצרים שחסרו בחנות:'}${rows}
+                ${pending ? '<button class="btn btn-ghost btn-sm" type="button" id="cancel-order" style="margin-top:6px;">לבטל את כל ההזמנה</button>' : ''}<p class="msg" id="miss-msg" style="text-align:right;"></p></div>`;
+        }
+        async function sendMissing(body) {
+            const res = await fetch(`${API}/api/orders/${trackCtx.id}/respond?t=${encodeURIComponent(trackCtx.t)}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(d.detail || 'לא הצלחנו לשמור את הבחירה');
+            openTracking(trackCtx.id, trackCtx.t);
+        }
+        function bindMissing() {
+            const msg = document.getElementById('miss-msg');
+            const fail = e => { if (msg) msg.textContent = e.message; };
+            document.querySelectorAll('.miss-q').forEach(box => {
+                const item_id = Number(box.dataset.item);
+                box.querySelector('[data-c="remove"]').onclick = () => sendMissing({ choice: 'remove', item_id }).catch(fail);
+                box.querySelector('[data-c="replace-open"]').onclick = () => { box.querySelector('.rep').style.display = 'block'; box.querySelector('textarea').focus(); };
+                box.querySelector('[data-c="replace"]').onclick = () => sendMissing({ choice: 'replace', item_id, note: box.querySelector('textarea').value }).catch(fail);
+            });
+            const c = document.getElementById('cancel-order');
+            if (c) c.onclick = () => { if (confirm('לבטל את כל ההזמנה?')) sendMissing({ choice: 'cancel' }).catch(fail); };
         }
 
         async function loadMyOrders() {
