@@ -3784,6 +3784,7 @@ def sitemap():
     prods = [r[0] for r in cur.fetchall()]
     cur.close(); conn.close()
     urls = [f"  <url><loc>{SITE_URL}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>"]
+    urls.append(f"  <url><loc>{SITE_URL}/privacy</loc><changefreq>yearly</changefreq><priority>0.2</priority></url>")
     urls += [f"  <url><loc>{SITE_URL}/category/{c}</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>" for c in cats]
     urls += [f"  <url><loc>{SITE_URL}/product/{p}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>" for p in prods]
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + "\n".join(urls) + "\n</urlset>"
@@ -4634,6 +4635,16 @@ def serve_logo_web():
 def serve_logo():
     # Old links and social previews point here; serve the optimized logo
     return FileResponse(os.path.join(STATIC_DIR, "logo-web.jpg"), headers={"Cache-Control": "public, max-age=604800"})
+
+@app.get("/privacy")
+@app.get("/privacy.html")
+def serve_privacy():
+    """Privacy policy (also the link required by Google's sign-in consent screen)."""
+    c = _get_contact()
+    page = open(os.path.join(STATIC_DIR, "privacy.html"), encoding="utf-8").read()
+    for key, val in (("SITE_URL", SITE_URL), ("ADDRESS", c["address"]), ("PHONE", c["phone"]), ("EMAIL", c["email"])):
+        page = page.replace("{{" + key + "}}", _html_escape(val or ""))
+    return HTMLResponse(page, headers=_NO_CACHE_HTML)
 
 @app.get("/robots.txt")
 def serve_robots():
