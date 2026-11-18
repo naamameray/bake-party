@@ -122,7 +122,10 @@
         .deal-chip.deal-clear { background: #eee; color: #888; border-color: #ddd; }
         .deal-chip.deal-clear.deal-active { background: #888; color: #fff; border-color: #888; }
 
-    </style>
+            .chip { border: 2px solid var(--pink-light); background: #fff; border-radius: 16px; padding: 6px 12px; font-family: inherit; font-weight: 600; cursor: pointer; color: var(--text-color, #4A2E35); }
+        .chip.active { background: var(--pink-dark); border-color: var(--pink-dark); color: #fff; }
+        .chip:disabled { opacity: .5; cursor: default; }
+</style>
 </head>
 <body>
 
@@ -168,6 +171,7 @@
             <button class="tab-btn active" type="button" id="tab-btn-hours" onclick="switchTab('hours')">🕒 שעות ומשלוחים</button>
             <button class="tab-btn" type="button" id="tab-btn-products" onclick="switchTab('products')">🏷️ מוצרים</button>
             <button class="tab-btn" type="button" id="tab-btn-categories" onclick="switchTab('categories')">📁 ניהול קטגוריות</button>
+            <button class="tab-btn" type="button" id="tab-btn-reviews" onclick="switchTab('reviews')">⭐ ביקורות <span id="rv-pending-badge"></span></button>
             <button class="tab-btn" type="button" id="tab-btn-faq" onclick="switchTab('faq')">💬 שאלות ותשובות</button>
             <button class="tab-btn" type="button" id="tab-btn-staff" onclick="switchTab('staff')">👥 צוות ומשתמשים</button>
             <button class="tab-btn" type="button" id="tab-btn-notify" onclick="switchTab('notify')">📣 הודעות</button>
@@ -279,7 +283,7 @@
                         <button class="btn ghost" type="button" id="add-cat-toggle" onclick="toggleAddCat()">+ קטגוריה</button>
                         <div id="add-cat-form" style="display:none; margin-top:10px; background:var(--cream); border:2px solid var(--pink-light); border-radius:12px; padding:12px; gap:10px; flex-wrap:wrap; align-items:center;">
                             <input type="text" id="add-cat-name" placeholder="שם הקטגוריה החדשה" style="flex:1; min-width:160px; width:auto;">
-                            <select id="add-cat-parent" style="flex:1; min-width:160px; width:auto;"></select>
+                            <select id="add-cat-parent" class="cat-combo" data-none-label="— קטגוריה ראשית חדשה —" style="flex:1; min-width:160px; width:auto;"></select>
                             <button class="btn" type="button" onclick="submitAddCat()" style="width:auto;">הוספה</button>
                             <span id="add-cat-msg" class="msg" style="margin:0;"></span>
                         </div>
@@ -427,6 +431,19 @@
                 </div>
             </div>
 
+            <div class="tab-page" id="tab-page-reviews">
+                <div class="card">
+                    <h2>⭐ ביקורות</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">ביקורת חדשה מופיעה באתר רק אחרי שמאשרים אותה כאן. תגובות לביקורות מופיעות מיד, ואפשר למחוק תגובה לא מתאימה. אפשר גם להגיב בשם החנות.</p>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px;" id="rv-tabs">
+                        <button class="chip active" type="button" data-st="pending">ממתינות לאישור</button>
+                        <button class="chip" type="button" data-st="approved">מוצגות באתר</button>
+                        <button class="chip" type="button" data-st="rejected">נדחו</button>
+                    </div>
+                    <div id="rv-admin-list">טוען...</div>
+                </div>
+            </div>
+
             <div class="tab-page" id="tab-page-faq">
                 <div class="card">
                     <h2>שאלות ותשובות נפוצות</h2>
@@ -487,7 +504,8 @@
         };
 
         function showLogin(){ adminView.style.display='none'; document.getElementById('pw-view').style.display='none'; loginView.style.display='block'; }
-        function showAdmin(){ loginView.style.display='none'; document.getElementById('pw-view').style.display='none'; adminView.style.display='block'; loadAdminData(); }
+        function showAdmin(){ loginView.style.display='none'; document.getElementById('pw-view').style.display='none'; adminView.style.display='block'; loadAdminData();
+            fetch(`${API}/api/admin/reviews?status=pending`, { headers: authHeaders() }).then(r => r.ok ? r.json() : null).then(d => { if (d && d.counts.pending) document.getElementById('rv-pending-badge').textContent = `(${d.counts.pending})`; }).catch(() => {}); }
         function showPwChange(){ loginView.style.display='none'; adminView.style.display='none'; document.getElementById('pw-view').style.display='block'; }
 
         document.getElementById('pw-save-btn').onclick = async () => {
@@ -646,6 +664,9 @@
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
             document.getElementById('tab-page-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-page-faq').classList.toggle('active', name === 'faq');
+            document.getElementById('tab-btn-reviews').classList.toggle('active', name === 'reviews');
+            document.getElementById('tab-page-reviews').classList.toggle('active', name === 'reviews');
+            if (name === 'reviews') loadReviewsTab();
             document.getElementById('tab-page-staff').classList.toggle('active', name === 'staff');
             document.getElementById('tab-page-ailog').classList.toggle('active', name === 'ailog');
             
@@ -655,6 +676,55 @@
             if (name === 'staff') { loadStaffTab(); loadAuditLog(); }
             if (name === 'ailog') loadAiLogTab();
         };
+
+        // --- טאב ביקורות ---
+        let rvStatus = 'pending';
+        const rvStars = n => `<span style="color:#F5B301; letter-spacing:1px;">${'★'.repeat(n)}<span style="color:#E6D9DC">${'★'.repeat(5 - n)}</span></span> <span style="color:var(--muted); font-size:.85em;">(${n})</span>`;
+        document.querySelectorAll('#rv-tabs .chip').forEach(b => b.onclick = () => {
+            document.querySelectorAll('#rv-tabs .chip').forEach(x => x.classList.toggle('active', x === b));
+            rvStatus = b.dataset.st; loadReviewsTab();
+        });
+        async function rvApi(path, opts) {
+            const res = await fetch(API + path, { ...(opts || {}), headers: authHeaders() });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(d.detail || 'שגיאה');
+            return d;
+        }
+        async function loadReviewsTab() {
+            const wrap = document.getElementById('rv-admin-list');
+            try {
+                const d = await rvApi('/api/admin/reviews?status=' + rvStatus);
+                document.getElementById('rv-pending-badge').textContent = d.counts.pending ? `(${d.counts.pending})` : '';
+                const labels = { pending: 'ממתינות לאישור', approved: 'מוצגות באתר', rejected: 'נדחו' };
+                document.querySelectorAll('#rv-tabs .chip').forEach(b => b.textContent = `${labels[b.dataset.st]} (${d.counts[b.dataset.st]})`);
+                if (!d.items.length) { wrap.innerHTML = '<p style="color:var(--muted);">אין ביקורות כאן.</p>'; return; }
+                wrap.innerHTML = d.items.map(r => `
+                    <div class="rv-adm" data-id="${r.id}" style="border:2px solid var(--pink-light); border-radius:14px; padding:12px 14px; margin-bottom:10px; background:#fff;">
+                        <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;"><strong>${escHtml(r.name)}</strong><span style="color:var(--muted); font-size:.85em;">${escHtml(r.created_at)}</span></div>
+                        <div>${rvStars(r.rating)}</div>
+                        ${r.text ? `<p style="margin:6px 0; white-space:pre-line;">${escHtml(r.text)}</p>` : '<p style="margin:6px 0; color:var(--muted);">(בלי טקסט)</p>'}
+                        ${r.replies.length ? `<div style="border-top:1px dashed var(--pink-light); padding-top:6px; margin-top:6px;">${r.replies.map(x => `
+                            <div style="display:flex; justify-content:space-between; gap:8px; font-size:.9em; padding:4px 0;">
+                                <span><b>${x.is_store ? '🧁 החנות' : escHtml(x.name)}:</b> ${escHtml(x.text)}</span>
+                                <button class="chip" type="button" data-del-reply="${x.id}" style="color:#d9534f;">מחיקה</button></div>`).join('')}</div>` : ''}
+                        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
+                            ${r.status !== 'approved' ? '<button class="btn" type="button" data-st="approved" style="background:var(--ok);">✓ אישור והצגה באתר</button>' : '<button class="btn ghost" type="button" data-st="pending">הסתרה מהאתר</button>'}
+                            ${r.status === 'pending' ? '<button class="btn ghost" type="button" data-st="rejected">דחייה</button>' : ''}
+                            <button class="btn ghost" type="button" data-delete style="color:#d9534f;">מחיקה</button>
+                        </div>
+                        ${r.status === 'approved' ? `<div style="display:flex; gap:6px; margin-top:8px;"><input class="rv-store-reply" placeholder="תגובה בשם החנות..." style="flex:1; margin:0;"><button class="btn" type="button" data-store-reply>שליחה</button></div>` : ''}
+                    </div>`).join('');
+                wrap.querySelectorAll('.rv-adm').forEach(card => {
+                    const id = card.dataset.id;
+                    const act = async fn => { try { await fn(); loadReviewsTab(); } catch (e) { alert(e.message); } };
+                    card.querySelectorAll('[data-st]').forEach(b => b.onclick = () => act(() => rvApi(`/api/admin/reviews/${id}`, { method: 'PATCH', body: JSON.stringify({ status: b.dataset.st }) })));
+                    card.querySelector('[data-delete]').onclick = () => { if (confirm('למחוק את הביקורת לצמיתות?')) act(() => rvApi(`/api/admin/reviews/${id}`, { method: 'DELETE' })); };
+                    card.querySelectorAll('[data-del-reply]').forEach(b => b.onclick = () => { if (confirm('למחוק את התגובה?')) act(() => rvApi(`/api/admin/review-replies/${b.dataset.delReply}`, { method: 'DELETE' })); });
+                    const sr = card.querySelector('[data-store-reply]');
+                    if (sr) sr.onclick = () => { const t = card.querySelector('.rv-store-reply').value.trim(); if (t) act(() => rvApi(`/api/reviews/${id}/replies`, { method: 'POST', body: JSON.stringify({ name: 'Bake & Party', text: t }) })); };
+                });
+            } catch (e) { wrap.innerHTML = `<p style="color:#d9534f;">${escHtml(e.message)}</p>`; }
+        }
 
         // --- טאב ניהול קטגוריות ---
         let currentTree = [];
@@ -1687,7 +1757,7 @@
             }
             list.innerHTML = ''; items = []; active = -1;
             const none = document.createElement('div');
-            none.className = 'cc-item cc-none'; none.textContent = '— ללא קטגוריה —';
+            none.className = 'cc-item cc-none'; none.textContent = sel.dataset.noneLabel || '— ללא קטגוריה —';
             none.onmousedown = e => { e.preventDefault(); pick(''); };
             list.appendChild(none);
             if (!opts.length) { const e = document.createElement('div'); e.className = 'cc-empty'; e.textContent = 'לא נמצאה קטגוריה'; list.appendChild(e); }
@@ -1742,5 +1812,6 @@
     setInterval(() => document.querySelectorAll('select.cat-combo').forEach(s => { if (s._ccSync) s._ccSync(); }), 400);
 })();
 </script>
+<script src="/ui-inputs.js"></script>
 </body>
 </html>

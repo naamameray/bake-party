@@ -326,10 +326,50 @@ try:
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_choice VARCHAR(20);")
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_note TEXT;")
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS added_by_staff BOOLEAN NOT NULL DEFAULT FALSE;")
+    # התראות בטלפון לפי הזמנה: גם לקוח שלא נרשם יכול לבקש התראה כשההזמנה שלו מוכנה (בלי הסכמה לפרסומות)
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS order_push_subs (
+            id         SERIAL PRIMARY KEY,
+            order_id   INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+            endpoint   TEXT NOT NULL,
+            p256dh     TEXT NOT NULL,
+            auth       TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (order_id, endpoint)
+        );
+    """)
     # עכשיו יש הזמנות באתר: מעדכנים את תשובת ה-FAQ הישנה ("אין הזמנות באתר") אם לא נערכה ידנית
     init_cur.execute("""UPDATE faq_items SET question = 'איך מזמינים? אפשר להזמין דרך האתר?',
         answer = 'כן! מוסיפים מוצרים לעגלה באתר ושולחים הזמנה לאיסוף עצמי מהחנות. כשההזמנה מוכנה נעדכן אתכם, והתשלום בחנות בזמן האיסוף. אפשר להזמין גם בטלפון, בוואטסאפ או בוולט.',
         updated_at = NOW() WHERE topic_key = 'ordering' AND answer LIKE 'כרגע אין באתר מערכת הזמנות%';""")
+
+    # --- ביקורות: מוצגות רק אחרי אישור מנהל. תגובות לביקורות מתפרסמות מיד (מנהל יכול למחוק) ---
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS reviews (
+            id          SERIAL PRIMARY KEY,
+            user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            name        VARCHAR(80) NOT NULL,
+            rating      SMALLINT NOT NULL CHECK (rating BETWEEN 0 AND 5),
+            text        TEXT,
+            status      VARCHAR(20) NOT NULL DEFAULT 'pending',
+            created_at  TIMESTAMPTZ DEFAULT NOW(),
+            reviewed_at TIMESTAMPTZ,
+            reviewed_by INTEGER
+        );
+    """)
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews(status, id DESC);")
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS review_replies (
+            id         SERIAL PRIMARY KEY,
+            review_id  INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+            user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            name       VARCHAR(80) NOT NULL,
+            text       TEXT NOT NULL,
+            is_store   BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_review_replies_review ON review_replies(review_id, id);")
 
     admin_email = os.environ.get("ADMIN_EMAIL")
     admin_pass = os.environ.get("ADMIN_PASSWORD")
@@ -1836,7 +1876,7 @@ PUSH_MIN_INTERVAL_HOURS = 12
 def _push_configured():
     return bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
 
-def _send_push_rows(rows, title, body, url="/"):
+def _send_push_rows(rows, title, body, url="/", table="push_subscriptions"):
     """rows: [(sub_id, endpoint, p256dh, auth)]. שולח, ומוחק מנויים שכבר לא תקפים. מחזיר כמה נשלחו."""
     if not _push_configured() or not rows:
         return 0
@@ -1858,7 +1898,7 @@ def _send_push_rows(rows, title, body, url="/"):
             print(f"[PUSH] error: {e}")
     if dead:
         conn = get_conn(); cur = conn.cursor()
-        cur.execute("DELETE FROM push_subscriptions WHERE id = ANY(%s);", (dead,))
+        cur.execute(f"DELETE FROM {table} WHERE id = ANY(%s);", (dead,))
         conn.commit(); cur.close(); conn.close()
     return sent
 
@@ -2153,6 +2193,20 @@ def _push_to_user(user_id, title, body, url="/"):
     rows = cur.fetchall(); cur.close(); conn.close()
     return _send_push_rows(rows, title, body, url)
 
+def _push_order(order_id, user_id, title, body, url="/"):
+    """התראה על הזמנה: למכשירים שנרשמו להזמנה הזו, ולמכשירים של הלקוח אם הוא רשום (בלי כפילויות)."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, endpoint, p256dh, auth FROM order_push_subs WHERE order_id = %s;", (order_id,))
+    order_rows = cur.fetchall(); cur.close(); conn.close()
+    sent = _send_push_rows(order_rows, title, body, url, table="order_push_subs")
+    if user_id:
+        seen = {r[1] for r in order_rows}
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = %s;", (user_id,))
+        rows = [r for r in cur.fetchall() if r[1] not in seen]; cur.close(); conn.close()
+        sent += _send_push_rows(rows, title, body, url)
+    return sent
+
 def _track_link(order_id, token):
     return f"{SITE_URL}/#order={order_id}&t={token}"
 
@@ -2165,7 +2219,7 @@ def _order_dict(cur, row, with_items=True, staff=False):
          "ready_at": _il(ready_at).strftime("%d/%m %H:%M") if ready_at else None,
          "picked_up_at": _il(picked_at).strftime("%d/%m %H:%M") if picked_at else None}
     if staff:
-        d.update({"phone": phone, "email": email or "", "registered": bool(user_id)})
+        d.update({"phone": phone, "email": email or "", "registered": bool(user_id), "track_url": _track_link(oid, token)})
     if with_items:
         cur.execute("SELECT id, product_id, name, unit_price, quantity, missing, image_url, customer_choice, customer_note, added_by_staff "
                     "FROM order_items WHERE order_id = %s ORDER BY id;", (oid,))
@@ -2200,7 +2254,29 @@ class OrderCreateBody(BaseModel):
 def orders_config():
     conn = get_conn(); cur = conn.cursor()
     open_ = _orders_open(cur); cur.close(); conn.close()
-    return {"open": open_, "pickup_only": True, "payment": "בתשלום בחנות באיסוף", "address": _get_contact()["address"]}
+    return {"open": open_, "pickup_only": True, "payment": "בתשלום בחנות באיסוף", "address": _get_contact()["address"],
+            "push": _push_configured(), "public_key": VAPID_PUBLIC_KEY}
+
+@app.post("/api/orders/{order_id}/push")
+def order_push_subscribe(order_id: int, t: str, body: PushSubBody):
+    """רישום המכשיר להתראות על ההזמנה הזו בלבד (מתאים גם ללקוח שלא נרשם)."""
+    p256dh, auth = body.keys.get("p256dh"), body.keys.get("auth")
+    if not (body.endpoint.startswith("https://") and p256dh and auth):
+        raise HTTPException(status_code=400, detail="נתוני מנוי לא תקינים")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT token FROM orders WHERE id = %s;", (order_id,))
+    o = cur.fetchone()
+    if not o or not hmac.compare_digest(o[0], t or ""):
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="ההזמנה לא נמצאה")
+    cur.execute("INSERT INTO order_push_subs (order_id, endpoint, p256dh, auth) VALUES (%s,%s,%s,%s) "
+                "ON CONFLICT (order_id, endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth RETURNING id;",
+                (order_id, body.endpoint, p256dh, auth))
+    sub_id = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    _send_push_rows([(sub_id, body.endpoint, p256dh, auth)], f"מעולה! 🎉", f"נשלח לך התראה כשהזמנה #{_order_number(order_id)} מוכנה.",
+                    f"/#order={order_id}&t={t}", table="order_push_subs")
+    return {"ok": True}
 
 @app.post("/api/orders")
 def create_order(body: OrderCreateBody, request: Request, authorization: str = Header(None)):
@@ -2376,7 +2452,7 @@ def staff_update_order(order_id: int, body: OrderStatusBody, sess: dict = Depend
         else:
             title, text = f"הזמנה #{number} בוטלה", f"ההזמנה בוטלה. לשאלות אפשר להתקשר אלינו: {_get_contact()['phone']}."
         def _n():
-            _push_to_user(user_id, title, text, f"/#order={order_id}&t={token}")
+            _push_order(order_id, user_id, title, text, f"/#order={order_id}&t={token}")
             if email:
                 _send_order_email(email, title, [f"שלום {name.split()[0] if name.split() else ''},", text], link)
         threading.Thread(target=_n, daemon=True).start()
@@ -2435,7 +2511,7 @@ def _send_missing_notice(order_id):
         listed = ", ".join(names[:5]) + ("..." if len(names) > 5 else "")
         title = f"חסר מוצר בהזמנה #{number}"
         text = f"לצערנו חסר בחנות: {listed}. מה תעדיפו? להמשיך בלעדיו, לבקש תחליף, או לבטל את ההזמנה. בוחרים בקישור."
-        _push_to_user(user_id, title, text, f"/#order={order_id}&t={token}")
+        _push_order(order_id, user_id, title, text, f"/#order={order_id}&t={token}")
         if email:
             _send_order_email(email, title, [f"שלום {name.split()[0] if name.split() else ''},", f"לצערנו חסר בחנות: {listed}.",
                                              "מה תעדיפו? להמשיך בלי המוצר, לבקש תחליף, או לבטל את ההזמנה.",
@@ -2567,6 +2643,169 @@ def staff_set_orders_open(body: OrdersOpenBody, sess: dict = Depends(require_sta
     return {"ok": True}
 
 
+# ===================== ביקורות =====================
+# כל אחד יכול לכתוב ביקורת (0 עד 5 כוכבים). היא מופיעה באתר רק אחרי שמנהל מאשר.
+# כל אחד יכול להגיב על ביקורת שאושרה. תגובות מופיעות מיד, ומנהל יכול למחוק תגובה.
+REVIEW_ATTEMPTS = defaultdict(list)
+REPLY_ATTEMPTS = defaultdict(list)
+
+def _simple_rate_limit(bucket, ip, max_n, window, msg):
+    now = time_module.time()
+    bucket[ip] = [t for t in bucket[ip] if now - t < window]
+    if len(bucket[ip]) >= max_n:
+        raise HTTPException(status_code=429, detail=msg)
+    bucket[ip].append(now)
+
+def _clean_text(t, max_len):
+    """מנקה רווחים מיותרים אבל משאיר ירידות שורה (עד שתיים ברצף)."""
+    lines = [" ".join(l.split()) for l in (t or "").splitlines()]
+    out = "\n".join(lines).strip()
+    while "\n\n\n" in out:
+        out = out.replace("\n\n\n", "\n\n")
+    return out[:max_len].strip()
+
+def _looks_like_spam(t):
+    import re
+    return bool(re.search(r"https?://|www\.|\.com\b|\.co\.il\b|t\.me/", t or "", re.I))
+
+def _replies_for(cur, review_ids):
+    if not review_ids:
+        return {}
+    cur.execute("SELECT id, review_id, name, text, is_store, created_at FROM review_replies WHERE review_id = ANY(%s) ORDER BY id;", (review_ids,))
+    out = defaultdict(list)
+    for r in cur.fetchall():
+        out[r[1]].append({"id": r[0], "name": r[2], "text": r[3], "is_store": bool(r[4]),
+                          "created_at": _il(r[5]).strftime("%d/%m/%Y") if r[5] else ""})
+    return out
+
+def _review_dict(r, replies):
+    return {"id": r[0], "name": r[1], "rating": r[2], "text": r[3] or "", "status": r[4],
+            "created_at": _il(r[5]).strftime("%d/%m/%Y") if r[5] else "", "replies": replies.get(r[0], [])}
+
+@app.get("/api/reviews")
+def list_reviews(limit: int = 10, offset: int = 0):
+    limit = max(1, min(limit, 30)); offset = max(0, offset)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*), COALESCE(AVG(rating), 0) FROM reviews WHERE status = 'approved';")
+    count, avg = cur.fetchone()
+    cur.execute("SELECT rating, COUNT(*) FROM reviews WHERE status = 'approved' GROUP BY rating;")
+    dist = {int(r[0]): r[1] for r in cur.fetchall()}
+    cur.execute("SELECT id, name, rating, text, status, created_at FROM reviews WHERE status = 'approved' "
+                "ORDER BY id DESC LIMIT %s OFFSET %s;", (limit, offset))
+    rows = cur.fetchall()
+    replies = _replies_for(cur, [r[0] for r in rows])
+    cur.close(); conn.close()
+    return {"count": count, "average": round(float(avg), 1), "distribution": {str(k): dist.get(k, 0) for k in range(6)},
+            "items": [_review_dict(r, replies) for r in rows]}
+
+class ReviewBody(BaseModel):
+    name: str
+    rating: int
+    text: Optional[str] = None
+    website: Optional[str] = None      # מלכודת לרובוטים: שדה מוסתר שאדם לא ממלא
+
+@app.post("/api/reviews")
+def create_review(body: ReviewBody, request: Request, authorization: str = Header(None)):
+    if body.website:
+        return {"ok": True, "pending": True}
+    name = _clean_text(body.name, 60)
+    text = _clean_text(body.text, 1500)
+    if not name:
+        raise HTTPException(status_code=400, detail="צריך שם (אפשר גם רק שם פרטי)")
+    if body.rating < 0 or body.rating > 5:
+        raise HTTPException(status_code=400, detail="הדירוג צריך להיות בין 0 ל-5 כוכבים")
+    if _looks_like_spam(text) or _looks_like_spam(name):
+        raise HTTPException(status_code=400, detail="אי אפשר לכלול קישורים בביקורת")
+    ip = request.client.host if request.client else "unknown"
+    _simple_rate_limit(REVIEW_ATTEMPTS, ip, 3, 3600, "כבר נשלחו כמה ביקורות מהמכשיר הזה. אפשר לנסות שוב מאוחר יותר.")
+    sess = _session_from_header(authorization)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("INSERT INTO reviews (user_id, name, rating, text) VALUES (%s,%s,%s,%s) RETURNING id;",
+                (sess["user_id"] if sess else None, name, body.rating, text or None))
+    rid = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    threading.Thread(target=push_to_staff, args=("⭐ ביקורת חדשה ממתינה לאישור", f"{name}: {body.rating} כוכבים", "/admin.html"), daemon=True).start()
+    return {"ok": True, "pending": True, "id": rid}
+
+class ReplyBody(BaseModel):
+    name: str
+    text: str
+    website: Optional[str] = None
+
+@app.post("/api/reviews/{review_id}/replies")
+def create_reply(review_id: int, body: ReplyBody, request: Request, authorization: str = Header(None)):
+    if body.website:
+        return {"ok": True}
+    name = _clean_text(body.name, 60)
+    text = _clean_text(body.text, 800)
+    if not name or not text:
+        raise HTTPException(status_code=400, detail="צריך שם ותגובה")
+    if _looks_like_spam(text) or _looks_like_spam(name):
+        raise HTTPException(status_code=400, detail="אי אפשר לכלול קישורים בתגובה")
+    ip = request.client.host if request.client else "unknown"
+    _simple_rate_limit(REPLY_ATTEMPTS, ip, 6, 3600, "נשלחו הרבה תגובות מהמכשיר הזה. אפשר לנסות שוב מאוחר יותר.")
+    sess = _session_from_header(authorization)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT 1 FROM reviews WHERE id = %s AND status = 'approved';", (review_id,))
+    if not cur.fetchone():
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="הביקורת לא נמצאה")
+    is_store = bool(sess and sess["role"] in STAFF_ROLES)
+    cur.execute("INSERT INTO review_replies (review_id, user_id, name, text, is_store) VALUES (%s,%s,%s,%s,%s) RETURNING id;",
+                (review_id, sess["user_id"] if sess else None, "Bake & Party" if is_store else name, text, is_store))
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True}
+
+@app.get("/api/admin/reviews")
+def admin_reviews(status: str = "pending", sess: dict = Depends(require_admin)):
+    if status not in ("pending", "approved", "rejected"):
+        raise HTTPException(status_code=400, detail="סטטוס לא תקין")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, name, rating, text, status, created_at FROM reviews WHERE status = %s ORDER BY id DESC LIMIT 200;", (status,))
+    rows = cur.fetchall()
+    replies = _replies_for(cur, [r[0] for r in rows])
+    cur.execute("SELECT status, COUNT(*) FROM reviews GROUP BY status;")
+    counts = dict(cur.fetchall())
+    cur.close(); conn.close()
+    return {"counts": {k: counts.get(k, 0) for k in ("pending", "approved", "rejected")}, "items": [_review_dict(r, replies) for r in rows]}
+
+class ReviewStatusBody(BaseModel):
+    status: str
+
+@app.patch("/api/admin/reviews/{review_id}")
+def admin_review_status(review_id: int, body: ReviewStatusBody, sess: dict = Depends(require_admin)):
+    if body.status not in ("pending", "approved", "rejected"):
+        raise HTTPException(status_code=400, detail="סטטוס לא תקין")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("UPDATE reviews SET status = %s, reviewed_at = NOW(), reviewed_by = %s WHERE id = %s RETURNING id;",
+                (body.status, sess["user_id"], review_id))
+    ok = cur.fetchone(); conn.commit(); cur.close(); conn.close()
+    if not ok:
+        raise HTTPException(status_code=404, detail="הביקורת לא נמצאה")
+    _audit(sess, "review_status", "review", review_id, {"status": body.status})
+    return {"ok": True}
+
+@app.delete("/api/admin/reviews/{review_id}")
+def admin_delete_review(review_id: int, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM reviews WHERE id = %s RETURNING name;", (review_id,))
+    r = cur.fetchone(); conn.commit(); cur.close(); conn.close()
+    if not r:
+        raise HTTPException(status_code=404, detail="הביקורת לא נמצאה")
+    _audit(sess, "review_delete", "review", review_id, {"name": r[0]})
+    return {"ok": True}
+
+@app.delete("/api/admin/review-replies/{reply_id}")
+def admin_delete_reply(reply_id: int, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("DELETE FROM review_replies WHERE id = %s RETURNING review_id;", (reply_id,))
+    r = cur.fetchone(); conn.commit(); cur.close(); conn.close()
+    if not r:
+        raise HTTPException(status_code=404, detail="התגובה לא נמצאה")
+    _audit(sess, "review_reply_delete", "review", r[0], {"reply_id": reply_id})
+    return {"ok": True}
+
+
 # --- קבצי PWA: אפליקציה מותקנת + התראות ---
 @app.get("/sw.js")
 def serve_sw():
@@ -2576,6 +2815,10 @@ def serve_sw():
 @app.get("/manifest.webmanifest")
 def serve_manifest():
     return FileResponse(os.path.join(STATIC_DIR, "manifest.webmanifest"), media_type="application/manifest+json")
+
+@app.get("/manifest-staff.webmanifest")
+def serve_manifest_staff():
+    return FileResponse(os.path.join(STATIC_DIR, "manifest-staff.webmanifest"), media_type="application/manifest+json")
 
 @app.get("/icon-192.png")
 def serve_icon192():
@@ -3703,6 +3946,10 @@ def serve_admin():
 @app.get("/staff.html")
 def serve_staff():
     return FileResponse(os.path.join(STATIC_DIR, "staff.html"), headers=_NO_CACHE_HTML)
+
+@app.get("/ui-inputs.js")
+def serve_ui_inputs():
+    return FileResponse(os.path.join(STATIC_DIR, "ui-inputs.js"), media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
 @app.get("/logo-web.jpg")
 def serve_logo_web():
