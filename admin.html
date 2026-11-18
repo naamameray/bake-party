@@ -765,9 +765,14 @@
                 if (!d.items.length) { wrap.innerHTML = '<p style="color:var(--muted);">אין ביקורות כאן.</p>'; return; }
                 wrap.innerHTML = d.items.map(r => `
                     <div class="rv-adm" data-id="${r.id}" style="border:2px solid var(--pink-light); border-radius:14px; padding:12px 14px; margin-bottom:10px; background:#fff;">
-                        <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;"><strong>${escHtml(r.name)}</strong><span style="color:var(--muted); font-size:.85em;">${escHtml(r.created_at)}</span></div>
+                        <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+                            <span><strong>${escHtml(r.full_name || r.name)}</strong> <span style="color:var(--muted); font-size:.85em;">${r.email ? '· ' + escHtml(r.email) : '· בלי חשבון (ביקורת ישנה)'}</span>
+                            ${r.verified ? '<span style="background:#e6f5ec; color:var(--ok); border-radius:10px; padding:1px 8px; font-size:.8em; font-weight:700;">✓ קנה/תה אצלנו</span>' : ''}
+                            <div style="color:var(--muted); font-size:.8em;">באתר יופיע בתור: ${escHtml(r.name)}${r.member_since ? ' · רשום/ה מאז ' + escHtml(r.member_since) : ''}</div></span>
+                            <span style="color:var(--muted); font-size:.85em;">${escHtml(r.created_at)}</span></div>
                         <div>${rvStars(r.rating)}</div>
                         ${r.text ? `<p style="margin:6px 0; white-space:pre-line;">${escHtml(r.text)}</p>` : '<p style="margin:6px 0; color:var(--muted);">(בלי טקסט)</p>'}
+                        ${r.photo ? `<a href="${escHtml(API + r.photo)}" target="_blank" rel="noopener"><img src="${escHtml(API + r.photo)}" alt="" style="max-width:180px; max-height:140px; border-radius:10px; border:1px solid var(--pink-light); margin:4px 0;"></a>` : ''}
                         ${r.replies.length ? `<div style="border-top:1px dashed var(--pink-light); padding-top:6px; margin-top:6px;">${r.replies.map(x => `
                             <div style="display:flex; justify-content:space-between; gap:8px; font-size:.9em; padding:4px 0;">
                                 <span><b>${x.is_store ? '🧁 החנות' : escHtml(x.name)}:</b> ${escHtml(x.text)}</span>

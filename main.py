@@ -372,6 +372,7 @@ try:
         );
     """)
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_review_replies_review ON review_replies(review_id, id);")
+    init_cur.execute("ALTER TABLE reviews ADD COLUMN IF NOT EXISTS photo_url TEXT;")
 
     # יומן שליחות: כל מייל והתראה שנשלחו או נכשלו, עם הסיבה. מוצג בפאנל הניהול (לשונית הודעות)
     init_cur.execute("""
@@ -2816,19 +2817,38 @@ def _looks_like_spam(t):
     import re
     return bool(re.search(r"https?://|www\.|\.com\b|\.co\.il\b|t\.me/", t or "", re.I))
 
+def _short_name(name):
+    """שם פרטי + האות הראשונה של שם המשפחה ("שירה כ."), כדי שייראה אמיתי ועדיין ישמור על פרטיות."""
+    parts = (name or "").split()
+    if not parts:
+        return "לקוח/ה"
+    return f"{parts[0]} {parts[-1][0]}." if len(parts) > 1 else parts[0]
+
 def _replies_for(cur, review_ids):
     if not review_ids:
         return {}
-    cur.execute("SELECT id, review_id, name, text, is_store, created_at FROM review_replies WHERE review_id = ANY(%s) ORDER BY id;", (review_ids,))
+    cur.execute("""SELECT rr.id, rr.review_id, rr.name, rr.text, rr.is_store, rr.created_at,
+                          EXISTS (SELECT 1 FROM orders o WHERE o.user_id = rr.user_id AND o.status = 'picked_up')
+                   FROM review_replies rr WHERE rr.review_id = ANY(%s) ORDER BY rr.id;""", (review_ids,))
     out = defaultdict(list)
     for r in cur.fetchall():
-        out[r[1]].append({"id": r[0], "name": r[2], "text": r[3], "is_store": bool(r[4]),
-                          "created_at": _il(r[5]).strftime("%d/%m/%Y") if r[5] else ""})
+        out[r[1]].append({"id": r[0], "name": "Bake & Party" if r[4] else _short_name(r[2]), "text": r[3], "is_store": bool(r[4]),
+                          "verified": bool(r[6]), "created_at": _il(r[5]).strftime("%d/%m/%Y") if r[5] else ""})
     return out
 
-def _review_dict(r, replies):
-    return {"id": r[0], "name": r[1], "rating": r[2], "text": r[3] or "", "status": r[4],
-            "created_at": _il(r[5]).strftime("%d/%m/%Y") if r[5] else "", "replies": replies.get(r[0], [])}
+_REVIEW_SELECT = """SELECT r.id, r.name, r.rating, r.text, r.status, r.created_at, r.photo_url, r.user_id, u.created_at, u.email,
+           EXISTS (SELECT 1 FROM orders o WHERE o.user_id = r.user_id AND o.status = 'picked_up'),
+           (SELECT COUNT(*) FROM reviews r2 WHERE r.user_id IS NOT NULL AND r2.user_id = r.user_id AND r2.status = 'approved')
+    FROM reviews r LEFT JOIN users u ON u.id = r.user_id"""
+
+def _review_dict(r, replies, admin=False):
+    d = {"id": r[0], "name": _short_name(r[1]), "rating": r[2], "text": r[3] or "", "status": r[4],
+         "created_at": _il(r[5]).strftime("%d/%m/%Y") if r[5] else "", "photo": r[6],
+         "has_account": bool(r[7]), "verified": bool(r[10]), "user_reviews": int(r[11] or 0),
+         "member_since": r[8].strftime("%m/%Y") if r[8] else None, "replies": replies.get(r[0], [])}
+    if admin:
+        d.update({"full_name": r[1], "email": r[9] or ""})
+    return d
 
 @app.get("/api/reviews")
 def list_reviews(limit: int = 10, offset: int = 0):
@@ -2838,69 +2858,109 @@ def list_reviews(limit: int = 10, offset: int = 0):
     count, avg = cur.fetchone()
     cur.execute("SELECT rating, COUNT(*) FROM reviews WHERE status = 'approved' GROUP BY rating;")
     dist = {int(r[0]): r[1] for r in cur.fetchall()}
-    cur.execute("SELECT id, name, rating, text, status, created_at FROM reviews WHERE status = 'approved' "
-                "ORDER BY id DESC LIMIT %s OFFSET %s;", (limit, offset))
+    cur.execute(_REVIEW_SELECT + " WHERE r.status = 'approved' ORDER BY r.id DESC LIMIT %s OFFSET %s;", (limit, offset))
     rows = cur.fetchall()
     replies = _replies_for(cur, [r[0] for r in rows])
     cur.close(); conn.close()
     return {"count": count, "average": round(float(avg), 1), "distribution": {str(k): dist.get(k, 0) for k in range(6)},
             "items": [_review_dict(r, replies) for r in rows]}
 
+REVIEW_PHOTO_MAX = 6 * 1024 * 1024
+REVIEW_PHOTO_ATTEMPTS = defaultdict(list)
+
+def _image_kind(data):
+    """בודק לפי תוכן הקובץ (ולא רק לפי השם) שזו באמת תמונה."""
+    if data[:3] == b"\xff\xd8\xff": return "jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n": return "png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP": return "webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"): return "gif"
+    return None
+
+@app.post("/api/reviews/photo")
+async def upload_review_photo(file: UploadFile = File(...), sess: dict = Depends(require_auth)):
+    """תמונה לביקורת (לא חובה). רק למשתמשים מחוברים, ומופיעה רק אחרי שהביקורת מאושרת."""
+    _simple_rate_limit(REVIEW_PHOTO_ATTEMPTS, str(sess["user_id"]), 10, 3600, "הועלו הרבה תמונות. אפשר לנסות שוב מאוחר יותר.")
+    data = await file.read(REVIEW_PHOTO_MAX + 1)
+    if len(data) > REVIEW_PHOTO_MAX:
+        raise HTTPException(status_code=400, detail="התמונה גדולה מדי (עד 6MB)")
+    kind = _image_kind(data)
+    if not kind:
+        raise HTTPException(status_code=400, detail="אפשר להעלות רק תמונה (jpg, png, webp)")
+    name = f"rv_{uuid.uuid4().hex}.{kind}"
+    with open(os.path.join(IMAGES_DIR, name), "wb") as f:
+        f.write(data)
+    return {"url": f"/images/{name}"}
+
 class ReviewBody(BaseModel):
-    name: str
     rating: int
     text: Optional[str] = None
+    photo_url: Optional[str] = None
+    name: Optional[str] = None         # לא בשימוש: השם נלקח מהחשבון
     website: Optional[str] = None      # מלכודת לרובוטים: שדה מוסתר שאדם לא ממלא
 
 @app.post("/api/reviews")
 def create_review(body: ReviewBody, request: Request, authorization: str = Header(None)):
+    """ביקורת רק מחשבון רשום: השם נלקח מהפרופיל, כדי שהביקורות יהיו אמיתיות."""
     if body.website:
         return {"ok": True, "pending": True}
-    name = _clean_text(body.name, 60)
+    sess = _session_from_header(authorization)
+    if not sess:
+        raise HTTPException(status_code=401, detail="כדי לכתוב ביקורת צריך להתחבר (או להירשם בחינם)")
     text = _clean_text(body.text, 1500)
-    if not name:
-        raise HTTPException(status_code=400, detail="צריך שם (אפשר גם רק שם פרטי)")
     if body.rating < 0 or body.rating > 5:
         raise HTTPException(status_code=400, detail="הדירוג צריך להיות בין 0 ל-5 כוכבים")
-    if _looks_like_spam(text) or _looks_like_spam(name):
+    if _looks_like_spam(text):
         raise HTTPException(status_code=400, detail="אי אפשר לכלול קישורים בביקורת")
+    photo = (body.photo_url or "").strip() or None
+    if photo and not (photo.startswith("/images/rv_") and "/" not in photo[len("/images/"):]):
+        raise HTTPException(status_code=400, detail="תמונה לא תקינה")
     ip = request.client.host if request.client else "unknown"
     _simple_rate_limit(REVIEW_ATTEMPTS, ip, 3, 3600, "כבר נשלחו כמה ביקורות מהמכשיר הזה. אפשר לנסות שוב מאוחר יותר.")
-    sess = _session_from_header(authorization)
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("INSERT INTO reviews (user_id, name, rating, text) VALUES (%s,%s,%s,%s) RETURNING id;",
-                (sess["user_id"] if sess else None, name, body.rating, text or None))
+    cur.execute("SELECT 1 FROM reviews WHERE user_id = %s AND status <> 'rejected' AND created_at > NOW() - INTERVAL '30 days';", (sess["user_id"],))
+    if cur.fetchone():
+        cur.close(); conn.close()
+        raise HTTPException(status_code=409, detail="כבר כתבת לנו ביקורת לאחרונה. תודה רבה! 💗")
+    cur.execute("SELECT name, email FROM users WHERE id = %s;", (sess["user_id"],))
+    uname, uemail = cur.fetchone()
+    name = (uname or "").strip() or (uemail or "").split("@")[0] or "לקוח/ה"
+    cur.execute("INSERT INTO reviews (user_id, name, rating, text, photo_url) VALUES (%s,%s,%s,%s,%s) RETURNING id;",
+                (sess["user_id"], name[:80], body.rating, text or None, photo))
     rid = cur.fetchone()[0]
     conn.commit(); cur.close(); conn.close()
-    threading.Thread(target=push_to_admins, args=("⭐ ביקורת חדשה ממתינה לאישור", f"{name}: {body.rating} כוכבים", "/admin.html"), daemon=True).start()
+    threading.Thread(target=push_to_admins, args=("⭐ ביקורת חדשה ממתינה לאישור", f"{_short_name(name)}: {body.rating} כוכבים", "/admin.html"), daemon=True).start()
     return {"ok": True, "pending": True, "id": rid}
 
 class ReplyBody(BaseModel):
-    name: str
     text: str
+    name: Optional[str] = None         # לא בשימוש: השם נלקח מהחשבון
     website: Optional[str] = None
 
 @app.post("/api/reviews/{review_id}/replies")
 def create_reply(review_id: int, body: ReplyBody, request: Request, authorization: str = Header(None)):
     if body.website:
         return {"ok": True}
-    name = _clean_text(body.name, 60)
+    sess = _session_from_header(authorization)
+    if not sess:
+        raise HTTPException(status_code=401, detail="כדי להגיב צריך להתחבר (או להירשם בחינם)")
     text = _clean_text(body.text, 800)
-    if not name or not text:
-        raise HTTPException(status_code=400, detail="צריך שם ותגובה")
-    if _looks_like_spam(text) or _looks_like_spam(name):
+    if not text:
+        raise HTTPException(status_code=400, detail="צריך לכתוב תגובה")
+    if _looks_like_spam(text):
         raise HTTPException(status_code=400, detail="אי אפשר לכלול קישורים בתגובה")
     ip = request.client.host if request.client else "unknown"
     _simple_rate_limit(REPLY_ATTEMPTS, ip, 6, 3600, "נשלחו הרבה תגובות מהמכשיר הזה. אפשר לנסות שוב מאוחר יותר.")
-    sess = _session_from_header(authorization)
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT 1 FROM reviews WHERE id = %s AND status = 'approved';", (review_id,))
     if not cur.fetchone():
         cur.close(); conn.close()
         raise HTTPException(status_code=404, detail="הביקורת לא נמצאה")
-    is_store = bool(sess and sess["role"] in STAFF_ROLES)
+    is_store = sess["role"] in STAFF_ROLES
+    cur.execute("SELECT name, email FROM users WHERE id = %s;", (sess["user_id"],))
+    uname, uemail = cur.fetchone()
+    name = "Bake & Party" if is_store else ((uname or "").strip() or (uemail or "").split("@")[0] or "לקוח/ה")
     cur.execute("INSERT INTO review_replies (review_id, user_id, name, text, is_store) VALUES (%s,%s,%s,%s,%s) RETURNING id;",
-                (review_id, sess["user_id"] if sess else None, "Bake & Party" if is_store else name, text, is_store))
+                (review_id, sess["user_id"], name[:80], text, is_store))
     conn.commit(); cur.close(); conn.close()
     return {"ok": True}
 
@@ -2909,13 +2969,13 @@ def admin_reviews(status: str = "pending", sess: dict = Depends(require_admin)):
     if status not in ("pending", "approved", "rejected"):
         raise HTTPException(status_code=400, detail="סטטוס לא תקין")
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, name, rating, text, status, created_at FROM reviews WHERE status = %s ORDER BY id DESC LIMIT 200;", (status,))
+    cur.execute(_REVIEW_SELECT + " WHERE r.status = %s ORDER BY r.id DESC LIMIT 200;", (status,))
     rows = cur.fetchall()
     replies = _replies_for(cur, [r[0] for r in rows])
     cur.execute("SELECT status, COUNT(*) FROM reviews GROUP BY status;")
     counts = dict(cur.fetchall())
     cur.close(); conn.close()
-    return {"counts": {k: counts.get(k, 0) for k in ("pending", "approved", "rejected")}, "items": [_review_dict(r, replies) for r in rows]}
+    return {"counts": {k: counts.get(k, 0) for k in ("pending", "approved", "rejected")}, "items": [_review_dict(r, replies, admin=True) for r in rows]}
 
 class ReviewStatusBody(BaseModel):
     status: str
