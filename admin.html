@@ -155,9 +155,10 @@
 
     <div id="admin-view" style="display:none;">
         <header>
-            <h1>פאנל ניהול חנות (שעות ומשלוחים)</h1>
+            <h1>פאנל ניהול חנות</h1>
             <div class="header-actions">
-                <a href="/staff.html" class="btn ghost">⏱️ כניסה/יציאה למשמרת</a>
+                <a href="/staff.html" class="btn">🛒 הזמנות</a>
+                <a href="/staff.html" class="btn ghost">⏱️ משמרת</a>
                 <a href="/" class="btn ghost">← חזור לאתר הראשי</a>
                 <button class="btn ghost" type="button" id="logout-btn">התנתק</button>
             </div>
@@ -1212,7 +1213,12 @@
                 const d = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(d.detail || 'שגיאה');
                 msg.style.color = 'var(--ok)';
-                if (testOnly) { msg.textContent = `✓ נשלחה אלייך לבדיקה: ${d.sent} מכשירים, ${d.emails} מיילים`; }
+                if (testOnly) {
+                    msg.textContent = `✓ נשלחה אלייך לבדיקה: ${d.sent} מכשירים, ${d.emails} מיילים` + (d.emails ? ` (אל ${d.email_to}).` : '.');
+                    if (d.email_error) { msg.style.color = '#d9534f'; msg.textContent += ' המייל לא נשלח. סיבה: ' + d.email_error; }
+                    else if (d.emails && d.email_to && d.email_from && d.email_to.toLowerCase() === d.email_from.toLowerCase())
+                        msg.textContent += ' שימי לב: המייל נשלח מהכתובת שלך אל עצמך, ולכן ג׳ימייל לפעמים מציג אותו רק ב"דואר יוצא" או ב"כל הדואר" ולא בתיבה הראשית.';
+                }
                 else if (d.emails_sent === null || d.emails_sent === undefined) { msg.textContent = `✓ נשלחה: ${d.sent} מכשירים. ${d.emails} מיילים נשלחים ברקע ויכולים לקחת כמה דקות.`; }
                 else if (d.emails_sent < d.emails) { msg.style.color = '#d9534f'; msg.textContent = `נשלחה ל-${d.sent} מכשירים, אבל רק ${d.emails_sent} מתוך ${d.emails} מיילים נשלחו בפועל.` + (d.email_error ? ' סיבה: ' + d.email_error : ''); }
                 else { msg.textContent = `✓ נשלחה: ${d.sent} מכשירים, ${d.emails_sent} מיילים נשלחו בפועל.`; }

@@ -42,6 +42,37 @@ td.num,th.num{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
 .total .sum{font-size:1.4em;color:var(--pink-dark)}
 .note{color:var(--muted);font-size:.82em;margin-top:10px;line-height:1.5}
 .warn{background:#fff3cd;color:#856404;border-radius:10px;padding:8px 12px;font-size:.88em;margin-top:10px}
+.wrap.wide{max-width:900px}
+.orders-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.switch{display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer}
+.switch input{width:auto;margin:0;transform:scale(1.3)}
+.tabs{display:flex;gap:6px;margin-bottom:12px}
+.tab{border:2px solid var(--pink-light);background:#fff;border-radius:18px;padding:7px 14px;font-family:inherit;font-weight:600;cursor:pointer;color:var(--text)}
+.tab.on{background:var(--pink-dark);border-color:var(--pink-dark);color:#fff}
+.order{border:2px solid var(--pink-light);border-radius:16px;padding:14px;margin-bottom:12px;background:#fff}
+.order.st-new{border-color:#F5A623;box-shadow:0 0 0 3px rgba(245,166,35,.18)}
+.order.st-ready{border-color:var(--ok)}
+.order.fresh{animation:pulse 1.2s ease-in-out 3}
+@keyframes pulse{50%{box-shadow:0 0 0 8px rgba(245,166,35,.35)}}
+.o-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.o-num{font-size:1.3em;font-weight:800;color:var(--pink-dark)}
+.o-badge{border-radius:10px;padding:3px 10px;font-size:.85em;font-weight:700;background:#f3f3f3}
+.o-badge.new{background:#FFF0D6;color:#9A5B00}.o-badge.preparing{background:#E6F0FF;color:#2456A6}.o-badge.ready{background:#e6f5ec;color:var(--ok)}
+.o-cust{margin:6px 0;font-size:.95em}
+.o-cust a{color:var(--pink-dark);font-weight:700}
+.o-items{list-style:none;padding:0;margin:10px 0;border-top:1px solid #f6e3e8}
+.o-items li{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f6e3e8}
+.o-items li.miss .nm{text-decoration:line-through;color:var(--muted)}
+.o-items .q{font-weight:800;min-width:34px;text-align:center;background:var(--pink-light);border-radius:8px;padding:2px 6px}
+.o-items .nm{flex:1}
+.o-items .mini{font-size:.78em;border:1px solid var(--pink-light);background:#fff;border-radius:10px;padding:4px 8px;cursor:pointer;font-family:inherit;color:var(--text)}
+.o-items .mini.on{background:var(--bad);border-color:var(--bad);color:#fff}
+.o-note{background:#fff3cd;color:#856404;border-radius:10px;padding:6px 10px;font-size:.9em;margin:6px 0}
+.o-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:center}
+.o-actions .btn{font-size:1em;padding:12px 18px}
+.btn.green{background:var(--ok)}.btn.green:hover{background:#2e7d54}
+.btn.small{padding:6px 12px;font-size:.85em}
+.empty{color:var(--muted);text-align:center;padding:20px 0}
 </style>
 </head>
 <body>
@@ -75,6 +106,22 @@ td.num,th.num{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
       <button class="btn ghost" id="logout-btn" type="button">התנתק</button>
     </div>
   </header>
+  <div class="wrap wide">
+    <div class="card" id="orders-card">
+      <div class="orders-top">
+        <h2 style="margin:0">🛒 הזמנות לאיסוף <span id="orders-count"></span></h2>
+        <label class="switch"><input type="checkbox" id="orders-open"> <span id="orders-open-label">מקבלים הזמנות באתר</span></label>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <button class="btn ghost small" type="button" id="sound-btn">🔊 הפעלת צליל להזמנה חדשה</button>
+        <button class="btn ghost small" type="button" id="push-btn">🔔 התראות בטלפון על הזמנות</button>
+      </div>
+      <div class="tabs"><button class="tab on" type="button" data-scope="active">פעילות</button><button class="tab" type="button" data-scope="done">הושלמו (7 ימים)</button></div>
+      <div id="today-line" class="note" style="margin:0 0 10px"></div>
+      <div id="orders-list"><div class="empty">טוען...</div></div>
+      <p class="err" id="orders-error"></p>
+    </div>
+  </div>
   <div class="wrap">
     <div class="card status">
       <div class="state" id="state">טוען...</div>
@@ -146,7 +193,7 @@ $('pw-btn').onclick = async () => {
   } catch (e) { $('pw-error').textContent = e.message; }
 };
 
-$('logout-btn').onclick = () => { fetch(API + '/api/logout', { method: 'POST', headers: H() }).finally(() => { clearToken(); stopTick(); show('login-view'); }); };
+$('logout-btn').onclick = () => { fetch(API + '/api/logout', { method: 'POST', headers: H() }).finally(() => { clearToken(); stopTick(); clearInterval(ordersTimer); show('login-view'); }); };
 
 let openShift = null, tick = null;
 function stopTick(){ if (tick) { clearInterval(tick); tick = null; } }
@@ -206,8 +253,114 @@ $('m-prev').onclick = () => shiftMonth(-1);
 $('m-next').onclick = () => shiftMonth(1);
 $('month').onchange = loadHours;
 
+// ===================== הזמנות =====================
+const ST_LABEL = { new: 'חדשה', preparing: 'בהכנה', ready: 'מוכנה לאיסוף', picked_up: 'נאספה', cancelled: 'בוטלה' };
+let ordersScope = 'active', ordersTimer = null, knownOrderIds = null, soundOn = false, audioCtx = null;
+function beep() {
+  if (!soundOn) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.25, 0.5].forEach(t => { const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.frequency.value = 880; o.connect(g); g.connect(audioCtx.destination); g.gain.value = 0.25;
+      o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + 0.15); });
+  } catch (e) {}
+}
+$('sound-btn').onclick = () => {
+  soundOn = !soundOn; try { localStorage.setItem('bp_staff_sound', soundOn ? '1' : ''); } catch (e) {}
+  $('sound-btn').textContent = soundOn ? '🔊 צליל פעיל (לחיצה לכיבוי)' : '🔇 הפעלת צליל להזמנה חדשה';
+  if (soundOn) beep();
+};
+$('push-btn').onclick = async () => {
+  try {
+    const st = await api('/api/notifications/status');
+    if (!st.configured) throw new Error('התראות טלפון עוד לא הוגדרו בשרת');
+    if (!('serviceWorker' in navigator && 'PushManager' in window)) throw new Error('הדפדפן הזה לא תומך בהתראות. באייפון צריך קודם "הוספה למסך הבית".');
+    await navigator.serviceWorker.register('/sw.js');
+    if (await Notification.requestPermission() !== 'granted') throw new Error('ההתראות לא אושרו בדפדפן');
+    const reg = await navigator.serviceWorker.ready;
+    const p = '='.repeat((4 - st.public_key.length % 4) % 4), raw = atob((st.public_key + p).replace(/-/g, '+').replace(/_/g, '/'));
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from([...raw].map(c => c.charCodeAt(0))) });
+    await api('/api/notifications/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
+    $('push-btn').textContent = '🔔 התראות פעילות במכשיר הזה';
+  } catch (e) { $('orders-error').textContent = e.message; }
+};
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
+  ordersScope = t.dataset.scope; loadOrders();
+});
+$('orders-open').onchange = async e => {
+  try { await api('/api/staff/orders-open', { method: 'PUT', body: JSON.stringify({ open: e.target.checked }) }); }
+  catch (err) { $('orders-error').textContent = err.message; }
+  loadOrders();
+};
+function orderHtml(o) {
+  const next = { new: ['preparing', 'התחלתי להכין'], preparing: ['ready', '✓ מוכנה לאיסוף (הלקוח יקבל עדכון)'], ready: ['picked_up', '✓ נאספה ושולמה'] }[o.status];
+  const active = ['new', 'preparing', 'ready'].includes(o.status);
+  return `<div class="order st-${o.status}" data-id="${o.id}">
+    <div class="o-head"><div><div class="o-num">#${o.number}</div><div style="color:var(--muted);font-size:.85em">${esc(o.created_at)}${o.registered ? ' · לקוח רשום' : ''}</div></div>
+      <span class="o-badge ${o.status}">${ST_LABEL[o.status] || o.status}</span></div>
+    <div class="o-cust"><strong>${esc(o.name)}</strong> · <a href="tel:${esc(o.phone)}">${esc(o.phone)}</a>${o.email ? ' · ' + esc(o.email) : ''}</div>
+    ${o.note ? `<div class="o-note">📝 ${esc(o.note)}</div>` : ''}
+    <ul class="o-items">${o.items.map(i => `<li class="${i.missing ? 'miss' : ''}"><span class="q">${i.quantity}×</span><span class="nm">${esc(i.name)}</span>
+      <span class="num">₪${(i.unit_price * i.quantity).toFixed(2)}</span>
+      ${active ? `<button class="mini${i.missing ? ' on' : ''}" type="button" data-item="${i.id}" data-missing="${i.missing ? 0 : 1}" data-pid="${i.product_id || ''}">${i.missing ? 'חסר ✕' : 'חסר?'}</button>` : ''}</li>`).join('')}</ul>
+    <div class="o-actions"><div class="total" style="margin:0;padding:8px 14px">לתשלום: <span class="sum" style="margin-right:6px">₪${o.total.toFixed(2)}</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${next ? `<button class="btn ${next[0] === 'preparing' ? '' : 'green'}" type="button" data-st="${next[0]}">${next[1]}</button>` : ''}
+      ${active ? `<button class="btn ghost small" type="button" data-st="cancelled">ביטול</button>` : ''}</div></div>
+  </div>`;
+}
+async function loadOrders() {
+  try {
+    const d = await api('/api/staff/orders?scope=' + ordersScope);
+    $('orders-error').textContent = '';
+    $('orders-open').checked = d.orders_open;
+    $('orders-open-label').textContent = d.orders_open ? 'מקבלים הזמנות באתר' : 'ההזמנות באתר סגורות';
+    $('today-line').textContent = `היום נאספו ${d.today_picked_up} הזמנות, בסך ₪${d.today_total.toFixed(2)}.`;
+    if (ordersScope === 'active') {
+      const ids = d.orders.map(o => o.id);
+      const fresh = knownOrderIds ? ids.filter(id => !knownOrderIds.includes(id)) : [];
+      if (fresh.length) beep();
+      knownOrderIds = ids;
+      const waiting = d.orders.filter(o => o.status === 'new').length;
+      $('orders-count').textContent = d.orders.length ? `(${d.orders.length})` : '';
+      document.title = (waiting ? `(${waiting}) ` : '') + 'אזור צוות | Bake & Party';
+      $('orders-list').innerHTML = d.orders.length ? d.orders.map(orderHtml).join('') : '<div class="empty">אין הזמנות פעילות כרגע 🎉</div>';
+      fresh.forEach(id => { const el = document.querySelector(`.order[data-id="${id}"]`); if (el) el.classList.add('fresh'); });
+    } else {
+      $('orders-list').innerHTML = d.orders.length ? d.orders.map(orderHtml).join('') : '<div class="empty">אין הזמנות שהושלמו בשבוע האחרון</div>';
+    }
+    bindOrderButtons();
+  } catch (e) { $('orders-error').textContent = e.message; }
+}
+function bindOrderButtons() {
+  document.querySelectorAll('.order [data-st]').forEach(b => b.onclick = async () => {
+    const id = b.closest('.order').dataset.id;
+    if (b.dataset.st === 'cancelled' && !confirm('לבטל את ההזמנה? הלקוח יקבל עדכון.')) return;
+    b.disabled = true;
+    try { await api('/api/staff/orders/' + id, { method: 'PATCH', body: JSON.stringify({ status: b.dataset.st }) }); }
+    catch (e) { $('orders-error').textContent = e.message; }
+    loadOrders();
+  });
+  document.querySelectorAll('.order [data-item]').forEach(b => b.onclick = async () => {
+    const id = b.closest('.order').dataset.id, missing = b.dataset.missing === '1';
+    try {
+      await api(`/api/staff/orders/${id}/items/${b.dataset.item}`, { method: 'PATCH', body: JSON.stringify({ missing }) });
+      if (missing && b.dataset.pid && confirm('לסמן את המוצר גם כ"אזל מהמלאי" באתר?'))
+        await api(`/api/staff/products/${b.dataset.pid}/stock`, { method: 'POST', body: JSON.stringify({ in_stock: false }) });
+    } catch (e) { $('orders-error').textContent = e.message; }
+    loadOrders();
+  });
+}
+function startOrders() {
+  try { soundOn = !!localStorage.getItem('bp_staff_sound'); } catch (e) {}
+  $('sound-btn').textContent = soundOn ? '🔊 צליל פעיל (לחיצה לכיבוי)' : '🔇 הפעלת צליל להזמנה חדשה';
+  loadOrders(); clearInterval(ordersTimer);
+  ordersTimer = setInterval(() => { if (ordersScope === 'active') loadOrders(); }, 20000);
+}
+
 function start(user) {
   show('main-view');
+  startOrders();
   $('hello').textContent = 'שלום ' + (user.name || '');
   $('admin-link').style.display = user.role === 'admin' ? 'inline-block' : 'none';
   if (!$('month').value) $('month').value = new Date().toISOString().slice(0,7);
