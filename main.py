@@ -229,9 +229,9 @@ try:
         INSERT INTO settings (key, value) VALUES ('opening_time','09:00'),('closing_time','18:00'),
         ('delivery_override','auto') ON CONFLICT (key) DO NOTHING;
     """)
-    # תיקון כתובת החנות: מספר 23 ולא 21 (גם אם הכתובת הישנה נשמרה בעבר מהאתר)
-    init_cur.execute("UPDATE settings SET value = replace(value, 'יוני נתניהו 21', 'יוני נתניהו 23') "
-                     "WHERE key = 'contact_address' AND value LIKE '%יוני נתניהו 21%';")
+    # תיקון כתובת החנות: יוני נתניהו 25 (גם אם נשמרה בעבר כתובת ישנה, 21 או 23)
+    init_cur.execute("UPDATE settings SET value = regexp_replace(value, 'יוני נתניהו (21|23)\\M', 'יוני נתניהו 25') "
+                     "WHERE key = 'contact_address' AND value ~ 'יוני נתניהו (21|23)\\M';")
 
     # --- שאלות ותשובות נפוצות (FAQ) — כולל מנגנון "מתגלה אוטומטית מהצ'אט" ---
     # topic_key: תגית קבועה שה-AI מסווג אליה כל שאלה בצ'אט (ראו _ai_build_context/ai_chat).
@@ -1633,7 +1633,7 @@ def get_categories_tree():
 
 CONTACT_DEFAULTS = {
     "contact_phone": "054-9881998",
-    "contact_address": "יוני נתניהו 23, גבעת שמואל",
+    "contact_address": "יוני נתניהו 25, גבעת שמואל",
     "contact_email": "pinukimmam@gmail.com",
     "contact_whatsapp": "972549881998",
 }
