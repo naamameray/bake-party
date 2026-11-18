@@ -326,6 +326,8 @@ try:
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_choice VARCHAR(20);")
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_note TEXT;")
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS added_by_staff BOOLEAN NOT NULL DEFAULT FALSE;")
+    # תחליף שהלקוח בחר בעצמו: מצביע על הפריט החסר שהוא מחליף
+    init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS substitute_for INTEGER;")
     # התראות בטלפון לפי הזמנה: גם לקוח שלא נרשם יכול לבקש התראה כשההזמנה שלו מוכנה (בלי הסכמה לפרסומות)
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS order_push_subs (
@@ -370,6 +372,21 @@ try:
         );
     """)
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_review_replies_review ON review_replies(review_id, id);")
+
+    # יומן שליחות: כל מייל והתראה שנשלחו או נכשלו, עם הסיבה. מוצג בפאנל הניהול (לשונית הודעות)
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS notification_log (
+            id         SERIAL PRIMARY KEY,
+            channel    VARCHAR(10) NOT NULL,
+            recipient  TEXT,
+            subject    TEXT,
+            ok         BOOLEAN NOT NULL,
+            error      TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_notification_log_id ON notification_log(id DESC);")
+    init_cur.execute("DELETE FROM notification_log WHERE created_at < NOW() - INTERVAL '60 days';")
 
     admin_email = os.environ.get("ADMIN_EMAIL")
     admin_pass = os.environ.get("ADMIN_PASSWORD")
@@ -1778,6 +1795,21 @@ SITE_URL = os.environ.get("SITE_URL", "https://www.bakeparty.co.il").rstrip("/")
 
 _LAST_EMAIL_ERROR = None      # הסיבה לכישלון השליחה האחרון (בלי סודות), מוצגת בפאנל הניהול
 
+def _log_notify(channel, recipient, subject, ok, error=None):
+    """רושם ביומן השליחות. אף פעם לא מפיל את השליחה עצמה."""
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("INSERT INTO notification_log (channel, recipient, subject, ok, error) VALUES (%s,%s,%s,%s,%s);",
+                    (channel, (recipient or "")[:255], (subject or "")[:255], ok, (str(error)[:400] if error else None)))
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"[NOTIFY-LOG] {e}")
+
+def _push_target(endpoint):
+    host = (endpoint or "").split("/")[2] if (endpoint or "").count("/") >= 2 else ""
+    return {"fcm.googleapis.com": "אנדרואיד/כרום", "web.push.apple.com": "אייפון/ספארי",
+            "updates.push.services.mozilla.com": "פיירפוקס"}.get(host, host or "מכשיר")
+
 def _email_configured():
     return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
 
@@ -1810,6 +1842,7 @@ def _send_emails(recipients, subject, text, url="/", promo=True):
     except Exception as e:
         global _LAST_EMAIL_ERROR
         _LAST_EMAIL_ERROR = f"חיבור לשרת המייל נכשל: {str(e)[:160]}"
+        _log_notify("email", ", ".join(r[1] for r in recipients[:3]), subj, False, _LAST_EMAIL_ERROR)
         print(f"[EMAIL] connect failed: {e}"); return 0
     try:
         for uid, to, name in recipients:
@@ -1832,9 +1865,11 @@ def _send_emails(recipients, subject, text, url="/", promo=True):
                     f'<hr style="border:none;border-top:1px solid #FFD1DC"><p style="font-size:12px;color:#9B7B82">קיבלת הודעה זו כי אישרת קבלת עדכונים מ-Bake &amp; Party, גבעת שמואל. '
                     f'<a href="{unsub}" style="color:#9B7B82">להסרה מרשימת התפוצה</a></p></div>', subtype="html")
                 srv.send_message(msg); sent += 1; _LAST_EMAIL_ERROR = None
+                _log_notify("email", to, subj, True)
                 _t.sleep(0.15)
             except Exception as e:
                 _LAST_EMAIL_ERROR = f"שליחה נכשלה: {str(e)[:160]}"
+                _log_notify("email", to, subj, False, _LAST_EMAIL_ERROR)
                 print(f"[EMAIL] failed for user {uid}: {e}")
     finally:
         try: srv.quit()
@@ -1846,7 +1881,8 @@ def _html_escape(t):
 
 def _consenting_customer_emails():
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, email, name FROM users WHERE notify_consent = TRUE AND active = TRUE AND email IS NOT NULL;")
+    # רק לקוחות. עובדות ומנהלות לא מקבלות הודעות פרסום ללקוחות
+    cur.execute("SELECT id, email, name FROM users WHERE notify_consent = TRUE AND active = TRUE AND email IS NOT NULL AND role = 'customer';")
     rows = cur.fetchall(); cur.close(); conn.close()
     return rows
 
@@ -1878,7 +1914,10 @@ def _push_configured():
 
 def _send_push_rows(rows, title, body, url="/", table="push_subscriptions"):
     """rows: [(sub_id, endpoint, p256dh, auth)]. שולח, ומוחק מנויים שכבר לא תקפים. מחזיר כמה נשלחו."""
-    if not _push_configured() or not rows:
+    if not rows:
+        return 0
+    if not _push_configured():
+        _log_notify("push", f"{len(rows)} מכשירים", title, False, "התראות לטלפון לא מוגדרות בשרת (חסרים VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY)")
         return 0
     from pywebpush import webpush, WebPushException
     payload = json.dumps({"title": title, "body": body, "url": url}, ensure_ascii=False)
@@ -1888,13 +1927,17 @@ def _send_push_rows(rows, title, body, url="/", table="push_subscriptions"):
             webpush(subscription_info={"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}},
                     data=payload, vapid_private_key=VAPID_PRIVATE_KEY, vapid_claims={"sub": VAPID_SUBJECT}, ttl=60 * 60 * 24)
             sent += 1
+            _log_notify("push", _push_target(endpoint), title, True)
         except WebPushException as e:
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code in (404, 410):
                 dead.append(sub_id)
+                _log_notify("push", _push_target(endpoint), title, False, "המכשיר כבר לא רשום להתראות (בוטל בדפדפן). צריך להפעיל מחדש.")
             else:
+                _log_notify("push", _push_target(endpoint), title, False, f"שגיאה {code}: {str(e)[:200]}")
                 print(f"[PUSH] failed ({code}): {e}")
         except Exception as e:
+            _log_notify("push", _push_target(endpoint), title, False, str(e)[:200])
             print(f"[PUSH] error: {e}")
     if dead:
         conn = get_conn(); cur = conn.cursor()
@@ -1906,7 +1949,16 @@ def push_to_consenting_customers(title, body, url="/"):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("""SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
                    JOIN users u ON u.id = ps.user_id
-                   WHERE u.notify_consent = TRUE AND u.active = TRUE;""")
+                   WHERE u.notify_consent = TRUE AND u.active = TRUE AND u.role = 'customer';""")
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return _send_push_rows(rows, title, body, url)
+
+def push_to_admins(title, body, url="/admin.html"):
+    """רק למנהלות פעילות (למשל ביקורת שממתינה לאישור, שרק מנהלת יכולה לאשר)."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
+                   JOIN users u ON u.id = ps.user_id
+                   WHERE u.role = 'admin' AND u.active = TRUE;""")
     rows = cur.fetchall(); cur.close(); conn.close()
     return _send_push_rows(rows, title, body, url)
 
@@ -1917,6 +1969,8 @@ def push_to_staff(title, body, url="/staff.html"):
                    JOIN users u ON u.id = ps.user_id
                    WHERE u.role IN ('employee', 'admin') AND u.active = TRUE;""")
     rows = cur.fetchall(); cur.close(); conn.close()
+    if not rows:
+        _log_notify("push", "צוות", title, False, "אף מכשיר של הצוות לא הפעיל התראות (במסך הצוות: \"התראות בטלפון על הזמנות\")")
     return _send_push_rows(rows, title, body, url)
 
 def _setting_get(cur, key):
@@ -2010,6 +2064,13 @@ def notifications_subscribe(body: PushSubBody, sess: dict = Depends(require_auth
                    ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth
                    RETURNING id, (xmax = 0);""", (sess["user_id"], body.endpoint, p256dh, auth))
     sub_id, inserted = cur.fetchone()
+    if sess["role"] in STAFF_ROLES:
+        # מכשיר של עובדת/מנהלת: נרשם להתראות עבודה (הזמנות) בלבד, בלי הסכמה לפרסומות ובלי מייל "תודה שהצטרפת"
+        conn.commit(); cur.close(); conn.close()
+        if inserted:
+            _send_push_rows([(sub_id, body.endpoint, p256dh, auth)], "התראות על הזמנות הופעלו ✅",
+                            "מעכשיו המכשיר הזה יקבל התראה על כל הזמנה חדשה באתר.", "/staff.html")
+        return {"ok": True, "welcome_sent": bool(inserted)}
     cur.execute("UPDATE users SET notify_consent = TRUE, notify_consent_at = NOW() WHERE id = %s AND notify_consent = FALSE RETURNING name, email;", (sess["user_id"],))
     first = cur.fetchone()
     conn.commit(); cur.close(); conn.close()
@@ -2050,10 +2111,19 @@ def unsubscribe_link(u: int, t: str):
 @app.get("/api/admin/push-stats")
 def admin_push_stats(sess: dict = Depends(require_admin)):
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM users WHERE notify_consent = TRUE;"); consenting = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM users WHERE notify_consent = TRUE AND role = 'customer';"); consenting = cur.fetchone()[0]
     cur.execute("SELECT COUNT(*) FROM push_subscriptions;"); devices = cur.fetchone()[0]
     last = _setting_get(cur, "push_new_last_sent"); cur.close(); conn.close()
     return {"configured": _push_configured(), "email_configured": _email_configured(), "last_email_error": _LAST_EMAIL_ERROR, "consenting_users": consenting, "devices": devices, "last_new_products_push": last}
+
+@app.get("/api/admin/notification-log")
+def admin_notification_log(limit: int = 50, sess: dict = Depends(require_admin)):
+    limit = max(1, min(limit, 200))
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, channel, recipient, subject, ok, error, created_at FROM notification_log ORDER BY id DESC LIMIT %s;", (limit,))
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return [{"id": r[0], "channel": r[1], "recipient": r[2], "subject": r[3], "ok": r[4], "error": r[5] or "",
+             "at": _il(r[6]).strftime("%d/%m %H:%M") if r[6] else ""} for r in rows]
 
 class PushSendBody(BaseModel):
     title: str
@@ -2155,7 +2225,10 @@ def _smtp_connect():
 def _send_order_email(to, subject, lines, link):
     """מייל שירות על הזמנה (לא פרסומת): אישור הזמנה, הזמנה מוכנה וכו'."""
     global _LAST_EMAIL_ERROR
-    if not (_email_configured() and to):
+    if not to:
+        return False
+    if not _email_configured():
+        _log_notify("email", to, subject, False, "המייל לא מוגדר בשרת (חסרים SMTP_HOST / SMTP_USER / SMTP_PASSWORD ב-Railway)")
         return False
     from email.message import EmailMessage
     from email.utils import formataddr
@@ -2179,9 +2252,11 @@ def _send_order_email(to, subject, lines, link):
         finally:
             try: srv.quit()
             except Exception: pass
+        _log_notify("email", to, subject, True)
         return True
     except Exception as e:
         _LAST_EMAIL_ERROR = f"שליחת מייל הזמנה נכשלה: {str(e)[:160]}"
+        _log_notify("email", to, subject, False, _LAST_EMAIL_ERROR)
         print(f"[ORDER-EMAIL] failed: {e}")
         return False
 
@@ -2221,11 +2296,11 @@ def _order_dict(cur, row, with_items=True, staff=False):
     if staff:
         d.update({"phone": phone, "email": email or "", "registered": bool(user_id), "track_url": _track_link(oid, token)})
     if with_items:
-        cur.execute("SELECT id, product_id, name, unit_price, quantity, missing, image_url, customer_choice, customer_note, added_by_staff "
+        cur.execute("SELECT id, product_id, name, unit_price, quantity, missing, image_url, customer_choice, customer_note, added_by_staff, substitute_for "
                     "FROM order_items WHERE order_id = %s ORDER BY id;", (oid,))
         d["items"] = [{"id": r[0], "product_id": r[1], "name": r[2], "unit_price": float(r[3]), "quantity": r[4],
                        "line_total": round(float(r[3]) * r[4], 2), "missing": bool(r[5]), "image": r[6] or PLACEHOLDER,
-                       "choice": r[7], "choice_note": r[8] or "", "added_by_staff": bool(r[9])}
+                       "choice": r[7], "choice_note": r[8] or "", "added_by_staff": bool(r[9]), "substitute_for": r[10]}
                       for r in cur.fetchall()]
         d["awaiting_customer"] = status in ORDER_ACTIVE and any(i["missing"] and not i["choice"] for i in d["items"])
     return d
@@ -2368,6 +2443,8 @@ def create_order(body: OrderCreateBody, request: Request, authorization: str = H
                                f"קיבלנו את ההזמנה שלך (מספר {number}), {count} פריטים בסך ₪{total:.2f}.",
                                "נעדכן אותך כאן כשההזמנה מוכנה לאיסוף. התשלום בחנות בזמן האיסוף.",
                                f"כתובת לאיסוף: {_get_contact()['address']}"], link)
+        else:
+            _log_notify("email", f"לקוח: {name}", f"קיבלנו את ההזמנה שלך #{number}", False, "הלקוח לא השאיר מייל, ולכן לא נשלח אליו מייל אישור")
         store_mail = _get_contact().get("email")
         if store_mail:
             _send_order_email(store_mail, f"הזמנה חדשה באתר #{number}",
@@ -2471,6 +2548,9 @@ def staff_update_order_item(order_id: int, item_id: int, body: OrderItemBody, se
     if not r:
         cur.close(); conn.close()
         raise HTTPException(status_code=404, detail="הפריט לא נמצא")
+    if not body.missing:
+        # הפריט נמצא בכל זאת: תחליף שהלקוח בחר עבורו יורד מההזמנה
+        cur.execute("DELETE FROM order_items WHERE order_id = %s AND substitute_for = %s;", (order_id, item_id))
     _recalc_total(cur, order_id)
     cur.execute("SELECT total, status FROM orders WHERE id = %s;", (order_id,))
     total, status = cur.fetchone(); total = float(total)
@@ -2553,12 +2633,55 @@ def customer_missing_response(order_id: int, t: str, body: MissingResponseBody):
         if not r:
             cur.close(); conn.close()
             raise HTTPException(status_code=404, detail="הפריט לא נמצא")
+        # הלקוח שינה את דעתו: תחליף שבחר קודם לפריט הזה יורד מההזמנה
+        cur.execute("DELETE FROM order_items WHERE order_id = %s AND substitute_for = %s;", (order_id, body.item_id))
+        _recalc_total(cur, order_id)
         msg = (f"#{number}: במקום \"{r[0]}\" הלקוח מבקש: {note}" if body.choice == "replace"
                else f"#{number}: הלקוח ממשיך בלי \"{r[0]}\"")
         cur.execute("UPDATE orders SET updated_at = NOW() WHERE id = %s;", (order_id,))
     conn.commit(); cur.close(); conn.close()
     _audit(None, "order_customer_response", "order", order_id, {"choice": body.choice, "item_id": body.item_id})
     threading.Thread(target=push_to_staff, args=("💬 תשובה מלקוח", msg[:180], "/staff.html"), daemon=True).start()
+    return {"ok": True}
+
+class SubstituteBody(BaseModel):
+    item_id: int
+    product_id: int
+    quantity: int = 1
+
+@app.post("/api/orders/{order_id}/substitute")
+def customer_pick_substitute(order_id: int, t: str, body: SubstituteBody):
+    """הלקוח בוחר בעצמו מוצר מהחנות במקום פריט שחסר. המחיר נלקח מהמסד, והסכום מתעדכן."""
+    if not (1 <= body.quantity <= ORDER_MAX_QTY):
+        raise HTTPException(status_code=400, detail="כמות לא תקינה")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT token, status FROM orders WHERE id = %s FOR UPDATE;", (order_id,))
+    o = cur.fetchone()
+    if not o or not hmac.compare_digest(o[0], t or ""):
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="ההזמנה לא נמצאה")
+    if o[1] not in ("new", "preparing"):
+        cur.close(); conn.close()
+        raise HTTPException(status_code=409, detail="ההזמנה כבר מוכנה או סגורה, ולכן אי אפשר לשנות אותה מכאן. אפשר להתקשר אלינו.")
+    cur.execute("SELECT name FROM order_items WHERE id = %s AND order_id = %s AND missing;", (body.item_id, order_id))
+    miss = cur.fetchone()
+    if not miss:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="הפריט החסר לא נמצא")
+    cur.execute("SELECT name, price, stock_quantity, image_url FROM Products WHERE id = %s AND category_id IS NOT NULL;", (body.product_id,))
+    p = cur.fetchone()
+    if not p or (p[2] or 0) <= 0:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=409, detail="המוצר הזה לא זמין כרגע. אפשר לבחור מוצר אחר.")
+    cur.execute("DELETE FROM order_items WHERE order_id = %s AND substitute_for = %s;", (order_id, body.item_id))
+    cur.execute("INSERT INTO order_items (order_id, product_id, name, unit_price, quantity, image_url, substitute_for) VALUES (%s,%s,%s,%s,%s,%s,%s);",
+                (order_id, body.product_id, p[0], p[1], body.quantity, p[3], body.item_id))
+    note = f"{p[0]} × {body.quantity}"
+    cur.execute("UPDATE order_items SET customer_choice = 'replace', customer_note = %s WHERE id = %s;", (note, body.item_id))
+    _recalc_total(cur, order_id)
+    conn.commit(); cur.close(); conn.close()
+    _audit(None, "order_customer_substitute", "order", order_id, {"missing": miss[0], "picked": p[0], "qty": body.quantity})
+    threading.Thread(target=push_to_staff, args=("🔄 הלקוח בחר תחליף", f"#{_order_number(order_id)}: במקום \"{miss[0]}\" ← {note}"[:180], "/staff.html"), daemon=True).start()
     return {"ok": True}
 
 class AddItemBody(BaseModel):
@@ -2724,7 +2847,7 @@ def create_review(body: ReviewBody, request: Request, authorization: str = Heade
                 (sess["user_id"] if sess else None, name, body.rating, text or None))
     rid = cur.fetchone()[0]
     conn.commit(); cur.close(); conn.close()
-    threading.Thread(target=push_to_staff, args=("⭐ ביקורת חדשה ממתינה לאישור", f"{name}: {body.rating} כוכבים", "/admin.html"), daemon=True).start()
+    threading.Thread(target=push_to_admins, args=("⭐ ביקורת חדשה ממתינה לאישור", f"{name}: {body.rating} כוכבים", "/admin.html"), daemon=True).start()
     return {"ok": True, "pending": True, "id": rid}
 
 class ReplyBody(BaseModel):
@@ -3815,6 +3938,44 @@ def _ai_log_chat(user_id, message, reply, topic=None, on_topic=None, status="ok"
         print(f"[AI] chat-log error: {e}")
 
 
+def _parse_ai_reply(raw):
+    """מחלץ את התשובה מהפורמט המובנה {"reply","topic","on_topic"}.
+    המודל לא תמיד מחזיר JSON נקי (טקסט לפני/אחרי, ירידת שורה בתוך הטקסט, ```), ולכן מנסים כמה דרכים.
+    בשום מקרה לא מציגים ללקוח את ה-JSON עצמו."""
+    import re
+    raw = (raw or "").strip()
+    text = re.sub(r"```(?:json)?", "", raw).strip()
+    start, end = text.find("{"), text.rfind("}")
+    candidates = [text[start:end + 1]] if start != -1 and end > start else []
+    candidates.append(text)
+    for c in candidates:
+        try:
+            parsed = json.loads(c, strict=False)        # strict=False: מאפשר ירידות שורה בתוך הטקסט
+            if isinstance(parsed, dict) and parsed.get("reply"):
+                on_topic = parsed.get("on_topic")
+                if isinstance(on_topic, str):
+                    on_topic = {"true": True, "false": False}.get(on_topic.strip().lower())
+                return (str(parsed.get("reply")).strip(), str(parsed.get("topic") or "").strip().lower() or None,
+                        on_topic if isinstance(on_topic, bool) else None)
+        except Exception:
+            pass
+    # JSON שבור: מוציאים רק את הטקסט של reply
+    m = re.search(r'"reply"\s*:\s*"(.*?)"\s*,\s*"(?:topic|on_topic)"', text, re.S) or re.search(r'"reply"\s*:\s*"(.*)', text, re.S)
+    if m:
+        val = m.group(1)
+        val = re.sub(r'"\s*[,}]?\s*$', "", val)
+        try:
+            val = json.loads('"' + val.replace("\n", "\\n") + '"', strict=False)
+        except Exception:
+            val = val.replace('\\"', '"').replace("\\n", "\n")
+        tm = re.search(r'"topic"\s*:\s*"([a-z_]+)"', text)
+        om = re.search(r'"on_topic"\s*:\s*(true|false)', text)
+        return val.strip(), (tm.group(1) if tm else None), ({"true": True, "false": False}[om.group(1)] if om else None)
+    if text.startswith("{"):
+        return "", None, None                            # נראה כמו JSON שאי אפשר לקרוא: עדיף הודעת ברירת מחדל
+    return raw, None, None
+
+
 @app.get("/api/admin/ai-log")
 def admin_ai_log(limit: int = 200, only_failed: bool = False, sess: dict = Depends(require_admin)):
     """השאלות האחרונות ששאלו את ה-AI (חדשות ראשונות), כולל שם/אימייל השואל וסטטוס."""
@@ -3892,7 +4053,7 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
             model=AI_MODEL,
-            max_tokens=700,
+            max_tokens=1000,
             system=system,
             messages=messages,
         )
@@ -3902,18 +4063,7 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         # (בעיקר מודלים חינמיים) לא הצליח לשמור על הפורמט — נופלים בעדינות
         # לטקסט הגולמי כתשובה רגילה, בלי לשבור את הצ'אט, ובלי סיווג/הגנה
         # לאותה הודעה בודדת (עדיף לפספס הגנה אחת מאשר לשבור את החוויה).
-        reply, topic, on_topic = None, None, None
-        try:
-            import json, re
-            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
-            parsed = json.loads(cleaned)
-            reply = (parsed.get("reply") or "").strip()
-            topic = (parsed.get("topic") or "").strip().lower()
-            on_topic = parsed.get("on_topic")
-            if not isinstance(on_topic, bool):
-                on_topic = None
-        except Exception:
-            reply = raw
+        reply, topic, on_topic = _parse_ai_reply(raw)
 
         if not reply:
             reply = fallback

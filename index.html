@@ -2339,7 +2339,8 @@
             trackTimer = setInterval(() => {
                 if (!(document.getElementById('cart-modal').classList.contains('open') && cartStep === 'track')) { clearInterval(trackTimer); return; }
                 // לא מרעננים בזמן שהלקוח כותב בקשה לתחליף
-                const typing = [...document.querySelectorAll('.miss-q textarea')].some(t => t.value.trim() || t === document.activeElement);
+                const typing = [...document.querySelectorAll('.miss-q textarea, .miss-q .pick-q')].some(t => t.value.trim() || t === document.activeElement)
+                    || [...document.querySelectorAll('.miss-q .pick')].some(p => p.style.display === 'block');
                 if (!typing) load();
             }, 30000);
         }
@@ -2356,7 +2357,7 @@
                 ${o.status === 'new' || o.status === 'preparing' ? '<div class="info-box">נעדכן כשההזמנה מוכנה לאיסוף. הדף מתעדכן לבד.</div><div id="track-push"></div>' : ''}`}
                 ${missingHtml(o, missing)}
                 ${o.items.map(i => `<div class="cart-line${i.missing ? ' bad' : ''}"><img src="${esc(imgUrl(i.image))}" alt="" loading="lazy">
-                    <div><div class="nm">${i.added_by_staff ? '🔄 ' : ''}${esc(i.name)}</div><div class="pr">${i.quantity} × ${money(i.unit_price)}${i.added_by_staff ? ' · תחליף' : ''}</div></div><div>${i.missing ? 'חסר' : money(i.line_total)}</div></div>`).join('')}
+                    <div><div class="nm">${i.added_by_staff || i.substitute_for ? '🔄 ' : ''}${esc(i.name)}</div><div class="pr">${i.quantity} × ${money(i.unit_price)}${i.substitute_for ? ' · התחליף שבחרת' : i.added_by_staff ? ' · תחליף' : ''}</div></div><div>${i.missing ? 'חסר' : money(i.line_total)}</div></div>`).join('')}
                 <p style="font-size:.85em; color:var(--muted);">הוזמן ב-${esc(o.created_at)}${o.note ? ' · הערה: ' + esc(o.note) : ''}</p>`;
             document.getElementById('cart-body').querySelectorAll('img').forEach(i => i.onerror = function () { this.onerror = null; this.src = PLACEHOLDER; });
             bindMissing();
@@ -2365,38 +2366,72 @@
                 <button class="btn btn-ghost btn-block" type="button" onclick="closeCart()">חזרה לחנות</button>`;
         }
 
-        // פריט חסר: הלקוח בוחר להמשיך בלעדיו, לבקש תחליף, או לבטל את כל ההזמנה
+        // פריט חסר: הלקוח בוחר להמשיך בלעדיו, לבחור בעצמו מוצר אחר מהחנות במקומו, או לבטל את כל ההזמנה
+        const missEditing = new Set();
         function missingHtml(o, missing) {
             if (!missing.length) return '';
             const canAnswer = o.status === 'new' || o.status === 'preparing';
-            const label = { remove: 'ממשיכים בלי המוצר', replace: 'ביקשת תחליף' };
             const rows = missing.map(i => {
-                if (i.choice || !canAnswer) {
-                    const what = i.choice === 'replace' ? `${label.replace}: ${esc(i.choice_note)}` : (i.choice ? label.remove : 'לא נכלל בסכום');
-                    return `<div style="margin:6px 0;"><strong>${esc(i.name)}</strong> · ${what}</div>`;
+                const sub = o.items.find(x => x.substitute_for === i.id && !x.missing);
+                if ((i.choice && !missEditing.has(i.id)) || !canAnswer) {
+                    const what = i.choice === 'replace' ? (sub ? `בחרת במקומו: <strong>${esc(sub.name)}</strong> × ${sub.quantity} (${money(sub.line_total)})` : `ביקשת תחליף: ${esc(i.choice_note)}`)
+                        : (i.choice ? 'ממשיכים בלי המוצר' : 'לא נכלל בסכום');
+                    return `<div style="margin:8px 0;"><strong>${esc(i.name)}</strong> · ${what}
+                        ${canAnswer ? `<button type="button" class="rv-reply-btn" data-change="${i.id}" style="margin-inline-start:6px;">שינוי</button>` : ''}</div>`;
                 }
-                return `<div class="miss-q" data-item="${i.id}" style="background:#fff;border:1px solid #F5D9A8;border-radius:12px;padding:10px;margin:8px 0;">
+                return `<div class="miss-q" data-item="${i.id}" data-pid="${i.product_id || ''}" data-qty="${i.quantity}" style="background:#fff;border:1px solid #F5D9A8;border-radius:12px;padding:10px;margin:8px 0;">
                     <div style="margin-bottom:8px;"><strong>${esc(i.name)}</strong> חסר בחנות. מה תעדיפו?</div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                        <button class="btn btn-sm" type="button" data-c="remove">להמשיך בלעדיו</button>
-                        <button class="btn btn-sm btn-ghost" type="button" data-c="replace-open">אשמח לתחליף</button>
+                        <button class="btn btn-sm" type="button" data-c="pick-open">🔄 לבחור מוצר אחר במקומו</button>
+                        <button class="btn btn-sm btn-ghost" type="button" data-c="remove">להמשיך בלעדיו</button>
                     </div>
-                    <div class="rep" style="display:none;margin-top:8px;">
-                        <textarea rows="2" style="width:100%;padding:8px;border:1.5px solid var(--line);border-radius:10px;" placeholder="מה תרצו במקום? למשל: אותו דבר בצבע אחר, או מוצר דומה עד 20 ₪"></textarea>
-                        <button class="btn btn-sm" type="button" data-c="replace" style="margin-top:6px;">שליחה</button>
+                    <div class="pick" style="display:none;margin-top:10px;">
+                        <input type="search" class="pick-q" placeholder="🔍 חיפוש מוצר בחנות..." style="width:100%;padding:9px 12px;border:1.5px solid var(--line);border-radius:999px;">
+                        <div class="pick-title" style="font-size:.85em;color:var(--muted);margin:8px 0 4px;">מוצרים דומים שיש במלאי:</div>
+                        <div class="pick-list"></div>
+                        <button type="button" class="rv-reply-btn" data-c="note-open" style="margin-top:6px;">לא מצאתי, אכתוב מה אני רוצה</button>
+                        <div class="rep" style="display:none;margin-top:6px;">
+                            <textarea rows="2" style="width:100%;padding:8px;border:1.5px solid var(--line);border-radius:10px;" placeholder="מה תרצו במקום?"></textarea>
+                            <button class="btn btn-sm" type="button" data-c="replace" style="margin-top:6px;">שליחה</button>
+                        </div>
                     </div>
                 </div>`;
             }).join('');
-            const pending = canAnswer && missing.some(i => !i.choice);
+            const pending = canAnswer && missing.some(i => !i.choice || missEditing.has(i.id));
             return `<div class="info-box">${pending ? '⚠️ חסרים מוצרים בהזמנה. בחרו מה לעשות עם כל אחד (אם לא נשמע מכם, נמשיך בלי המוצר החסר):' : 'מוצרים שחסרו בחנות:'}${rows}
-                ${pending ? '<button class="btn btn-ghost btn-sm" type="button" id="cancel-order" style="margin-top:6px;">לבטל את כל ההזמנה</button>' : ''}<p class="msg" id="miss-msg" style="text-align:right;"></p></div>`;
+                ${canAnswer ? '<button class="btn btn-ghost btn-sm" type="button" id="cancel-order" style="margin-top:6px;">לבטל את כל ההזמנה</button>' : ''}<p class="msg" id="miss-msg" style="text-align:right;"></p></div>`;
         }
-        async function sendMissing(body) {
-            const res = await fetch(`${API}/api/orders/${trackCtx.id}/respond?t=${encodeURIComponent(trackCtx.t)}`, {
+        async function postOrder(path, body) {
+            const res = await fetch(`${API}/api/orders/${trackCtx.id}/${path}?t=${encodeURIComponent(trackCtx.t)}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(d.detail || 'לא הצלחנו לשמור את הבחירה');
+            if (body.item_id) missEditing.delete(body.item_id);
             openTracking(trackCtx.id, trackCtx.t);
+        }
+        function sendMissing(body) { return postOrder('respond', body); }
+        function pickRow(p, itemId, qty) {
+            return `<div class="cart-line" style="grid-template-columns:48px 1fr auto;">
+                <img src="${esc(imgUrl(p.image))}" alt="" loading="lazy" style="width:48px;height:48px;">
+                <div><div class="nm">${esc(p.name)}</div><div class="pr">${money(p.price)}</div></div>
+                <button class="btn btn-sm" type="button" data-pick="${p.id}" data-item="${itemId}">בחירה${qty > 1 ? ' (' + qty + ')' : ''}</button></div>`;
+        }
+        function renderPickList(box, list) {
+            const itemId = Number(box.dataset.item), qty = Number(box.dataset.qty) || 1;
+            const el = box.querySelector('.pick-list');
+            el.innerHTML = list.length ? list.map(p => pickRow(p, itemId, qty)).join('') : '<p style="color:var(--muted);font-size:.9em;">לא נמצאו מוצרים מתאימים במלאי.</p>';
+            el.querySelectorAll('img').forEach(i => i.onerror = function () { this.onerror = null; this.src = PLACEHOLDER; });
+            el.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
+                b.disabled = true;
+                postOrder('substitute', { item_id: itemId, product_id: Number(b.dataset.pick), quantity: qty })
+                    .catch(e => { b.disabled = false; const m = document.getElementById('miss-msg'); if (m) m.textContent = e.message; });
+            });
+        }
+        function similarProducts(pid) {
+            const orig = allProducts.find(p => p.id === Number(pid));
+            if (!orig) return allProducts.filter(p => p.in_stock).slice(0, 8);
+            const cats = new Set([orig.category_id, ...(orig.category_ids || [])].filter(Boolean));
+            return allProducts.filter(p => p.in_stock && p.id !== orig.id && (cats.has(p.category_id) || (p.category_ids || []).some(c => cats.has(c)))).slice(0, 8);
         }
         function bindMissing() {
             const msg = document.getElementById('miss-msg');
@@ -2404,9 +2439,24 @@
             document.querySelectorAll('.miss-q').forEach(box => {
                 const item_id = Number(box.dataset.item);
                 box.querySelector('[data-c="remove"]').onclick = () => sendMissing({ choice: 'remove', item_id }).catch(fail);
-                box.querySelector('[data-c="replace-open"]').onclick = () => { box.querySelector('.rep').style.display = 'block'; box.querySelector('textarea').focus(); };
+                box.querySelector('[data-c="pick-open"]').onclick = () => {
+                    const pick = box.querySelector('.pick'); pick.style.display = 'block';
+                    renderPickList(box, similarProducts(box.dataset.pid));
+                    pick.querySelector('.pick-q').focus();
+                };
+                let t = null;
+                box.querySelector('.pick-q').oninput = e => {
+                    clearTimeout(t);
+                    t = setTimeout(() => {
+                        const q = e.target.value.trim();
+                        box.querySelector('.pick-title').textContent = q ? 'תוצאות חיפוש (רק מה שבמלאי):' : 'מוצרים דומים שיש במלאי:';
+                        renderPickList(box, q.length >= 2 ? searchProducts(q).filter(p => p.in_stock).slice(0, 10) : similarProducts(box.dataset.pid));
+                    }, 250);
+                };
+                box.querySelector('[data-c="note-open"]').onclick = () => { box.querySelector('.rep').style.display = 'block'; box.querySelector('textarea').focus(); };
                 box.querySelector('[data-c="replace"]').onclick = () => sendMissing({ choice: 'replace', item_id, note: box.querySelector('textarea').value }).catch(fail);
             });
+            document.querySelectorAll('[data-change]').forEach(b => b.onclick = () => { missEditing.add(Number(b.dataset.change)); openTracking(trackCtx.id, trackCtx.t); });
             const c = document.getElementById('cancel-order');
             if (c) c.onclick = () => { if (confirm('לבטל את כל ההזמנה?')) sendMissing({ choice: 'cancel' }).catch(fail); };
         }
