@@ -30,6 +30,10 @@ async def add_security_headers(request: Request, call_next):
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     return response
 
+from fastapi.middleware.gzip import GZipMiddleware
+# דחיסה: רשימת המוצרים יורדת מכ-900KB לכ-100KB, כך שהאתר נטען הרבה יותר מהר בטלפון
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -50,6 +54,23 @@ DB_CONFIG = {
 try:
     init_conn = psycopg2.connect(**DB_CONFIG)
     init_cur = init_conn.cursor()
+    # במסד ריק (הקמה ראשונה) הטבלאות של המוצרים עוד לא קיימות. בלי זה כל ההקמה נכשלת,
+    # כולל משתמשים ושעות. הסכימה זהה לזו של tools/import_data.py.
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS Categories (
+            id SERIAL PRIMARY KEY, wolt_id VARCHAR(64) UNIQUE, name VARCHAR(255) NOT NULL,
+            parent_id INTEGER REFERENCES Categories(id) ON DELETE SET NULL,
+            image_url TEXT, sort_order INTEGER DEFAULT 0
+        );
+    """)
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS Products (
+            id SERIAL PRIMARY KEY, name VARCHAR(500) NOT NULL,
+            category_id INTEGER REFERENCES Categories(id) ON DELETE SET NULL,
+            price NUMERIC(10,2) NOT NULL DEFAULT 0, stock_quantity INTEGER NOT NULL DEFAULT 0,
+            weight_grams INTEGER, units_per_package INTEGER, image_url TEXT, notes TEXT
+        );
+    """)
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS product_categories (
             product_id INTEGER REFERENCES Products(id) ON DELETE CASCADE,
@@ -208,6 +229,9 @@ try:
         INSERT INTO settings (key, value) VALUES ('opening_time','09:00'),('closing_time','18:00'),
         ('delivery_override','auto') ON CONFLICT (key) DO NOTHING;
     """)
+    # תיקון כתובת החנות: מספר 23 ולא 21 (גם אם הכתובת הישנה נשמרה בעבר מהאתר)
+    init_cur.execute("UPDATE settings SET value = replace(value, 'יוני נתניהו 21', 'יוני נתניהו 23') "
+                     "WHERE key = 'contact_address' AND value LIKE '%יוני נתניהו 21%';")
 
     # --- שאלות ותשובות נפוצות (FAQ) — כולל מנגנון "מתגלה אוטומטית מהצ'אט" ---
     # topic_key: תגית קבועה שה-AI מסווג אליה כל שאלה בצ'אט (ראו _ai_build_context/ai_chat).
@@ -1120,25 +1144,39 @@ def admin_get_subcategories_flat(sess: dict = Depends(require_admin)):
     conn = get_conn(); cur = conn.cursor()
     cur.execute(
         """
-        SELECT sub.id, p.name || ' > ' || sub.name AS full_name
-        FROM Categories sub
-        JOIN Categories p ON sub.parent_id = p.id
-        ORDER BY p.name, sub.name;
+        -- תתי-קטגוריות, וגם קטגוריות ראשיות שאין להן תתי-קטגוריות (אחרת מוצר ששויך אליהן
+        -- מאבד את הקטגוריה בעריכה ונעלם מהאתר)
+        SELECT id, full_name FROM (
+            SELECT sub.id, p.name || ' > ' || sub.name AS full_name, p.name AS k1, sub.name AS k2
+            FROM Categories sub JOIN Categories p ON sub.parent_id = p.id
+            UNION ALL
+            SELECT c.id, c.name, c.name, ''
+            FROM Categories c
+            WHERE c.parent_id IS NULL AND NOT EXISTS (SELECT 1 FROM Categories ch WHERE ch.parent_id = c.id)
+        ) t ORDER BY k1, k2;
         """
     )
     rows = cur.fetchall(); cur.close(); conn.close()
     return [{"id": r[0], "name": r[1]} for r in rows]
 
+ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "webp", "gif"}
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
 @app.post("/api/admin/upload-image")
 async def upload_image(file: UploadFile = File(...), sess: dict = Depends(require_admin)):
+    # רק קבצי תמונה, ועד 8MB. קובץ אחר (למשל HTML) היה מוגש מהאתר עצמו ויכול לשמש לפריצה.
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    if ext not in ALLOWED_IMAGE_EXT:
+        raise HTTPException(status_code=400, detail="אפשר להעלות רק תמונה (jpg, png, webp, gif)")
+    data = await file.read()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="התמונה גדולה מדי (עד 8MB)")
     try:
-        ext = file.filename.split(".")[-1]
         filename = f"{uuid.uuid4().hex}.{ext}"
-        file_path = os.path.join(IMAGES_DIR, filename)
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
+        with open(os.path.join(IMAGES_DIR, filename), "wb") as f:
+            f.write(data)
         return {"url": f"/images/{filename}"}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=400, detail="שגיאה בהעלאת התמונה")
 
 # --- Products & Categories ---
@@ -1431,6 +1469,22 @@ def admin_duplicate_product(product_id: int, sess: dict = Depends(require_admin)
     conn.commit(); cur.close(); conn.close()
     return {"ok": True, "product_id": new_id}
 
+@app.get("/api/products/on-sale")
+def get_products_on_sale():
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""
+        SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
+               p.category_id, p.weight_grams, p.units_per_package, p.notes,
+               (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
+               p.is_on_sale, p.sale_price, p.sale_label
+        FROM Products p 
+        LEFT JOIN Categories c ON p.category_id = c.id 
+        WHERE p.is_on_sale = TRUE AND p.category_id IS NOT NULL
+        ORDER BY p.id;
+    """)
+    data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
+    return data
+
 @app.get("/api/products/{product_id}")
 def get_product_detail(product_id: int):
     conn = get_conn(); cur = conn.cursor()
@@ -1478,7 +1532,7 @@ def get_categories_tree():
 
 CONTACT_DEFAULTS = {
     "contact_phone": "054-9881998",
-    "contact_address": "יוני נתניהו 21, גבעת שמואל",
+    "contact_address": "יוני נתניהו 23, גבעת שמואל",
     "contact_email": "pinukimmam@gmail.com",
     "contact_whatsapp": "972549881998",
 }
@@ -1623,22 +1677,6 @@ def admin_delete_category(category_id: int, sess: dict = Depends(require_admin))
     if not deleted:
         raise HTTPException(status_code=404, detail="הקטגוריה לא נמצאה")
     return {"ok": True, "deleted": category_id}
-
-@app.get("/api/products/on-sale")
-def get_products_on_sale():
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("""
-        SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
-               p.category_id, p.weight_grams, p.units_per_package, p.notes,
-               (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label
-        FROM Products p 
-        LEFT JOIN Categories c ON p.category_id = c.id 
-        WHERE p.is_on_sale = TRUE AND p.category_id IS NOT NULL
-        ORDER BY p.id;
-    """)
-    data = _serialize_products(cur.fetchall()); cur.close(); conn.close()
-    return data
 
 # ===================== התראות (Web Push) =====================
 # עקרונות:
@@ -2221,115 +2259,286 @@ def admin_quick_deal(body: QuickDealBody, sess: dict = Depends(require_admin)):
 
 
 
-# --- SEO: Sitemap + דפי מוצר לגוגל ---
+# --- SEO: דפים שגוגל יכול לקרוא (מוצר, קטגוריה), מפת אתר ומידע על החנות ---
+# כל טקסט שמגיע מהמסד עובר html.escape, ו-JSON-LD נבנה עם json.dumps, כדי ששם עם מירכאות
+# (למשל 22*17 ס"מ) לא ישבור את הדף או את המידע שגוגל קורא.
 from fastapi.responses import Response
+import html as _html
+
+SITE_NAME = "Bake & Party"
+SITE_FULL_NAME = "Bake & Party - אפייה ומסיבות | ממלכת הגלידות מבית פינוקים"
+WOLT_URL = "https://wolt.com/he/isr/petah-tikva/venue/pinookim-givat-shmuel"
+GOOGLE_SITE_VERIFICATION = os.environ.get("GOOGLE_SITE_VERIFICATION", "").strip()
+_DAY_SCHEMA = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+def _e(t):
+    return _html.escape(str(t if t is not None else ""), quote=True)
+
+def _abs_url(path_or_url):
+    if not path_or_url:
+        return f"{SITE_URL}/logo-web.jpg"
+    if path_or_url.startswith("http"):
+        return path_or_url
+    return SITE_URL + (path_or_url if path_or_url.startswith("/") else "/" + path_or_url)
+
+def _ld(obj):
+    # "</" בתוך JSON-LD היה סוגר את תגית ה-script, לכן מבריחים אותו
+    return json.dumps(obj, ensure_ascii=False).replace("</", "<\\/")
+
+def _store_schema():
+    """מידע על החנות הפיזית בפורמט ש-Google מבין (LocalBusiness): כתובת, טלפון ושעות."""
+    c = _get_contact()
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT day_of_week, is_closed, opening_time, closing_time FROM weekly_hours ORDER BY day_of_week;")
+    hours = [{"@type": "OpeningHoursSpecification", "dayOfWeek": _DAY_SCHEMA[d], "opens": op, "closes": cl}
+             for d, closed, op, cl in cur.fetchall() if not closed]
+    cur.close(); conn.close()
+    street, _, city = c["address"].partition(",")
+    phone = c["phone"]
+    intl = "+972-" + phone.lstrip("0") if phone.startswith("0") else phone
+    return {
+        "@context": "https://schema.org",
+        "@type": "Store",
+        "@id": f"{SITE_URL}/#store",
+        "name": SITE_NAME,
+        "alternateName": ["ממלכת הגלידות מבית פינוקים", "פינוקים גבעת שמואל", "Bake and Party"],
+        "description": "חנות אפייה ומסיבות בגבעת שמואל: חומרי גלם לאפייה, אביזרי אפייה, קישוטים לעוגות, בלונים ומוצרים למסיבות.",
+        "url": SITE_URL + "/",
+        "logo": f"{SITE_URL}/logo-web.jpg",
+        "image": f"{SITE_URL}/logo-web.jpg",
+        "telephone": intl,
+        "email": c["email"],
+        "address": {"@type": "PostalAddress", "streetAddress": street.strip(),
+                    "addressLocality": (city.strip() or "גבעת שמואל"), "addressCountry": "IL"},
+        "areaServed": ["גבעת שמואל", "פתח תקווה", "בני ברק", "רמת גן", "קריית אונו"],
+        "openingHoursSpecification": hours,
+        "sameAs": [WOLT_URL],
+        "priceRange": "₪",
+    }
+
+def _seo_page(title, description, canonical, body, ld_list=(), og_image=None):
+    verify = f'<meta name="google-site-verification" content="{_e(GOOGLE_SITE_VERIFICATION)}">' if GOOGLE_SITE_VERIFICATION else ""
+    lds = "".join(f'<script type="application/ld+json">{_ld(x)}</script>' for x in ld_list)
+    return f"""<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{_e(title)}</title>
+<meta name="description" content="{_e(description)}">
+<link rel="canonical" href="{_e(canonical)}">
+<meta property="og:site_name" content="{SITE_NAME}">
+<meta property="og:title" content="{_e(title)}">
+<meta property="og:description" content="{_e(description)}">
+<meta property="og:image" content="{_e(og_image or SITE_URL + '/logo-web.jpg')}">
+<meta property="og:url" content="{_e(canonical)}">
+<meta property="og:locale" content="he_IL">
+<meta name="theme-color" content="#E05276">
+<link rel="icon" href="/icon-192.png">
+{verify}
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700&display=swap" rel="stylesheet">
+{lds}
+<style>
+:root {{ --ink:#2B1C21; --muted:#7A6369; --line:#F1E3E7; --bg:#FFFAF7; --brand:#E05276; --brand-soft:#FFE4EC; --ok:#2E8B57; }}
+* {{ box-sizing:border-box; }}
+body {{ margin:0; font-family:'Rubik',system-ui,sans-serif; background:var(--bg); color:var(--ink); }}
+a {{ color:inherit; }}
+.top {{ background:#fff; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }}
+.top-in {{ max-width:1100px; margin:auto; padding:10px 16px; display:flex; align-items:center; gap:12px; justify-content:space-between; }}
+.brand {{ display:flex; align-items:center; gap:10px; text-decoration:none; font-weight:700; color:var(--brand); font-size:1.15em; }}
+.brand img {{ width:42px; height:42px; border-radius:12px; object-fit:cover; }}
+.pill {{ display:inline-block; background:var(--brand); color:#fff; text-decoration:none; padding:10px 18px; border-radius:999px; font-weight:700; }}
+.pill.ghost {{ background:#fff; color:var(--brand); border:2px solid var(--brand-soft); }}
+.wrap {{ max-width:1100px; margin:auto; padding:18px 16px 40px; }}
+.crumbs {{ font-size:.9em; color:var(--muted); margin-bottom:14px; }}
+.crumbs a {{ text-decoration:none; color:var(--brand); }}
+.prod {{ display:grid; grid-template-columns:1fr 1fr; gap:28px; background:#fff; border-radius:24px; padding:24px; border:1px solid var(--line); }}
+.prod img {{ width:100%; max-height:380px; object-fit:contain; background:#fff; border-radius:16px; }}
+h1 {{ margin:0 0 8px; font-size:1.6em; line-height:1.3; }}
+.price {{ font-size:1.8em; font-weight:700; color:var(--brand); margin:10px 0; }}
+.stock {{ display:inline-block; padding:4px 12px; border-radius:999px; font-size:.9em; font-weight:500; background:#E7F5EC; color:var(--ok); }}
+.stock.out {{ background:#F1F1F1; color:#888; }}
+.desc {{ line-height:1.7; color:#4a3a3f; }}
+.actions {{ display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }}
+h2 {{ font-size:1.25em; margin:30px 0 12px; }}
+.grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; }}
+.card {{ background:#fff; border:1px solid var(--line); border-radius:18px; padding:10px; text-decoration:none; display:flex; flex-direction:column; gap:6px; }}
+.card img {{ width:100%; aspect-ratio:1; object-fit:contain; border-radius:12px; background:#fff; }}
+.card b {{ font-weight:500; font-size:.92em; line-height:1.35; }}
+.card span {{ color:var(--brand); font-weight:700; }}
+.chips {{ display:flex; flex-wrap:wrap; gap:8px; }}
+.chips a {{ background:#fff; border:1px solid var(--line); border-radius:999px; padding:8px 14px; text-decoration:none; }}
+.foot {{ text-align:center; color:var(--muted); font-size:.88em; padding:24px 16px; border-top:1px solid var(--line); }}
+@media (max-width:700px) {{ .prod {{ grid-template-columns:1fr; padding:16px; }} h1 {{ font-size:1.3em; }} .grid {{ grid-template-columns:repeat(2,1fr); }} }}
+</style>
+</head>
+<body>
+<header class="top"><div class="top-in">
+<a class="brand" href="/"><img src="/icon-192.png" alt="Bake & Party">Bake &amp; Party</a>
+<a class="pill" href="/">לכל המוצרים</a>
+</div></header>
+<main class="wrap">{body}</main>
+<footer class="foot">{_e(SITE_NAME)} · אפייה ומסיבות · {_e(_get_contact()["address"])} · {_e(_get_contact()["phone"])}</footer>
+</body>
+</html>"""
+
+def _card_html(pid, name, price, image):
+    return (f'<a class="card" href="/product/{pid}"><img loading="lazy" src="{_e(_abs_url(image) if image else "/icon-192.png")}" alt="{_e(name)}">'
+            f'<b>{_e(name)}</b><span>₪{float(price):.2f}</span></a>')
+
+def _category_chain(cur, cat_id):
+    chain = []
+    while cat_id:
+        cur.execute("SELECT id, name, parent_id FROM Categories WHERE id = %s;", (cat_id,))
+        r = cur.fetchone()
+        if not r:
+            break
+        chain.insert(0, (r[0], r[1])); cat_id = r[2]
+    return chain
+
+def _breadcrumb_ld(items):
+    return {"@context": "https://schema.org", "@type": "BreadcrumbList",
+            "itemListElement": [{"@type": "ListItem", "position": i + 1, "name": n, "item": u} for i, (n, u) in enumerate(items)]}
 
 @app.get("/sitemap.xml")
 def sitemap():
-    """מפת אתר דינמית — גוגל קורא אותה כדי לדעת אילו דפים קיימים."""
+    """מפת אתר: דף הבית, כל הקטגוריות וכל המוצרים. גוגל קורא אותה כדי לדעת אילו דפים קיימים."""
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, name FROM Products WHERE category_id IS NOT NULL ORDER BY id;")
-    products = cur.fetchall()
+    cur.execute("SELECT id FROM Categories ORDER BY id;")
+    cats = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT id FROM Products WHERE category_id IS NOT NULL ORDER BY id;")
+    prods = [r[0] for r in cur.fetchall()]
     cur.close(); conn.close()
-
-    base = "https://www.bakeparty.co.il"
-    urls = [f"""  <url><loc>{base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>"""]
-    # רק דפי מוצר אמיתיים. (הקטגוריות אין להן דף URL משלהן, אז לא מכניסים אותן —
-    # אחרת נוצרות כתובות שבורות/כפולות שגוגל מנסה לסרוק ונכשל.)
-    for pid, pname in products:
-        urls.append(f"""  <url><loc>{base}/product/{pid}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>""")
-    
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-{chr(10).join(urls)}
-</urlset>"""
+    urls = [f"  <url><loc>{SITE_URL}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>"]
+    urls += [f"  <url><loc>{SITE_URL}/category/{c}</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>" for c in cats]
+    urls += [f"  <url><loc>{SITE_URL}/product/{p}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>" for p in prods]
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + "\n".join(urls) + "\n</urlset>"
     return Response(content=xml, media_type="application/xml")
-
 
 @app.get("/product/{product_id}")
 def product_seo_page(product_id: int):
-    """דף מוצר עם SEO מלא — schema.org, meta tags, Open Graph. גוגל סורק את זה."""
+    """דף מוצר שגוגל יכול לקרוא: כותרת, תיאור, מחיר, מלאי, ומידע מובנה (schema.org)."""
     conn = get_conn(); cur = conn.cursor()
-    cur.execute(
-        "SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, p.notes "
-        "FROM Products p LEFT JOIN Categories c ON p.category_id = c.id WHERE p.id = %s;",
-        (product_id,),
-    )
+    cur.execute("SELECT p.id, p.name, p.price, p.stock_quantity, p.category_id, p.image_url, p.notes, "
+                "p.weight_grams, p.units_per_package FROM Products p WHERE p.id = %s;", (product_id,))
     p = cur.fetchone()
-    cur.close(); conn.close()
     if not p:
+        cur.close(); conn.close()
         raise HTTPException(status_code=404, detail="מוצר לא נמצא")
-    
-    name, price, in_stock, category, image, desc = p[1], float(p[2]), p[3] > 0, p[4] or "", p[5] or "", p[6] or ""
-    availability = "https://schema.org/InStock" if in_stock else "https://schema.org/OutOfStock"
-    
-    html = f"""<!DOCTYPE html>
-<html lang="he" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{name} | Bake & Party - אפייה ומסיבות</title>
-    <meta name="description" content="{name} - {desc[:120] if desc else category + ' | Bake & Party אפייה ומסיבות בגבעת שמואל'}">
-    <meta property="og:title" content="{name} | Bake & Party">
-    <meta property="og:description" content="{desc[:200] if desc else 'אפייה ומסיבות בגבעת שמואל'}">
-    <meta property="og:image" content="{image}">
-    <meta property="og:type" content="product">
-    <meta property="og:url" content="https://www.bakeparty.co.il/product/{product_id}">
-    <meta property="product:price:amount" content="{price}">
-    <meta property="product:price:currency" content="ILS">
-    <link rel="canonical" href="https://www.bakeparty.co.il/product/{product_id}">
-    <script type="application/ld+json">
-    {{
-        "@context": "https://schema.org",
-        "@type": "Product",
-        "name": "{name}",
-        "image": "{image}",
-        "description": "{desc}",
-        "brand": {{"@type": "Brand", "name": "Bake & Party"}},
-        "offers": {{
-            "@type": "Offer",
-            "price": "{price}",
-            "priceCurrency": "ILS",
-            "availability": "{availability}",
-            "seller": {{
-                "@type": "LocalBusiness",
-                "name": "Bake & Party - ממלכת הגלידות מבית פינוקים",
-                "address": {{
-                    "@type": "PostalAddress",
-                    "streetAddress": "יוני נתניהו 21",
-                    "addressLocality": "גבעת שמואל",
-                    "addressCountry": "IL"
-                }}
-            }}
-        }}
-    }}
-    </script>
-    <style>
-        body {{ font-family: 'Segoe UI', sans-serif; background: #FFF9F5; color: #4A2E35; margin: 0; direction: rtl; }}
-        .container {{ max-width: 700px; margin: 40px auto; padding: 20px; text-align: center; }}
-        .prod-img {{ max-width: 300px; border-radius: 16px; margin: 20px auto; }}
-        .price {{ font-size: 2em; color: #E05276; font-weight: bold; margin: 16px 0; }}
-        .cat {{ color: #9B7B82; margin: 10px 0; }}
-        .desc {{ line-height: 1.7; margin: 16px 0; }}
-        .back {{ display: inline-block; margin-top: 20px; background: #FF85A2; color: #fff; padding: 12px 30px;
-            border-radius: 20px; text-decoration: none; font-weight: bold; }}
-        .back:hover {{ background: #E05276; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <a href="/" style="text-decoration:none;"><h1 style="color:#E05276;">Bake & Party</h1></a>
-        <p class="cat">{category}</p>
-        <img src="{image}" alt="{name}" class="prod-img" onerror="this.style.display='none'">
-        <h2>{name}</h2>
-        <div class="price">₪{price:.2f}</div>
-        {"<p class='desc'>" + desc + "</p>" if desc else ""}
-        <p>{"✅ במלאי" if in_stock else "❌ אזל מהמלאי"}</p>
-        <a href="/" class="back">→ לכל המוצרים</a>
+    pid, name, price, stock, cat_id, image, notes, weight, units = p
+    price = float(price); in_stock = (stock or 0) > 0
+    chain = _category_chain(cur, cat_id)
+    related = []
+    if cat_id:
+        cur.execute("SELECT id, name, price, image_url FROM Products WHERE category_id = %s AND id <> %s "
+                    "ORDER BY (stock_quantity > 0) DESC, id LIMIT 12;", (cat_id, pid))
+        related = cur.fetchall()
+    cur.close(); conn.close()
+
+    cat_name = chain[-1][1] if chain else ""
+    canonical = f"{SITE_URL}/product/{pid}"
+    img_abs = _abs_url(image)
+    desc_text = (notes or "").strip()
+    meta_desc = (desc_text[:140] + " | " if desc_text else "") + f"{name} ב-₪{price:.2f}" + \
+                (f" | {cat_name}" if cat_name else "") + " | Bake & Party, חנות אפייה ומסיבות בגבעת שמואל"
+    product_ld = {
+        "@context": "https://schema.org", "@type": "Product", "name": name, "image": [img_abs],
+        "description": desc_text or f"{name} - {cat_name or 'אפייה ומסיבות'}", "sku": str(pid),
+        "category": " > ".join(n for _, n in chain) or None,
+        "offers": {"@type": "Offer", "url": canonical, "price": f"{price:.2f}", "priceCurrency": "ILS",
+                   "availability": "https://schema.org/InStock" if in_stock else "https://schema.org/OutOfStock",
+                   "itemCondition": "https://schema.org/NewCondition",
+                   "seller": {"@id": f"{SITE_URL}/#store", "@type": "Store", "name": SITE_NAME}},
+    }
+    crumbs = [("דף הבית", SITE_URL + "/")] + [(n, f"{SITE_URL}/category/{cid}") for cid, n in chain] + [(name, canonical)]
+    crumb_html = " › ".join([f'<a href="/">דף הבית</a>'] + [f'<a href="/category/{cid}">{_e(n)}</a>' for cid, n in chain] + [_e(name)])
+    meta = []
+    if weight: meta.append(f"משקל: {weight} גרם")
+    if units: meta.append(f"יחידות באריזה: {units}")
+    wa = _get_contact()["whatsapp"]
+    wa_text = f"שלום, אשמח להזמין: {name}"
+    body = f"""
+<nav class="crumbs">{crumb_html}</nav>
+<article class="prod">
+  <img src="{_e(img_abs)}" alt="{_e(name)}">
+  <div>
+    <h1>{_e(name)}</h1>
+    {f'<div style="color:var(--muted)">{_e(cat_name)}</div>' if cat_name else ''}
+    <div class="price">₪{price:.2f}</div>
+    <span class="stock{'' if in_stock else ' out'}">{'במלאי בחנות' if in_stock else 'אזל מהמלאי'}</span>
+    {f'<p class="desc">{_e(desc_text)}</p>' if desc_text else ''}
+    {f'<p class="desc">{_e(" · ".join(meta))}</p>' if meta else ''}
+    <div class="actions">
+      <a class="pill" href="/#p={pid}">לצפייה בחנות האונליין</a>
+      <a class="pill ghost" href="https://wa.me/{_e(wa)}?text={_e(_url_quote(wa_text))}" rel="noopener">הזמנה בוואטסאפ</a>
     </div>
-</body>
-</html>"""
+  </div>
+</article>
+{('<h2>עוד ב' + _e(cat_name) + '</h2><div class="grid">' + "".join(_card_html(*r) for r in related) + '</div>') if related else ''}
+"""
+    html = _seo_page(f"{name} | {SITE_NAME} גבעת שמואל", meta_desc, canonical, body,
+                     [product_ld, _breadcrumb_ld(crumbs)], og_image=img_abs)
     return Response(content=html, media_type="text/html")
+
+def _url_quote(t):
+    from urllib.parse import quote
+    return quote(t)
+
+@app.get("/category/{category_id}")
+def category_seo_page(category_id: int):
+    """דף קטגוריה שגוגל יכול לקרוא: כל המוצרים בקטגוריה עם קישורים לדף של כל מוצר."""
+    conn = get_conn(); cur = conn.cursor()
+    chain = _category_chain(cur, category_id)
+    if not chain:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="קטגוריה לא נמצאה")
+    cur.execute("SELECT id, name FROM Categories WHERE parent_id = %s ORDER BY sort_order, id;", (category_id,))
+    subs = cur.fetchall()
+    cur.execute("""
+        WITH RECURSIVE subtree AS (
+            SELECT id FROM Categories WHERE id = %s
+            UNION ALL SELECT c.id FROM Categories c JOIN subtree s ON c.parent_id = s.id)
+        SELECT DISTINCT p.id, p.name, p.price, p.image_url, (p.stock_quantity > 0) AS ok
+        FROM Products p
+        WHERE p.category_id IN (SELECT id FROM subtree)
+           OR EXISTS (SELECT 1 FROM product_categories pc WHERE pc.product_id = p.id AND pc.category_id IN (SELECT id FROM subtree))
+        ORDER BY ok DESC, p.id LIMIT 300;
+    """, (category_id,))
+    prods = cur.fetchall()
+    cur.close(); conn.close()
+    name = chain[-1][1]
+    canonical = f"{SITE_URL}/category/{category_id}"
+    crumbs = [("דף הבית", SITE_URL + "/")] + [(n, f"{SITE_URL}/category/{cid}") for cid, n in chain]
+    crumb_html = " › ".join([f'<a href="/">דף הבית</a>'] + [f'<a href="/category/{cid}">{_e(n)}</a>' for cid, n in chain[:-1]] + [_e(name)])
+    sample = ", ".join(r[1] for r in prods[:4])
+    meta_desc = f"{name} בגבעת שמואל: {len(prods)} מוצרים" + (f", כמו {sample}" if sample else "") + ". Bake & Party, חנות אפייה ומסיבות."
+    list_ld = {"@context": "https://schema.org", "@type": "ItemList", "name": name,
+               "itemListElement": [{"@type": "ListItem", "position": i + 1, "url": f"{SITE_URL}/product/{r[0]}", "name": r[1]}
+                                   for i, r in enumerate(prods[:100])]}
+    body = f"""
+<nav class="crumbs">{crumb_html}</nav>
+<h1>{_e(name)} <span style="font-weight:400;color:var(--muted);font-size:.65em">ב-Bake &amp; Party גבעת שמואל</span></h1>
+{('<div class="chips" style="margin:14px 0">' + "".join(f'<a href="/category/{sid}">{_e(sn)}</a>' for sid, sn in subs) + '</div>') if subs else ''}
+<div class="actions" style="margin:10px 0 20px"><a class="pill" href="/#c={category_id}">לקנייה באתר</a></div>
+<div class="grid">{"".join(_card_html(r[0], r[1], r[2], r[3]) for r in prods) or '<p>אין כרגע מוצרים בקטגוריה הזו.</p>'}</div>
+"""
+    html = _seo_page(f"{name} | {SITE_NAME} גבעת שמואל", meta_desc, canonical, body, [list_ld, _breadcrumb_ld(crumbs)])
+    return Response(content=html, media_type="text/html")
+
+def _render_index_html():
+    """index.html עם מידע על החנות לגוגל (Store) ותג אימות של Google Search Console אם הוגדר."""
+    with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8") as f:
+        page = f.read()
+    extra = ""
+    try:
+        extra += f'<script type="application/ld+json">{_ld(_store_schema())}</script>'
+        extra += f'<script type="application/ld+json">{_ld({"@context": "https://schema.org", "@type": "WebSite", "name": SITE_NAME, "url": SITE_URL + "/"})}</script>'
+    except Exception as e:
+        print(f"[SEO] store schema failed: {e}")
+    if GOOGLE_SITE_VERIFICATION:
+        extra += f'<meta name="google-site-verification" content="{_e(GOOGLE_SITE_VERIFICATION)}">'
+    return page.replace("<!--SEO_HEAD-->", extra, 1)
 
 
 # ============================================================
@@ -2429,7 +2638,9 @@ def compare_stock_with_wolt_file(file_path):
         if not name or name.lower() == "nan":
             continue
         is_forced_out = str(row.get("inventory_mode", "")) == "forced_out_of_stock"
-        is_disabled = has_enabled_col and (row.get("enabled") is False)
+        # pandas מחזיר numpy.bool_ ולא bool של פייתון, ולכן "is False" אף פעם לא תפס מוצר מושבת
+        en = row.get("enabled") if has_enabled_col else None
+        is_disabled = has_enabled_col and pd.notna(en) and str(en).strip().lower() in ("false", "0", "0.0")
         is_out = is_forced_out or is_disabled
         price = row.get("price")
         price = float(price) if pd.notna(price) else None
@@ -2491,6 +2702,8 @@ def compare_stock_with_wolt_file(file_path):
             new_products.append({
                 "wolt_name": name,
                 "price": price,
+                # וולט לוקחים 30% יותר. המחיר באתר = מחיר וולט חלקי 1.3, מעוגל ל-x.9 (כמו בייבוא)
+                "site_price": _wolt_price(price, True, "nine") if price is not None else None,
                 "available": not is_out,
                 "image_url": image_url,
                 "weight_grams": weight,
@@ -2929,7 +3142,7 @@ _NO_CACHE_HTML = {"Cache-Control": "no-cache, no-store, must-revalidate"}
 
 @app.get("/")
 def serve_index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers=_NO_CACHE_HTML)
+    return HTMLResponse(_render_index_html(), headers=_NO_CACHE_HTML)
 
 @app.get("/admin.html")
 def serve_admin():
@@ -2938,6 +3151,11 @@ def serve_admin():
 @app.get("/staff.html")
 def serve_staff():
     return FileResponse(os.path.join(STATIC_DIR, "staff.html"), headers=_NO_CACHE_HTML)
+
+@app.get("/logo-web.jpg")
+def serve_logo_web():
+    # גרסה קלה של הלוגו (כ-50KB במקום 2MB) לשימוש באתר עצמו
+    return FileResponse(os.path.join(STATIC_DIR, "logo-web.jpg"), headers={"Cache-Control": "public, max-age=604800"})
 
 @app.get("/logo.jpg")
 def serve_logo():
