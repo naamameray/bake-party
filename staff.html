@@ -102,7 +102,7 @@ td.num,th.num{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
 </div>
 
 <script>
-const API = 'https://bake-party-production.up.railway.app';
+const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // בפיתוח מקומי: השרת המקומי ולא האתר החי
 const TOKEN_KEY = 'bp_token';
 const $ = id => document.getElementById(id);
 const token = () => { try { return localStorage.getItem(TOKEN_KEY); } catch(e) { return null; } };

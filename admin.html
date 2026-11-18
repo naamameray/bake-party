@@ -454,7 +454,7 @@
     </div>
 
     <script>
-        const API = 'https://bake-party-production.up.railway.app';
+        const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // בפיתוח מקומי: השרת המקומי ולא האתר החי
         const TOKEN_KEY = 'bp_token';
 
         function token(){ return localStorage.getItem(TOKEN_KEY); }
@@ -679,7 +679,7 @@
                     m.subcategories.forEach(s => {
                         subsHtml += `
                             <div class="admin-subcat-row">
-                                <span>↳ ${s.name} <small style="color:#aaa;">(${s.product_count} מוצרים)</small></span>
+                                <span>↳ ${escHtml(s.name)} <small style="color:#aaa;">(${s.product_count} מוצרים)</small></span>
                                 <div class="admin-cat-actions">
                                     <button class="btn ghost" style="padding:4px 8px; font-size:0.8em;" onclick="editCategoryPrompt(${s.id}, '${s.name.replace(/'/g, "\\'")}')">ערוך</button>
                                     <button class="btn danger" style="padding:4px 8px; font-size:0.8em;" onclick="deleteCategory(${s.id}, '${s.name.replace(/'/g, "\\'")}')">מחק</button>
@@ -691,7 +691,7 @@
 
                 d.innerHTML = `
                     <div class="admin-cat-header">
-                        <span>📁 ${m.name} <small style="color:#aaa;font-weight:normal;">(${m.product_count} מוצרים תחת הראשי)</small></span>
+                        <span>📁 ${escHtml(m.name)} <small style="color:#aaa;font-weight:normal;">(${m.product_count} מוצרים תחת הראשי)</small></span>
                         <div class="admin-cat-actions">
                             <button class="btn ghost" style="padding:4px 8px; font-size:0.8em;" onclick="editCategoryPrompt(${m.id}, '${m.name.replace(/'/g, "\\'")}')">ערוך שם</button>
                             <button class="btn danger" style="padding:4px 8px; font-size:0.8em;" onclick="deleteCategory(${m.id}, '${m.name.replace(/'/g, "\\'")}')">מחק</button>
@@ -839,7 +839,7 @@
         function catOptionsHtml(selectedId) {
             let html = '<option value="">— ללא —</option>';
             allSubcatsFlat.forEach(c => {
-                html += `<option value="${c.id}" ${String(c.id) === String(selectedId) ? 'selected' : ''}>${c.name}</option>`;
+                html += `<option value="${c.id}" ${String(c.id) === String(selectedId) ? 'selected' : ''}>${escHtml(c.name)}</option>`;
             });
             return html;
         }
@@ -872,7 +872,7 @@
                 row.innerHTML = `
                     <img src="${img}" onerror="this.src='${PLACEHOLDER_IMG}'" alt="">
                     <div>
-                        <div class="prod-name">${p.name}</div>
+                        <div class="prod-name">${escHtml(p.name)}</div>
                         ${noCat ? '<span class="prod-warn">⚠️ ללא קטגוריה — לא מוצג באתר</span>' : ''}
                     </div>
                     <select class="prod-cat-select cat-combo cat1-select">${catOptionsHtml(cat1)}</select>
@@ -987,8 +987,8 @@
             return `
                 <div class="wolt-check-item" id="wci-${item.our_id}">
                     <div class="wci-info">
-                        <div class="wci-name">${item.our_name}</div>
-                        <div class="wci-match">התאמה בוולט: "${item.wolt_name}" (${Math.round(item.similarity * 100)}% דמיון)</div>
+                        <div class="wci-name">${escHtml(item.our_name)}</div>
+                        <div class="wci-match">התאמה בוולט: "${escHtml(item.wolt_name)}" (${Math.round(item.similarity * 100)}% דמיון)</div>
                     </div>
                     <button class="btn" onclick="applyWoltStockChange(${item.our_id}, ${newStock}, this)">${btnLabel}</button>
                 </div>`;
@@ -997,27 +997,27 @@
         window._woltNewProducts = [];
 
         function woltNewProductHtml(item, idx) {
-            const priceStr = item.price != null ? `₪${item.price.toFixed(2)}` : 'לא ידוע';
+            const priceStr = item.price != null ? `בוולט ₪${item.price.toFixed(2)} · באתר ₪${(item.site_price ?? item.price).toFixed(2)}` : 'לא ידוע';
             const availStr = item.available ? 'זמין בוולט' : 'אזל גם בוולט';
             const imgPreview = item.image_url
-                ? `<img src="${item.image_url}" style="width:44px; height:44px; object-fit:contain; border-radius:8px; border:1px solid var(--pink-light); margin-left:10px;">`
+                ? `<img src="${escHtml(item.image_url)}" style="width:44px; height:44px; object-fit:contain; border-radius:8px; border:1px solid var(--pink-light); margin-left:10px;">`
                 : '';
             return `
                 <div class="wolt-check-item" id="wcn-${idx}">
                     ${imgPreview}
                     <div class="wci-info">
-                        <div class="wci-name">${item.wolt_name}</div>
+                        <div class="wci-name">${escHtml(item.wolt_name)}</div>
                         <div class="wci-match">${priceStr} · ${availStr}</div>
                     </div>
                     <button class="btn" onclick="toggleWoltNewForm(${idx})">✏️ עריכה ואישור</button>
                 </div>
                 <div class="wolt-new-form" id="wcn-form-${idx}" style="display:none;">
                     <label style="font-size:0.85em;">שם המוצר</label>
-                    <input type="text" id="wcn-name-${idx}" value="${(item.wolt_name || '').replace(/"/g, '&quot;')}">
+                    <input type="text" id="wcn-name-${idx}" value="${escHtml(item.wolt_name || '')}">
                     <div style="display:flex; gap:10px;">
                         <div style="flex:1;">
-                            <label style="font-size:0.85em;">מחיר (₪)</label>
-                            <input type="number" step="0.01" id="wcn-price-${idx}" value="${item.price != null ? item.price : ''}">
+                            <label style="font-size:0.85em;">מחיר באתר (₪, אחרי הורדת 30% של וולט)</label>
+                            <input type="number" step="0.01" id="wcn-price-${idx}" value="${item.site_price != null ? item.site_price : (item.price != null ? item.price : '')}">
                         </div>
                         <div style="flex:1;">
                             <label style="font-size:0.85em;">משקל (גרם, אופציונלי)</label>
@@ -1115,7 +1115,7 @@
                 div.style.cssText = 'display:flex; align-items:center; gap:6px; padding:8px 0; border-bottom:1px solid #f0e0e8; flex-wrap:wrap;';
                 const current = p.is_on_sale ? p.sale_label : '';
                 div.innerHTML = `
-                    <span style="flex:1; min-width:120px; font-size:0.9em; font-weight:bold;">${p.name}</span>
+                    <span style="flex:1; min-width:120px; font-size:0.9em; font-weight:bold;">${escHtml(p.name)}</span>
                     <span style="color:var(--muted); font-size:0.85em; min-width:55px;">₪${p.price.toFixed(2)}</span>
                     <button class="deal-chip ${current === '4 ב-₪25' ? 'deal-active' : ''}" onclick="setDeal(${p.id},'4b25',this)">4ב25</button>
                     <button class="deal-chip ${current === '6 ב-₪55' ? 'deal-active' : ''}" onclick="setDeal(${p.id},'6b55',this)">6ב55</button>
