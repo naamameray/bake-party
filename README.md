@@ -199,7 +199,18 @@ bakeparty/
 - באייפון התראות עובדות רק אחרי "הוספה למסך הבית".
 - `push_to_staff(...)` קיים בקוד ויופעל בשלב ההזמנות.
 
-### מייל (SMTP)
+### מייל דרך Brevo (מומלץ)
+
+Railway חוסם שליחת מייל ב-SMTP (השגיאה `Network is unreachable`), ולכן שולחים דרך Brevo, שעובד דרך HTTPS. חינם עד 300 מיילים ביום.
+1. נרשמים ב-brevo.com.
+2. Senders, domains, IPs ← Senders ← מוסיפים ומאמתים את כתובת השולח (מקבלים מייל אימות).
+3. SMTP & API ← API Keys ← יוצרים מפתח.
+4. ב-Railway (Variables): `BREVO_API_KEY` = המפתח, `EMAIL_FROM` = כתובת השולח שאומתה. אחרי שמירה, Deploy.
+5. בפאנל ← הודעות ← "שליחה אליי לבדיקה", ובודקים ב"יומן שליחות".
+
+אם `BREVO_API_KEY` מוגדר, הוא משמש במקום SMTP.
+
+### מייל (SMTP, לא עובד ב-Railway בתוכנית הרגילה)
 
 מוסיפים ב-Railway (Variables): `SMTP_HOST`, `SMTP_PORT` (465 או 587), `SMTP_USER`, `SMTP_PASSWORD`, ואופציונלי `SMTP_FROM` ו-`SITE_URL`.
 מייל נשלח רק ללקוחות שאישרו התראות. בכל מייל קישור הסרה אישי (`/unsubscribe`), והוא מסומן "פרסומת" לפי החוק. הודעת תודה נשלחת פעם אחת באישור.

@@ -1791,6 +1791,10 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "465") or 465)
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "") or SMTP_USER
+# שליחה דרך Brevo (בחינם עד 300 מיילים ביום). עובד דרך האינטרנט (HTTPS) ולא דרך SMTP,
+# ולכן עובד גם כש-Railway חוסם SMTP. אם מוגדר BREVO_API_KEY, משתמשים בו במקום SMTP.
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "").strip()
+EMAIL_FROM = (os.environ.get("EMAIL_FROM", "") or SMTP_FROM).strip()
 SITE_URL = os.environ.get("SITE_URL", "https://www.bakeparty.co.il").rstrip("/")
 
 _LAST_EMAIL_ERROR = None      # הסיבה לכישלון השליחה האחרון (בלי סודות), מוצגת בפאנל הניהול
@@ -1810,8 +1814,63 @@ def _push_target(endpoint):
     return {"fcm.googleapis.com": "אנדרואיד/כרום", "web.push.apple.com": "אייפון/ספארי",
             "updates.push.services.mozilla.com": "פיירפוקס"}.get(host, host or "מכשיר")
 
+def _email_mode():
+    if BREVO_API_KEY and EMAIL_FROM:
+        return "brevo"
+    if SMTP_HOST and SMTP_USER and SMTP_PASSWORD:
+        return "smtp"
+    return None
+
 def _email_configured():
-    return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
+    return _email_mode() is not None
+
+EMAIL_NOT_CONFIGURED = "המייל לא מוגדר בשרת. צריך להוסיף ב-Railway את BREVO_API_KEY ו-EMAIL_FROM (או הגדרות SMTP)."
+
+class _Mailer:
+    """פותח חיבור פעם אחת (ב-SMTP) ושולח כמה מיילים. ב-Brevo כל מייל הוא בקשת HTTPS נפרדת."""
+    def __enter__(self):
+        self.mode = _email_mode()
+        self.srv = None
+        if self.mode == "smtp":
+            import smtplib, ssl
+            if SMTP_PORT == 465:
+                self.srv = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=30)
+            else:
+                self.srv = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30); self.srv.starttls(context=ssl.create_default_context())
+            self.srv.login(SMTP_USER, SMTP_PASSWORD)
+        return self
+
+    def send(self, to, subject, text, html, headers=None):
+        if self.mode == "brevo":
+            import urllib.request, urllib.error
+            body = {"sender": {"name": "Bake & Party", "email": EMAIL_FROM}, "to": [{"email": to}],
+                    "subject": subject, "textContent": text, "htmlContent": html}
+            if headers:
+                body["headers"] = headers
+            req = urllib.request.Request(os.environ.get("BREVO_API_URL", "https://api.brevo.com/v3/smtp/email"), data=json.dumps(body).encode(),
+                                         headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json", "Accept": "application/json"})
+            try:
+                urllib.request.urlopen(req, timeout=20).read()
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode("utf-8", "replace")[:200]
+                raise RuntimeError(f"Brevo {e.code}: {detail}")
+            return
+        from email.message import EmailMessage
+        from email.utils import formataddr
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = formataddr(("Bake & Party", SMTP_FROM))
+        msg["To"] = to
+        for k, v in (headers or {}).items():
+            msg[k] = v
+        msg.set_content(text)
+        msg.add_alternative(html, subtype="html")
+        self.srv.send_message(msg)
+
+    def __exit__(self, *a):
+        if self.srv:
+            try: self.srv.quit()
+            except Exception: pass
 
 def _unsub_secret():
     conn = get_conn(); cur = conn.cursor()
@@ -1826,21 +1885,15 @@ def _unsub_token(user_id):
 
 def _send_emails(recipients, subject, text, url="/", promo=True):
     """recipients: [(user_id, email, name)]. כל מייל כולל קישור הסרה אישי. מחזיר כמה נשלחו."""
+    global _LAST_EMAIL_ERROR
     if not _email_configured() or not recipients:
         return 0
-    import smtplib, ssl, time as _t
-    from email.message import EmailMessage
-    from email.utils import formataddr
+    import time as _t
     subj = ("פרסומת | " + subject) if promo else subject        # חוק התקשורת (סעיף 30א): הודעה פרסומית מסומנת
     sent = 0
     try:
-        if SMTP_PORT == 465:
-            srv = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=30)
-        else:
-            srv = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30); srv.starttls(context=ssl.create_default_context())
-        srv.login(SMTP_USER, SMTP_PASSWORD)
+        mailer = _Mailer().__enter__()
     except Exception as e:
-        global _LAST_EMAIL_ERROR
         _LAST_EMAIL_ERROR = f"חיבור לשרת המייל נכשל: {str(e)[:160]}"
         _log_notify("email", ", ".join(r[1] for r in recipients[:3]), subj, False, _LAST_EMAIL_ERROR)
         print(f"[EMAIL] connect failed: {e}"); return 0
@@ -1850,21 +1903,15 @@ def _send_emails(recipients, subject, text, url="/", promo=True):
                 unsub = f"{SITE_URL}/unsubscribe?u={uid}&t={_unsub_token(uid)}"
                 link = SITE_URL + (url if url.startswith("/") else "/")
                 first = ((name or "").split() or [""])[0]
-                msg = EmailMessage()
-                msg["Subject"] = subj
-                msg["From"] = formataddr(("Bake & Party", SMTP_FROM))
-                msg["To"] = to
-                msg["List-Unsubscribe"] = f"<{unsub}>"
-                msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
                 hi = f"שלום {first}," if first else "שלום,"
-                msg.set_content(f"{hi}\n\n{text}\n\nלצפייה באתר: {link}\n\nBake & Party, גבעת שמואל\nקיבלת הודעה זו כי אישרת קבלת עדכונים. להסרה: {unsub}")
-                msg.add_alternative(
-                    f'<div dir="rtl" style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#4A2E35">'
-                    f'<h2 style="color:#E05276">Bake &amp; Party 🎉</h2><p>{hi}</p><p style="font-size:16px;line-height:1.6">{_html_escape(text)}</p>'
-                    f'<p><a href="{link}" style="background:#FF85A2;color:#fff;padding:10px 20px;border-radius:18px;text-decoration:none;font-weight:bold">לצפייה באתר</a></p>'
-                    f'<hr style="border:none;border-top:1px solid #FFD1DC"><p style="font-size:12px;color:#9B7B82">קיבלת הודעה זו כי אישרת קבלת עדכונים מ-Bake &amp; Party, גבעת שמואל. '
-                    f'<a href="{unsub}" style="color:#9B7B82">להסרה מרשימת התפוצה</a></p></div>', subtype="html")
-                srv.send_message(msg); sent += 1; _LAST_EMAIL_ERROR = None
+                plain = f"{hi}\n\n{text}\n\nלצפייה באתר: {link}\n\nBake & Party, גבעת שמואל\nקיבלת הודעה זו כי אישרת קבלת עדכונים. להסרה: {unsub}"
+                html = (f'<div dir="rtl" style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#4A2E35">'
+                        f'<h2 style="color:#E05276">Bake &amp; Party 🎉</h2><p>{hi}</p><p style="font-size:16px;line-height:1.6">{_html_escape(text)}</p>'
+                        f'<p><a href="{link}" style="background:#FF85A2;color:#fff;padding:10px 20px;border-radius:18px;text-decoration:none;font-weight:bold">לצפייה באתר</a></p>'
+                        f'<hr style="border:none;border-top:1px solid #FFD1DC"><p style="font-size:12px;color:#9B7B82">קיבלת הודעה זו כי אישרת קבלת עדכונים מ-Bake &amp; Party, גבעת שמואל. '
+                        f'<a href="{unsub}" style="color:#9B7B82">להסרה מרשימת התפוצה</a></p></div>')
+                mailer.send(to, subj, plain, html, {"List-Unsubscribe": f"<{unsub}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"})
+                sent += 1; _LAST_EMAIL_ERROR = None
                 _log_notify("email", to, subj, True)
                 _t.sleep(0.15)
             except Exception as e:
@@ -1872,8 +1919,7 @@ def _send_emails(recipients, subject, text, url="/", promo=True):
                 _log_notify("email", to, subj, False, _LAST_EMAIL_ERROR)
                 print(f"[EMAIL] failed for user {uid}: {e}")
     finally:
-        try: srv.quit()
-        except Exception: pass
+        mailer.__exit__()
     return sent
 
 def _html_escape(t):
@@ -2114,7 +2160,7 @@ def admin_push_stats(sess: dict = Depends(require_admin)):
     cur.execute("SELECT COUNT(*) FROM users WHERE notify_consent = TRUE AND role = 'customer';"); consenting = cur.fetchone()[0]
     cur.execute("SELECT COUNT(*) FROM push_subscriptions;"); devices = cur.fetchone()[0]
     last = _setting_get(cur, "push_new_last_sent"); cur.close(); conn.close()
-    return {"configured": _push_configured(), "email_configured": _email_configured(), "last_email_error": _LAST_EMAIL_ERROR, "consenting_users": consenting, "devices": devices, "last_new_products_push": last}
+    return {"configured": _push_configured(), "email_configured": _email_configured(), "email_mode": _email_mode(), "email_from": EMAIL_FROM if _email_mode() == "brevo" else SMTP_FROM, "last_email_error": _LAST_EMAIL_ERROR, "consenting_users": consenting, "devices": devices, "last_new_products_push": last}
 
 @app.get("/api/admin/notification-log")
 def admin_notification_log(limit: int = 50, sess: dict = Depends(require_admin)):
@@ -2140,7 +2186,7 @@ def admin_push_send(b: PushSendBody, sess: dict = Depends(require_admin)):
     if not b.url.startswith("/") or b.url.startswith("//") or b.audience not in ("customers", "staff"):
         raise HTTPException(status_code=400, detail="פרמטר לא תקין")
     if not (_push_configured() or _email_configured()):
-        raise HTTPException(status_code=400, detail="ההתראות עוד לא הופעלו בשרת (חסרים מפתחות VAPID או הגדרות מייל SMTP ב-Railway).")
+        raise HTTPException(status_code=400, detail="ההתראות עוד לא הופעלו בשרת (חסרים מפתחות VAPID, או BREVO_API_KEY ו-EMAIL_FROM למייל, ב-Railway).")
     if b.test_only:
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = %s;", (sess["user_id"],))
@@ -2156,13 +2202,13 @@ def admin_push_send(b: PushSendBody, sess: dict = Depends(require_admin)):
         email_error = None
         if not mailed:
             if not _email_configured():
-                email_error = "המייל לא מוגדר בשרת (חסרים SMTP_HOST / SMTP_USER / SMTP_PASSWORD ב-Railway)."
+                email_error = EMAIL_NOT_CONFIGURED
             elif not (me and me[0]):
                 email_error = "לחשבון שלך אין כתובת מייל."
             else:
                 email_error = _LAST_EMAIL_ERROR or "השליחה נכשלה בלי סיבה ידועה."
         return {"sent": pushed, "emails": mailed, "email_error": email_error,
-                "email_to": me[0] if me else None, "email_from": SMTP_FROM or None, "test": True}
+                "email_to": me[0] if me else None, "email_from": (EMAIL_FROM if _email_mode() == "brevo" else SMTP_FROM) or None, "test": True}
     # הגנה מפני שליחה כפולה בטעות: הודעה לקהל אחת כל 5 דקות
     conn = get_conn(); cur = conn.cursor()
     last = _setting_get(cur, "push_manual_last")
@@ -2213,45 +2259,24 @@ def _orders_open(cur):
 def _order_number(order_id):
     return 1000 + order_id
 
-def _smtp_connect():
-    import smtplib, ssl
-    if SMTP_PORT == 465:
-        srv = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=30)
-    else:
-        srv = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30); srv.starttls(context=ssl.create_default_context())
-    srv.login(SMTP_USER, SMTP_PASSWORD)
-    return srv
-
 def _send_order_email(to, subject, lines, link):
     """מייל שירות על הזמנה (לא פרסומת): אישור הזמנה, הזמנה מוכנה וכו'."""
     global _LAST_EMAIL_ERROR
     if not to:
         return False
     if not _email_configured():
-        _log_notify("email", to, subject, False, "המייל לא מוגדר בשרת (חסרים SMTP_HOST / SMTP_USER / SMTP_PASSWORD ב-Railway)")
+        _log_notify("email", to, subject, False, EMAIL_NOT_CONFIGURED)
         return False
-    from email.message import EmailMessage
-    from email.utils import formataddr
     try:
-        msg = EmailMessage()
-        msg["Subject"] = subject
-        msg["From"] = formataddr(("Bake & Party", SMTP_FROM))
-        msg["To"] = to
         text = "\n".join(lines)
-        msg.set_content(f"{text}\n\nלמעקב אחרי ההזמנה: {link}\n\nBake & Party, {_get_contact()['address']}")
+        plain = f"{text}\n\nלמעקב אחרי ההזמנה: {link}\n\nBake & Party, {_get_contact()['address']}"
         body_html = "".join(f'<p style="margin:0 0 8px">{_html_escape(l)}</p>' for l in lines)
-        msg.add_alternative(
-            f'<div dir="rtl" style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#4A2E35">'
-            f'<h2 style="color:#E05276">Bake &amp; Party 🎉</h2>{body_html}'
-            f'<p><a href="{link}" style="background:#E05276;color:#fff;padding:10px 20px;border-radius:18px;text-decoration:none;font-weight:bold">למעקב אחרי ההזמנה</a></p>'
-            f'<hr style="border:none;border-top:1px solid #FFD1DC"><p style="font-size:12px;color:#9B7B82">Bake &amp; Party · {_html_escape(_get_contact()["address"])} · {_html_escape(_get_contact()["phone"])}</p></div>',
-            subtype="html")
-        srv = _smtp_connect()
-        try:
-            srv.send_message(msg)
-        finally:
-            try: srv.quit()
-            except Exception: pass
+        html = (f'<div dir="rtl" style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#4A2E35">'
+                f'<h2 style="color:#E05276">Bake &amp; Party 🎉</h2>{body_html}'
+                f'<p><a href="{link}" style="background:#E05276;color:#fff;padding:10px 20px;border-radius:18px;text-decoration:none;font-weight:bold">למעקב אחרי ההזמנה</a></p>'
+                f'<hr style="border:none;border-top:1px solid #FFD1DC"><p style="font-size:12px;color:#9B7B82">Bake &amp; Party · {_html_escape(_get_contact()["address"])} · {_html_escape(_get_contact()["phone"])}</p></div>')
+        with _Mailer() as m:
+            m.send(to, subject, plain, html)
         _log_notify("email", to, subject, True)
         return True
     except Exception as e:
