@@ -1846,7 +1846,8 @@ def _html_escape(t):
 
 def _consenting_customer_emails():
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, email, name FROM users WHERE notify_consent = TRUE AND active = TRUE AND email IS NOT NULL;")
+    # רק לקוחות. עובדות ומנהלות לא מקבלות הודעות פרסום ללקוחות
+    cur.execute("SELECT id, email, name FROM users WHERE notify_consent = TRUE AND active = TRUE AND email IS NOT NULL AND role = 'customer';")
     rows = cur.fetchall(); cur.close(); conn.close()
     return rows
 
@@ -1906,7 +1907,16 @@ def push_to_consenting_customers(title, body, url="/"):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("""SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
                    JOIN users u ON u.id = ps.user_id
-                   WHERE u.notify_consent = TRUE AND u.active = TRUE;""")
+                   WHERE u.notify_consent = TRUE AND u.active = TRUE AND u.role = 'customer';""")
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return _send_push_rows(rows, title, body, url)
+
+def push_to_admins(title, body, url="/admin.html"):
+    """רק למנהלות פעילות (למשל ביקורת שממתינה לאישור, שרק מנהלת יכולה לאשר)."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""SELECT ps.id, ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps
+                   JOIN users u ON u.id = ps.user_id
+                   WHERE u.role = 'admin' AND u.active = TRUE;""")
     rows = cur.fetchall(); cur.close(); conn.close()
     return _send_push_rows(rows, title, body, url)
 
@@ -2010,6 +2020,13 @@ def notifications_subscribe(body: PushSubBody, sess: dict = Depends(require_auth
                    ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth
                    RETURNING id, (xmax = 0);""", (sess["user_id"], body.endpoint, p256dh, auth))
     sub_id, inserted = cur.fetchone()
+    if sess["role"] in STAFF_ROLES:
+        # מכשיר של עובדת/מנהלת: נרשם להתראות עבודה (הזמנות) בלבד, בלי הסכמה לפרסומות ובלי מייל "תודה שהצטרפת"
+        conn.commit(); cur.close(); conn.close()
+        if inserted:
+            _send_push_rows([(sub_id, body.endpoint, p256dh, auth)], "התראות על הזמנות הופעלו ✅",
+                            "מעכשיו המכשיר הזה יקבל התראה על כל הזמנה חדשה באתר.", "/staff.html")
+        return {"ok": True, "welcome_sent": bool(inserted)}
     cur.execute("UPDATE users SET notify_consent = TRUE, notify_consent_at = NOW() WHERE id = %s AND notify_consent = FALSE RETURNING name, email;", (sess["user_id"],))
     first = cur.fetchone()
     conn.commit(); cur.close(); conn.close()
@@ -2050,7 +2067,7 @@ def unsubscribe_link(u: int, t: str):
 @app.get("/api/admin/push-stats")
 def admin_push_stats(sess: dict = Depends(require_admin)):
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM users WHERE notify_consent = TRUE;"); consenting = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM users WHERE notify_consent = TRUE AND role = 'customer';"); consenting = cur.fetchone()[0]
     cur.execute("SELECT COUNT(*) FROM push_subscriptions;"); devices = cur.fetchone()[0]
     last = _setting_get(cur, "push_new_last_sent"); cur.close(); conn.close()
     return {"configured": _push_configured(), "email_configured": _email_configured(), "last_email_error": _LAST_EMAIL_ERROR, "consenting_users": consenting, "devices": devices, "last_new_products_push": last}
@@ -2724,7 +2741,7 @@ def create_review(body: ReviewBody, request: Request, authorization: str = Heade
                 (sess["user_id"] if sess else None, name, body.rating, text or None))
     rid = cur.fetchone()[0]
     conn.commit(); cur.close(); conn.close()
-    threading.Thread(target=push_to_staff, args=("⭐ ביקורת חדשה ממתינה לאישור", f"{name}: {body.rating} כוכבים", "/admin.html"), daemon=True).start()
+    threading.Thread(target=push_to_admins, args=("⭐ ביקורת חדשה ממתינה לאישור", f"{name}: {body.rating} כוכבים", "/admin.html"), daemon=True).start()
     return {"ok": True, "pending": True, "id": rid}
 
 class ReplyBody(BaseModel):
