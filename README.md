@@ -1,254 +1,116 @@
-# Bake & Party - מערכת ניהול חנות ואתר אינטרנט
+# Bake & Party
 
-ברוכים הבאים לפרויקט החנות של **Bake & Party** (אפייה ומסיבות)! פרויקט זה כולל מסד נתונים, שרת ניהול חכם עם עוזר AI, וממשק משתמש מותאם אישית.
+**Online store and back-office for a family baking & party supply shop in Givat Shmuel, Israel.**
 
-🌐 האתר החי: https://www.bakeparty.co.il
+Customers browse 2,000+ products, order for in-store pickup, track their order live and leave reviews. Staff get a live order board with phone alerts. The owner manages products, hours, staff, pay and customer messaging from one admin panel.
+
+🌐 **Live:** [bakeparty.co.il](https://www.bakeparty.co.il)
+
+![Python](https://img.shields.io/badge/Python-3-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
+![JavaScript](https://img.shields.io/badge/Vanilla_JS-F7DF1E?logo=javascript&logoColor=black)
+![PWA](https://img.shields.io/badge/PWA-installable-5A0FC8?logo=pwa&logoColor=white)
+![Railway](https://img.shields.io/badge/Deployed_on-Railway-0B0D0E?logo=railway&logoColor=white)
 
 ---
 
-## 🛠️ טכנולוגיות בשימוש
-* **מסד נתונים:** PostgreSQL (מקומי דרך Docker, בפרודקשן דרך Railway)
-* **צד שרת (Backend):** FastAPI (Python)
-* **צד לקוח (Frontend):** HTML5, CSS3, JavaScript
-* **AI:** Claude Haiku (Anthropic API) — עוזר חכם בצ'אט
-* **אחסון תמונות:** Railway Volume (דיסק קבוע, נפרד מהקוד)
-* **ניהול גרסאות:** Git & GitHub, פריסה אוטומטית ל-Railway בכל push
+## Highlights
+
+**For customers**
+- Fast, Hebrew (RTL) storefront with live search (typo-tolerant), category navigation, filters and deep links
+- Cart and checkout for **in-store pickup**: guest checkout or account, pay at pickup
+- **Live order tracking**, with email and phone notifications when the order is ready
+- When an item is missing, the customer **picks a substitute from the store**, continues without it, or cancels
+- **Reviews from real accounts**: Sign in with Google, profile photo, "verified buyer" badge, optional photo, admin approval
+- Installable as an app (PWA), offline page, accessibility menu and accessibility statement
+- AI shopping assistant (Claude) that recommends products from the real catalog
+
+**For staff**
+- Live order board: sound and push alert on new orders, status flow, missing-item handling, one-tap WhatsApp to the customer
+- Time clock with monthly hours and estimated pay
+
+**For the owner**
+- Admin panel: products, categories, deals, opening hours, staff and roles, pay, reviews, FAQ, customer messaging
+- Wolt integration: import products from a Wolt export (with price conversion) and a two-way stock comparison
+- Notification log showing every email and push, and why any failed
+- Audit log of sensitive actions
 
 ---
 
-## 🚀 הוראות הפעלה מקומית (מה שצריך פעם ראשונה / לפיתוח)
+## Tech stack
 
-### 1. הפעלת מסד הנתונים (Docker)
-```bash
-docker compose -f local-dev/docker-compose.yml up -d
+| Layer | Technology |
+|---|---|
+| Backend | Python, FastAPI, psycopg2 |
+| Database | PostgreSQL |
+| Frontend | HTML, CSS and vanilla JavaScript (no build step), Progressive Web App |
+| Integrations | Anthropic Claude API, Google Identity Services, Web Push (VAPID), Brevo email API |
+| Hosting | Railway (auto-deploy from `main`), persistent volume for uploaded images |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    C[Customers<br/>index.html] -->|REST / JSON| API
+    S[Staff<br/>staff.html] --> API
+    A[Owner<br/>admin.html] --> API
+    API[FastAPI<br/>main.py] --> DB[(PostgreSQL)]
+    API --> AI[Claude API<br/>shopping assistant]
+    API --> MAIL[Brevo<br/>email]
+    API --> PUSH[Web Push<br/>phone alerts]
+    API --> G[Google<br/>sign-in, SEO]
 ```
-מפעיל PostgreSQL (פורט 5433) ו-pgAdmin (פורט 5050, `admin@admin.com` / `adminpassword`).
 
-### 2. התקנת חבילות פייתון
+## Engineering notes
+
+- **Server-side pricing.** Order totals are always computed from the database and stored as a snapshot on the order; the browser only sends product ids and quantities.
+- **Auth.** PBKDF2-SHA256 password hashing, sessions stored as token hashes in the database, roles (`customer` / `employee` / `admin`) re-checked on every request, account lockout and rate limiting, forced password change for staff invites, Google ID tokens verified server-side.
+- **Safe rendering.** All user and catalog text is escaped on output; JSON-LD is built with `json.dumps`. Uploaded images are validated by file content, not just extension.
+- **Privacy.** Reviews show first name and last-name initial; marketing messages only with explicit opt-in, with a one-click unsubscribe link; per-order notifications don't count as marketing consent.
+- **Zero-touch migrations.** The schema is created and migrated idempotently on startup, so every deploy is a plain `git push`.
+- **SEO.** Server-rendered product and category pages with schema.org data, a full sitemap and LocalBusiness information.
+- **Resilience.** The AI reply parser tolerates malformed model output; email goes through Brevo's HTTPS API (or SMTP where allowed); every notification attempt is logged with its error.
+
+## Project structure
+
+```
+├── main.py                  FastAPI app: API, auth, orders, reviews, notifications, SEO pages, AI assistant
+├── index.html               Customer storefront (single page, hash routing)
+├── staff.html               Staff app: order board and time clock
+├── admin.html               Owner's admin panel
+├── ui-inputs.js             Typeable date/time inputs for the admin and staff screens
+├── sw.js                    Service worker: push notifications and offline page
+├── manifest*.webmanifest    PWA manifests (store app and staff app)
+├── tools/
+│   ├── import_data.py       Seed a local database from a Wolt export
+│   └── gen_vapid.py         Generate Web Push keys
+├── local-dev/               docker-compose for a local PostgreSQL
+├── data/                    Sample Wolt export
+└── docs/OPERATIONS.he.md    Operations guide (Hebrew)
+```
+
+## Running locally
+
 ```bash
+docker compose -f local-dev/docker-compose.yml up -d        # PostgreSQL on port 5433
 pip install -r requirements.txt
+python tools/import_data.py data/wolt-export-2026-08-24.xlsx # sample catalog
+ADMIN_EMAIL=you@example.com ADMIN_PASSWORD=changeme123 uvicorn main:app --reload
 ```
 
-### 3. יצירת הטבלאות הבסיסיות ומשתמש מנהל
-```bash
-python tools/create_admin.py
-```
-יוצר את `users`, `settings`, `weekly_hours`, `special_days` ומקים משתמש מנהל. **חובה להריץ פעם אחת לפני ההרצה הראשונה.**
+Open `http://localhost:8000` (store), `/admin.html` (admin) and `/staff.html` (staff).
+All configuration is done through environment variables; see [docs/OPERATIONS.he.md](docs/OPERATIONS.he.md) for the full list and service setup.
 
-> שימי לב: `main.py` עצמו כולל גם "רשת ביטחון" שיוצרת/מעדכנת אוטומטית את כל הטבלאות (כולל `faq_items`, `ai_usage` ועוד) בכל עליית שרת — כך שגם בפרודקשן (Railway) אין צורך להריץ סקריפטים ידניים.
+## Roadmap
 
-### 4. ייבוא המוצרים מהאקסל של וולט
-```bash
-python tools/import_data.py data/wolt-export-2026-08-24.xlsx
-```
-מזהה אוטומטית את קובץ ה-xlsx בתיקייה. **⚠️ הרצה חוזרת מוחקת ובונה מחדש את Products ו-Categories** — כל שינוי ידני (מחירים, תמונות, מלאי) הולך לאיבוד. משתמשים בזה כיום רק לעדכון חד-פעמי, לא בשוטף.
-
-> הקובץ הנוכחי של וולט נמצא בתיקיית `data/`. בהורדה חדשה מוולט שימי אותו שם (או ציינו את הנתיב המלא).
-
-### 5. הפעלת השרת
-```bash
-uvicorn main:app --reload
-```
-עולה על `http://localhost:8000`.
-
-### 6. פתיחת האתר
-`index.html` לחנות, `admin.html` לניהול.
+- [x] Online catalog, search and SEO
+- [x] Pickup orders with live tracking and staff order board
+- [x] Reviews with Google sign-in
+- [ ] Delivery orders with distance-based pricing
+- [ ] Online payment
+- [ ] Automatic stock sync with Wolt (pending API access)
 
 ---
 
-## 🗂️ מבנה התיקיות
-
-```
-bakeparty/
-├─ main.py            ← השרת. חייב להישאר בתיקייה הראשית
-├─ index.html         ← האתר ללקוחות (מוגש מהתיקייה הראשית)
-├─ admin.html         ← פאנל הניהול (מוגש מהתיקייה הראשית)
-├─ logo.jpg, robots.txt   ← קבצים שהשרת מגיש (חייבים להישאר בתיקייה הראשית)
-├─ requirements.txt, railway.json   ← הגדרות הפריסה ב-Railway
-├─ README.md          ← המסמך הזה
-├─ tools/             ← סקריפטים להרצה ידנית בלבד: create_admin.py, import_data.py
-├─ local-dev/         ← docker-compose.yml, רק לסביבת הפיתוח המקומית
-├─ data/              ← קבצי האקסל של וולט
-└─ product_images/    ← תמונות מוצרים. בפרודקשן זה Volume ב-Railway, לא ב-Git
-```
-
-> הקבצים שהשרת מגיש (`main.py`, `index.html`, `admin.html`, `logo.jpg`, `robots.txt`) **לא עוברים תיקייה** — השרת מחפש אותם ליד `main.py`. לעומת זאת `product_images/` חייבת להישאר בדיוק במקום שה-Volume מחובר אליו (`/app/product_images`).
-> אל תעלי ל-Git: `.venv/`, `__pycache__/`, `product_images/`, `.env` (כבר ב-`.gitignore`).
-
-## 🔄 איך מעדכנים את האתר (מה עושים בכל שינוי)
-
-1. מחליפים את הקבצים שהשתנו בתיקיית הפרויקט במחשב (באותו שם ובאותה תיקייה).
-2. בודקים מקומית אם צריך: `uvicorn main:app --reload` ופותחים `http://localhost:8000`.
-3. מעלים ל-GitHub:
-   ```bash
-   git add .
-   git status        # לוודא שרואים רק את הקבצים שהתכוונת לשנות
-   git commit -m "Short English description of the change"
-   git push
-   ```
-4. Railway מפרסם לבד אחרי ה-push (בערך דקה-שתיים). בטאב Deployments רואים "Active".
-5. נכנסים שוב כמנהלת: כל פרסום מנתק את כולם, כי החיבורים נשמרים בזיכרון השרת.
-6. בודקים באתר החי (`bakeparty.co.il`) ובפלאפון, ובכלל זה את מה ששונה.
-
-**שינוי שדורש גם משהו ב-Railway:** משתני סביבה (Variables) משנים בעצמם, ואחרי שינוי Railway מפרסם מחדש לבד. אין צורך להריץ סקריפטים ידניים: טבלאות ועמודות חדשות נוצרות אוטומטית בעליית השרת.
-
-## 🔑 משתני סביבה (Railway → Variables)
-
-| משתנה | חובה? | תיאור |
-|---|---|---|
-| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | כן (בפרודקשן) | חיבור למסד הנתונים |
-| `ANTHROPIC_API_KEY` | כן, לצ'אט ה-AI | מפתח מ-console.anthropic.com. בלי זה הצ'אט מציג הודעת "לא מחובר" במקום לקרוס |
-| `AI_MODEL` | לא | ברירת מחדל: `claude-haiku-4-5-20251001` |
-| `AI_DAILY_LIMIT` | לא | מכסת הודעות יומית ללקוח בצ'אט (ברירת מחדל: 30). לא חל על מנהלים |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | לא | אם מוגדרים, יוצרים/מעדכנים אוטומטית משתמש מנהל בעליית השרת |
-| `ALLOWED_ORIGINS` | לא | הגבלת CORS (ברירת מחדל: פתוח לכולם — כדאי להגביל בפרודקשן אמיתי) |
-| `GOOGLE_SITE_VERIFICATION` | לא | הקוד מ-Google Search Console (רק הערך שבתוך content="..."). מוסיף את תג האימות לדף הבית |
-| `SITE_URL` | לא | כתובת האתר (ברירת מחדל: `https://www.bakeparty.co.il`). משמשת בדפי גוגל, במפת האתר ובמיילים |
-
----
-
-## 🤖 עוזר ה-AI (צ'אט חכם)
-
-- **זמין רק למשתמשים רשומים ומחוברים.** אורח שלוחץ "שאל את ה-AI" מופנה להתחברות/הרשמה.
-- ממליץ על מוצרים ומתכונים, ומזהה מוצרים גם **לפי תיאור חופשי** (לא רק שם מדויק) — מחפש גם בעמודת "הערות" של המוצרים.
-- **ממוקד רק בנושאי החנות** — מסרב בנימוס לשאלות לגמרי לא קשורות (פוליטיקה, תכנות וכו').
-- **הגנה מפני ניצול לרעה** (ללקוחות רגילים בלבד, לא למנהלים):
-  - מכסת הודעות יומית (`AI_DAILY_LIMIT`, ברירת מחדל 30).
-  - חסימה זמנית ל-24 שעות אחרי 5 הודעות לא-קשורות לחנות **ברצף** (מתאפס אוטומטית בכל הודעה קשורה).
-  - הודעות חסימה/שגיאה מוצגות בעיצוב "הודעת מערכת" נפרד, לא כתשובת AI רגילה.
-- **מנהלים פטורים לגמרי** מהמכסה והחסימה.
-- **בדיקת מלאי מול וולט (למנהלים) — בטאב "מוצרים" ב-`admin.html`:** מעלים את קובץ האקסל שמורידים מוולט (הגיליון `offers` — ייצוא "מוצרים"/Items, לא `category_item_sequences`) והמערכת משווה לפי שמות (Jaccard ≥ 0.7). שלוש רשימות: (1) מוצרים לסמן כאזלו, (2) מוצרים להחזיר למלאי, (3) מוצרים חדשים בוולט שאין באתר — עם טופס עריכה ואישור להוספה מהירה. "לא זמין" = `forced_out_of_stock` או `enabled=False`. הצ'אט כבר לא מבצע את הבדיקה הזו.
-
-## 🤖 יומן שיחות עם ה-AI (לצפייה במה שנשאל)
-
-כל הודעה לצ'אט נשמרת בטבלה `ai_chat_log` (שאלה, תשובה, נושא, האם קשור לחנות, מי שאל, ומתי). הצפייה בטאב **"🤖 שיחות עם ה-AI"** ב-`admin.html`, עם סינון "רק כשלונות". ניסיונות שנכשלו (מפתח חסר, חבילה חסרה, שגיאת Anthropic כמו חוסר קרדיט) נשמרים עם **סיבת הכשל המדויקת** — כך אפשר לאבחן "העוזר לא זמין" בלי לפתוח לוגים של Railway. 🔒 שימו לב: זה מידע של משתמשים — מומלץ לציין במדיניות הפרטיות שהשאלות לעוזר נשמרות.
-
-## 💬 שאלות ותשובות נפוצות (FAQ) — עולות אוטומטית מהצ'אט
-
-בדף הבית, לפני ה-footer. כל שאלה בצ'אט מסווגת לאחד מ-9 נושאים קבועים (משלוחים, שעות, מיקום וכו'). נושא שנשאל **5 פעמים** עולה **אוטומטית** לאתר, עם שאלה/תשובה כתובות מראש (לא טקסט גולמי מהצ'אט). ניהול מלא בטאב **"שאלות ותשובות"** ב-`admin.html`: פרסום/הסתרה ידניים, עריכה, מחיקה, והוספה ידנית.
-
-## 🖼️ אחסון תמונות מוצרים
-
-תמונות שמועלות דרך פאנל הניהול נשמרות בתיקיית `product_images/` על השרת. **חובה** לחבר Volume קבוע ב-Railway (Mount Path: `/app/product_images`) — אחרת כל תמונה שהועלתה נמחקת בכל פרסום מחדש (הדיסק הרגיל של Railway זמני, לא קבוע).
-
-## 🏷️ קטגוריות, שכפול מוצרים ו"חדש בחנות"
-
-- **הוספת קטגוריה:** ב-`admin.html`, טאב **"מוצרים"**, כפתור **"+ קטגוריה"** — כותבים שם ובוחרים תחת איזו קטגוריה ראשית (או קטגוריה ראשית חדשה). דף "ניהול קטגוריות" הישן הוסר (שינוי שם ומחיקה של קטגוריה נעשים כרגע ישירות במסד הנתונים, ואם צריך נחזיר כפתור).
-- **שיוך מוצרים לקטגוריות:** באותו טאב, "שיוך מהיר". מוצר ללא קטגוריה לא מוצג באתר.
-- **שכפול מוצר:** בעמוד מוצר באתר (למנהלים) — כפתור **"📋 שכפל מוצר"**, יוצר עותק מלא כולל תמונה.
-- **"חדש בחנות":** שורה בדף הבית עם מוצרים שנוספו ב-45 הימים האחרונים (עד 8). מוצרים שהיו קיימים לפני העדכון לא נחשבים חדשים — רק מוצרים שנוספים מעכשיו מקבלים תאריך הוספה.
-
----
-
-## ⚠️ באגים ושיפורים מרכזיים (עדכון אחרון: 08.09.2026)
-
-- מנגנון AI מלא: הזמנה→תשובה→סיווג נושא→FAQ אוטומטי→הגנת שימוש לרעה→בדיקת מלאי מול וולט למנהלים.
-- תוקן: תפריט קטגוריות בנייד היה "נתקע" פתוח בגלל בעיית `:hover` בטאץ' — מוגבל עכשיו למכשירים עם עכבר בלבד.
-- תוקן: כפתורים צפים (נגישות/וואטסאפ/חיפוש) הופיעו מעל חלון פרטי מוצר — עדיפות-שכבה תוקנה, וגם הוקטנו בנייד.
-- תוקן: sitemap.xml כלל כתובות שגויות של קטגוריות כמוצרים — הוסר.
-- נוסף: מניעת cache על ה-HTML, כדי שפרסום חדש יופיע מיד בלי ניקוי ידני בדפדפן.
-- נוסף: תגית "אזל מהמלאי" מוצגת גם על מוצרים במבצע (לא רק רגילים).
-- הגופן שודרג מ-Segoe UI ל-Rubik (עברי, מודרני, תואם למותג) בכל האתר וב-admin.
-
----
-
-## ✅ רשימת בדיקה לפני שהאתר "רשמי" לגמרי
-
-- [x] כתובת ה-API מעודכנת לדומיין הציבורי בכל הקבצים.
-- [ ] **חובה:** Volume מחובר ב-Railway לתמונות (`/app/product_images`) — בלעדיו תמונות נמחקות בכל פרסום.
-- [ ] סיסמאות מסד הנתונים המקומי (`docker-compose.yml`) עדיין כתובות בקוד — לא קריטי כי זה סביבת פיתוח מקומית בלבד, אבל שווה לדעת.
-- [ ] CORS פתוח לכולם (`allow_origins=["*"]`) — כדאי להגביל לדומיין האמיתי בפרודקשן.
-- [x] **AI מוגבל למשתמשים רשומים**, עם הגנת שימוש-לרעה ומכסה יומית.
-- [x] חיבורי משתמשים נשמרים במסד הנתונים — פרסום חדש לא מנתק אף אחד.
-- [ ] גיבוי ידני/אוטומטי למסד הנתונים ב-Railway — כדאי לוודא שיש.
-- [ ] בדקי את האתר ממכשיר נייד אמיתי אחרי כל שינוי גדול.
-- [ ] עברי על טאב "מוצרים וקטגוריות" מדי פעם ווודאי שאין מוצרים "ללא קטגוריה".
-- [ ] **אין עדיין מערכת הזמנות** — האתר מציג מוצרים/שעות/יצירת קשר בלבד; משלוחים מעל 200 ₪ מתואמים טלפונית. (בעבודה — הפרויקט הבא בתור.)
-
----
-
-## 👥 משתמשים, תפקידים ואבטחה
-
-**שלושה תפקידים:** `customer` (לקוח, ברירת המחדל בהרשמה), `employee` (עובד), `admin` (מנהל).
-
-- **הוספת עובד או מנהל:** `admin.html` ← טאב **"צוות ומשתמשים"** ← "הוספת איש צוות". המערכת מייצרת **סיסמה זמנית** שמוצגת פעם אחת (שולחים אותה בוואטסאפ). בכניסה הראשונה חייבים להחליף אותה (8 תווים לפחות). אין יותר צורך בפקודת SQL.
-- **שינוי תפקיד, השבתה, איפוס סיסמה, עריכת פרטים:** באותו טאב, לכל משתמש. השבתה או שינוי תפקיד מנתקים אותו מיד. עובדים אף פעם לא נמחקים, רק מושבתים.
-- **תמיד חייב להישאר לפחות מנהל פעיל אחד.** אי אפשר להשבית או להוריד תפקיד לעצמך.
-- **חיבורים נשמרים במסד הנתונים** (טבלת `sessions`, נשמר רק hash של הטוקן). **פרסום חדש כבר לא מנתק אף אחד.** תוקף חיבור: 7 ימים.
-- **נעילה:** 5 ניסיונות התחברות שגויים נועלים את החשבון ל-15 דקות. בנוסף יש הגבלה לפי כתובת IP.
-- **יומן פעולות** (`audit_log`): כל יצירת משתמש, שינוי תפקיד, השבתה ואיפוס סיסמה נרשמים עם שם המבצע. מוצג בתחתית הטאב, ואי אפשר לערוך או למחוק אותו מהאתר.
-- **כותרות אבטחה** נשלחות מהשרת (`nosniff`, `X-Frame-Options` ועוד).
-- **בשלב הזה** חשבון עובד יכול להתחבר לאתר כמו לקוח, אבל מסך העובדים (עריכת מוצרים באישור מנהל, שעות) עוד לא קיים, ולכן הפאנל עדיין למנהלים בלבד.
-- **ניהול ראשוני:** `ADMIN_EMAIL` + `ADMIN_PASSWORD` ב-Railway (אם מוגדרים) יוצרים או מעדכנים מנהל בעליית השרת. אחרי שיש מנהל, אפשר להסיר את `ADMIN_PASSWORD` מהמשתנים.
-
-## שעות ושכר (שלב 2א)
-
-- `staff.html` – מסך הצוות: כפתור כניסה/יציאה למשמרת, השעות שלי לפי חודש, וסה"כ שכר בתחתית. נפתח מכל מכשיר.
-- בפאנל הניהול, לשונית "⏱️ שעות ושכר": תעריף שעתי לכל איש צוות, פירוט משמרות, תיקון, מחיקה והוספה ידנית.
-- עובד לא יכול לערוך משמרת. רק מנהל. כל שינוי נרשם ביומן הפעולות.
-- שינוי תעריף חל על משמרות חדשות. משמרות שכבר נרשמו עם תעריף לא משתנות.
-- השכר הוא הערכה ברוטו ולא תלוש שכר.
-
-## התראות ואפליקציה (PWA)
-
-- האתר ניתן להתקנה במסך הבית (`manifest.webmanifest`, `sw.js`, `icon-*.png` חייבים להישאר בשורש הפרויקט).
-- **אישור מפורש בלבד:** לקוח רשום מקבל התראות רק אם לחץ "עדכנו אותי על מוצרים חדשים" (או סימן בהרשמה) וגם אישר בדפדפן. ביטול מוחק את המכשירים ומאפס את האישור.
-- **הודעה אחת מרוכזת** על מוצרים חדשים: לכל היותר אחת ל-12 שעות, רק 09:00-20:00 ולא בשבת, ורק על מוצרים זמינים שעברו 30 דקות מאז שנוספו.
-- ייבוא מוולט לא נחשב "חדש" אלא אם מסמנים זאת בכרטיס הייבוא.
-- **הפעלה חד-פעמית:** `python tools/gen_vapid.py` ואת שני הערכים מדביקים ב-Railway (Variables): `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`. המפתח הפרטי סודי. אחרי שמירה, Deploy.
-- באייפון התראות עובדות רק אחרי "הוספה למסך הבית".
-- `push_to_staff(...)` קיים בקוד ויופעל בשלב ההזמנות.
-
-### מייל דרך Brevo (מומלץ)
-
-Railway חוסם שליחת מייל ב-SMTP (השגיאה `Network is unreachable`), ולכן שולחים דרך Brevo, שעובד דרך HTTPS. חינם עד 300 מיילים ביום.
-1. נרשמים ב-brevo.com.
-2. Senders, domains, IPs ← Senders ← מוסיפים ומאמתים את כתובת השולח (מקבלים מייל אימות).
-3. SMTP & API ← API Keys ← יוצרים מפתח.
-4. ב-Railway (Variables): `BREVO_API_KEY` = המפתח, `EMAIL_FROM` = כתובת השולח שאומתה. אחרי שמירה, Deploy.
-5. בפאנל ← הודעות ← "שליחה אליי לבדיקה", ובודקים ב"יומן שליחות".
-
-אם `BREVO_API_KEY` מוגדר, הוא משמש במקום SMTP.
-
-### מייל (SMTP, לא עובד ב-Railway בתוכנית הרגילה)
-
-מוסיפים ב-Railway (Variables): `SMTP_HOST`, `SMTP_PORT` (465 או 587), `SMTP_USER`, `SMTP_PASSWORD`, ואופציונלי `SMTP_FROM` ו-`SITE_URL`.
-מייל נשלח רק ללקוחות שאישרו התראות. בכל מייל קישור הסרה אישי (`/unsubscribe`), והוא מסומן "פרסומת" לפי החוק. הודעת תודה נשלחת פעם אחת באישור.
-ג'ימייל מוגבל בכמות ועלול להגיע לספאם. לכמות גדולה עדיף שירות ייעודי (Brevo, Resend ועוד), שגם עובד דרך SMTP בלי שינוי בקוד.
-## 🔎 גוגל (SEO)
-
-- **דפים שגוגל קורא:** `/product/<id>` לכל מוצר ו-`/category/<id>` לכל קטגוריה. דפים פשוטים שנבנים בשרת, עם כותרת, מחיר, מלאי ומידע מובנה (schema.org).
-- **מפת אתר:** `/sitemap.xml` כוללת את דף הבית, כל הקטגוריות וכל המוצרים.
-- **דף הבית** כולל מידע על החנות הפיזית (כתובת, טלפון, שעות פתיחה מהמסד) בפורמט ש-Google מבין.
-- **כתובות באתר:** `#c=12` קטגוריה, `#sale` מבצעים, `#q=שוקולד` חיפוש, `&p=55` מוצר פתוח. כפתור "חזור" בטלפון עובד, ואפשר לשלוח קישור.
-- **רישום ראשון בגוגל:** ב-Google Search Console מוסיפים נכס, מאמתים (`GOOGLE_SITE_VERIFICATION` ב-Railway), ושולחים את `https://www.bakeparty.co.il/sitemap.xml`. בנוסף פותחים פרופיל עסק ב-Google Business Profile עם הכתובת יוני נתניהו 23 וקישור לאתר.
-
-## 🛒 הזמנות לאיסוף עצמי
-
-- **לקוח:** לוחץ + על מוצר (או "הוספה לעגלה" בחלון המוצר), פותח את העגלה מהפס התחתון ושולח הזמנה עם שם וטלפון. מייל רשות (בשביל עדכונים). אפשר ליצור חשבון ולאשר התראות תוך כדי. **התשלום בחנות באיסוף**, אין מינימום.
-- **מעקב:** אחרי ההזמנה הלקוח מקבל מספר הזמנה וקישור מעקב (`/#order=<id>&t=<קוד>`). הקישור נשמר בתפריט תחת "ההזמנות שלי".
-- **צוות:** `staff.html` ← "הזמנות לאיסוף". הזמנה חדשה מופיעה תוך 20 שניות, עם צליל (אחרי לחיצה על "הפעלת צליל") והתראה בטלפון (אחרי "התראות בטלפון על הזמנות"). שלבים: התחלתי להכין ← מוכנה לאיסוף (הלקוח מקבל מייל/התראה) ← נאספה ושולמה. "חסר?" מוריד פריט מהסכום, ואפשר לסמן אותו גם כאזל באתר.
-- **פריט חסר:** כשהצוות לוחץ "חסר?", אחרי 45 שניות הלקוח מקבל מייל/התראה (הודעה אחת לכל הפריטים החסרים). בדף המעקב הוא בוחר לכל פריט: להמשיך בלעדיו או לבקש תחליף (וכותב מה), או לבטל את כל ההזמנה. הצוות רואה את התשובה על כרטיס ההזמנה, ויכול להוסיף פריט תחליף ("➕ הוספת פריט / תחליף") עם חיפוש מוצר. אם הלקוח לא עונה, ממשיכים בלי הפריט.
-- **סגירת הזמנות:** המתג "מקבלים הזמנות באתר" במסך הצוות.
-- **מבצעי כמות** (כמו 4 ב-25) לא מחושבים בעגלה, אלא בקופה. כתוב את זה בעגלה.
-- טבלאות: `orders`, `order_items`. המחירים נשמרים כמו שהיו ברגע ההזמנה.
-
-## 📲 אפליקציה, נגישות ושדות הקלדה
-
-- **אפליקציה ללקוחות:** בתפריט ← "התקנת האפליקציה בטלפון" (באנדרואיד/כרום התקנה בלחיצה, באייפון מוצגות הוראות "הוספה למסך הבית"). אין צורך בחנות האפליקציות.
-- **אפליקציה לצוות:** פותחים את `staff.html` ולוחצים "התקנה כאפליקציה". נפתחת ישר למסך ההזמנות (`manifest-staff.webmanifest`).
-- **בלי אינטרנט:** מוצג דף "אין חיבור" במקום שגיאה (`sw.js`).
-- **לקוח שלא נרשם:** אחרי ההזמנה ובדף המעקב יש כפתור "שלחו לי התראה לטלפון כשההזמנה מוכנה" (טבלה `order_push_subs`, לא נחשב הסכמה לפרסומות). בכרטיס ההזמנה אצל הצוות יש כפתור "💬 וואטסאפ ללקוח" עם הודעה מוכנה וקישור מעקב, בחינם מהטלפון של החנות.
-- **נגישות:** תפריט ♿ כולל גם גווני אפור, הדגשת כותרות, סמן גדול וניווט מקלדת, והצהרת נגישות (גם בתחתית הדף). **לבדוק ולעדכן בהצהרה את פרטי הנגישות של החנות הפיזית.**
-- **הקלדה בשדות:** `ui-inputs.js` מוסיף לכל שדה תאריך/שעה/חודש בפאנל הניהול ובמסך הצוות תיבת הקלדה (25/12/2026, 0930 וכו') ליד כפתור הלוח.
-
-## ⭐ ביקורות
-
-- בדף הבית: "מה הלקוחות אומרים" עם ממוצע וכפתור "כתיבת ביקורת" (0 עד 5 כוכבים, טקסט ותמונה לא חובה).
-- **רק מחשבון רשום** (ביקורות ותגובות), והשם נלקח מהחשבון. באתר מוצג שם פרטי + אות ראשונה של המשפחה, עיגול עם ראשי תיבות, "✓ קנה/תה אצלנו" למי שאסף הזמנה מהאתר, ו"רשום/ה מאז". ביקורת אחת לחשבון ב-30 יום.
-- **ביקורת מופיעה רק אחרי אישור מנהל**: פאנל הניהול ← "⭐ ביקורות" (ממתינות / מוצגות / נדחו). אפשר גם להסתיר, למחוק, ולהגיב בשם החנות.
-- **תגובות** לביקורות מופיעות מיד; מנהל יכול למחוק תגובה. אין קישורים בביקורות ותגובות, ויש הגבלה לפי מכשיר נגד הצפה.
-- טבלאות: `reviews`, `review_replies`.
-
-## תפריט קטגוריות
-- במחשב: עמידה עם העכבר על קטגוריה פותחת את תתי-הקטגוריות; לחיצה על הקטגוריה פותחת אותה. בטלפון: כפתור "☰ קטגוריות" צף.
+Built by [@naamameray](https://github.com/naamameray), software engineering student.

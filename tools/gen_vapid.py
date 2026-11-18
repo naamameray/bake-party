@@ -1,5 +1,5 @@
-"""יוצר זוג מפתחות להתראות (VAPID). מריצים פעם אחת במחשב שלך:  python tools/gen_vapid.py
-את שני הערכים שמודפסים מדביקים ב-Railway בלשונית Variables (לא שולחים אותם לאף אחד, והפרטי נשאר סודי).
+"""Generates a VAPID key pair for Web Push. Run once on your own computer:  python tools/gen_vapid.py
+Paste the two printed values into Railway > Variables. Keep the private key secret.
 """
 import base64
 from cryptography.hazmat.primitives.asymmetric import ec

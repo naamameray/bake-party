@@ -13,7 +13,7 @@ DB_CONFIG = {
     "password": os.environ.get("DB_PASSWORD", "adminpassword"),
 }
 
-# --- סכימת מסד הנתונים מעודכנת לתמיכה בטבלת קישור (קטגוריות מרובות) ועמודת הערות ---
+# --- Database schema, with a link table (multiple categories per product) and a notes column ---
 SCHEMA = """
 DROP TABLE IF EXISTS product_categories CASCADE;
 DROP TABLE IF EXISTS Products CASCADE;
@@ -51,27 +51,24 @@ CREATE INDEX idx_categories_parent ON Categories(parent_id);
 """
 
 def first_image(raw):
-    """וולט לפעמים מחזיר כמה תמונות מופרדות בפסיק – לוקחים את הראשונה."""
+    """Wolt sometimes lists several comma-separated images; take the first."""
     if pd.isna(raw):
         return None
     return str(raw).split(",")[0].strip() or None
 
 def extract_leaf_ids(category_string):
-    """
-    מקבל מחרוזת של קטגוריות מהאקסל (שיכולות להיות מופרדות בפסיק)
-    ומחלץ את ה-ID של כל אחת מהן.
-    """
+    """Takes a category cell from the sheet (possibly comma-separated) and returns the id of each category."""
     if pd.isna(category_string):
         return []
     
-    # מפצל לפי פסיקים במקרה שהכנסת כמה קטגוריות באותו תא באקסל
+    # Split on commas in case one Excel cell holds several categories
     raw_cats = str(category_string).split(",")
     leaf_ids = []
     for c in raw_cats:
         c = c.strip()
         if not c:
             continue
-        # אם זה מגיע בפורמט 'שם::id', ניקח רק את ה-id. אם זה רק 'id', זה ייקח אותו.
+        # 'name::id' -> keep only the id; a bare 'id' is kept as is
         leaf_id = c.split("::")[-1].strip()
         if leaf_id:
             leaf_ids.append(leaf_id)
@@ -90,7 +87,7 @@ def import_data(file_path):
     df_categories = pd.read_excel(file_path, sheet_name="categories")
     df_offers = pd.read_excel(file_path, sheet_name="offers")
 
-    # ---- שלב 1: מיפוי ילד -> הורה מתוך עמודת subcategories -------------------
+    # ---- Step 1: child -> parent mapping from the subcategories column ----------------
     child_to_parent = {}          
     order_within_parent = {}      
     for _, row in df_categories.iterrows():
@@ -104,7 +101,7 @@ def import_data(file_path):
     top_level_ids = [cid for cid in all_ids if cid not in child_to_parent]
     id_to_name = dict(zip(df_categories["id"].astype(str), df_categories["name"].astype(str)))
 
-    # ---- שלב 2: הכנסת קטגוריות -----------------------------------------------
+    # ---- Step 2: insert categories ------------------------------------------------
     print("מייבא קטגוריות (ראשיות + תתי-קטגוריות)...")
     wolt_to_db = {}   
 
@@ -136,23 +133,23 @@ def import_data(file_path):
                 insert_category(wid, None, 999)
             break
 
-    # ---- שלב 3: הכנסת מוצרים לטבלה הראשית ולטבלת הקישור ----------------------
+    # ---- Step 3: insert products and their category links -------------------------
     print(f"מייבא {len(df_offers)} מוצרים...")
     inserted = 0
     for _, row in df_offers.iterrows():
         name = str(row["name"])
         price = float(row["price"]) if pd.notna(row["price"]) else 0.0
 
-        # חילוץ כל מזהי הקטגוריות מהאקסל (תומך במספר קטגוריות מופרדות בפסיק)
+        # Every category id from the sheet (several may be comma-separated)
         wolt_cat_ids = extract_leaf_ids(row.get("category_id"))
         
-        # המרה למזהים של מסד הנתונים שלנו
+        # Map to our own database ids
         db_cat_ids = []
         for wid in wolt_cat_ids:
             if wid in wolt_to_db and wolt_to_db[wid] not in db_cat_ids:
                 db_cat_ids.append(wolt_to_db[wid])
 
-        # קטגוריה ראשית לטבלת Products (תמיד הראשונה ברשימה)
+        # Main category for the Products table (always the first one)
         primary_cat_id = db_cat_ids[0] if db_cat_ids else None
 
         stock = 0 if str(row["inventory_mode"]) == "forced_out_of_stock" else 100
@@ -164,9 +161,8 @@ def import_data(file_path):
         )
         image_url = first_image(row["images"])
         
-        # משיכת הערות מהאקסל אם קיימת העמודה "notes"
-        # וולט שומרים את התיאור בעמודה "description" (יש בה 1062 תיאורים!).
-        # אם אין description, ננסה גם "notes" ליתר ביטחון.
+        # Product description: Wolt stores it in the "description" column;
+        # fall back to "notes" if that column is missing.
         if "description" in row and pd.notna(row["description"]):
             notes = str(row["description"])
         elif "notes" in row and pd.notna(row["notes"]):
@@ -184,7 +180,7 @@ def import_data(file_path):
         )
         new_prod_id = cursor.fetchone()[0]
 
-        # שמירה בטבלת הקשר עבור כל הקטגוריות שאליהן המוצר משויך
+        # Link the product to every category it belongs to
         for cid in db_cat_ids:
             cursor.execute(
                 "INSERT INTO product_categories (product_id, category_id) VALUES (%s, %s) ON CONFLICT DO NOTHING;",
@@ -193,7 +189,7 @@ def import_data(file_path):
 
         inserted += 1
 
-    # ---- שלב 4: תמונת נציג לכל קטגוריה --------------------------------------
+    # ---- Step 4: a representative image for each category --------------------------
     print("מגדיר תמונות נציגות לקטגוריות...")
     cursor.execute(
         """
@@ -238,11 +234,8 @@ def import_data(file_path):
 
 
 def find_excel_file():
-    """
-    מוצא אוטומטית את קובץ ה-xlsx בתיקייה, כדי שלא תצטרכי לעדכן שם קובץ
-    בקוד בכל פעם שמורידים גיליון חדש מוולט (השמות משתנים כל הזמן, כולל
-    איך שהם נשמרים אחרי הורדה/העלאה - סוגריים הופכים לפעמים לקו תחתון וכו').
-    אפשר גם להריץ: python import_data.py "שם_הקובץ.xlsx" כדי לציין ידנית.
+    """Finds the .xlsx file in the folder automatically, since Wolt export names change every time.
+    A file can also be given explicitly: python tools/import_data.py "export.xlsx"
     """
     if len(sys.argv) > 1:
         return sys.argv[1]
@@ -265,13 +258,12 @@ if __name__ == "__main__":
     excel_file = find_excel_file()
     print(f"משתמשת בקובץ: {excel_file}")
 
-    # --- אישור בטיחות ---
-    # מריצים את הסקריפט הזה כבר לא באופן שוטף (המחירים והמידע מנוהלים
-    # ידנית באתר עכשיו), אז זו הפכה לפעולה נדירה וממש הרסנית: היא מוחקת
-    # ובונה מחדש את כל טבלאות Products ו-Categories, כלומר כל שינוי ידני
-    # שנעשה דרך פאנל הניהול (מחירים, קטגוריות, תמונות, מוצרים שנמחקו) הולך
-    # לאיבוד ומוחלף בנתונים הגולמיים מוולט. בלי אישור מפורש, קל מדי להריץ
-    # את זה בטעות ולאבד עבודה של ימים.
+    # --- Safety confirmation ---
+    # This script is no longer part of day-to-day work (products are managed in the admin panel),
+    # and it is destructive: it drops and rebuilds Products and Categories, so every manual change
+    # (prices, categories, images, deleted products) is replaced with raw Wolt data.
+    # The explicit confirmation prevents running it by accident. For safe, additive imports
+    # use the Wolt import in the admin panel instead.
     print()
     print("⚠️  שימו לב: הרצה זו תמחק ותבנה מחדש את טבלאות Products ו-Categories.")
     print("   כל שינוי ידני שנעשה דרך פאנל הניהול (מחירים, קטגוריות, תמונות,")
