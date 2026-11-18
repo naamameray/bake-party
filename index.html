@@ -754,7 +754,7 @@
                 <p style="margin-top:8px;"><a href="https://wolt.com/he/isr/petah-tikva/venue/pinookim-givat-shmuel" target="_blank" rel="noopener">הזמנה באפליקציית Wolt 🛵</a></p>
             </div>
         </div>
-        <div class="footer-bottom">© <span id="f-year"></span> Bake & Party – אפייה ומסיבות. כל הזכויות שמורות. · <a href="#" onclick="openA11yStatement(); return false;" style="color:inherit;">הצהרת נגישות</a></div>
+        <div class="footer-bottom">© <span id="f-year"></span> Bake & Party – אפייה ומסיבות. כל הזכויות שמורות. · <a href="#" onclick="openA11yStatement(); return false;" style="color:inherit;">הצהרת נגישות</a> · <a href="/privacy" style="color:inherit;">מדיניות פרטיות</a></div>
     </footer>
 
     <a id="wa-btn" class="fab" href="#" target="_blank" rel="noopener" title="וואטסאפ" aria-label="צ'אט וואטסאפ">
@@ -910,7 +910,28 @@
                 <label for="login-password">סיסמה</label>
                 <input id="login-password" type="password" autocomplete="current-password" required>
                 <button class="btn" type="submit">התחברות</button>
-                <p class="switch">אין לך חשבון? <a onclick="showAuthMode('register')">להרשמה</a></p>
+                <p class="switch"><a onclick="showAuthMode('forgot')">שכחתי סיסמה</a> · אין לך חשבון? <a onclick="showAuthMode('register')">להרשמה</a></p>
+            </form>
+            <form id="forgot-form" style="display:none;" onsubmit="handleForgot(event)">
+                <p style="margin:0 0 6px; color:var(--muted); font-size:.92em;">נשלח אליך מייל עם קישור לבחירת סיסמה חדשה.</p>
+                <label for="forgot-email">אימייל</label>
+                <input id="forgot-email" type="email" autocomplete="email" required>
+                <button class="btn" type="submit" id="forgot-btn">שליחת קישור</button>
+                <p class="switch"><a onclick="showAuthMode('login')">חזרה להתחברות</a></p>
+            </form>
+            <form id="reset-form" style="display:none;" onsubmit="handleReset(event)">
+                <label for="reset-pass">סיסמה חדשה</label>
+                <input id="reset-pass" type="password" autocomplete="new-password" required minlength="6">
+                <label for="reset-pass2">הסיסמה החדשה שוב</label>
+                <input id="reset-pass2" type="password" autocomplete="new-password" required minlength="6">
+                <button class="btn" type="submit">שמירת הסיסמה</button>
+            </form>
+            <form id="twofa-form" style="display:none;" onsubmit="handleTwoFactor(event)">
+                <p style="margin:0 0 6px; color:var(--muted); font-size:.92em;">פותחים את אפליקציית האימות (למשל Google Authenticator) ומקלידים את הקוד בן 6 הספרות. אפשר גם קוד גיבוי.</p>
+                <label for="twofa-code">קוד אימות</label>
+                <input id="twofa-code" inputmode="numeric" autocomplete="one-time-code" required maxlength="12" style="letter-spacing:4px; text-align:center; font-size:1.3em;">
+                <button class="btn" type="submit">אישור</button>
+                <p class="switch"><a onclick="showAuthMode('login')">ביטול</a></p>
             </form>
             <form id="register-form" style="display:none;" onsubmit="handleRegister(event)">
                 <label for="reg-name">שם מלא</label>
@@ -924,6 +945,7 @@
                     <span>אשמח לקבל התראות מהחנות במייל ובטלפון: מוצרים חדשים, עדכונים על הזמנות ועוד (אפשר לבטל בכל רגע)</span>
                 </label>
                 <button class="btn" type="submit">הרשמה</button>
+                <p style="font-size:0.8em; color:var(--muted, #8A6B72); margin:8px 0 0; text-align:center;">בהרשמה את/ה מאשר/ת את <a href="/privacy" target="_blank" rel="noopener">מדיניות הפרטיות</a></p>
                 <p class="switch">כבר רשום/ה? <a onclick="showAuthMode('login')">להתחברות</a></p>
             </form>
             <p class="msg" id="auth-msg"></p>
@@ -985,7 +1007,7 @@
     </div>
 
     <script>
-        const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // Local development talks to the local server, not the live site
+        const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$|(^|\.)bakeparty\.co\.il$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // Same server as the page (our domain, Railway or local dev); anywhere else, the live API
         const TOKEN_KEY = 'bp_token';
         const WOLT_URL = 'https://wolt.com/he/isr/petah-tikva/venue/pinookim-givat-shmuel';
         const PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150"><rect width="150" height="150" fill="#FFE4EC"/><text x="50%" y="52%" font-size="48" text-anchor="middle" dominant-baseline="middle">🧁</text></svg>');
@@ -1161,6 +1183,10 @@
                     if (f) openMainAll(f.main); else loadMainCategories();
                 } else if (params.has('q')) {
                     const q = params.get('q'); searchInput.value = q; syncSearchBox(); runSearch(q);
+                } else if (params.has('reset')) {
+                    loadMainCategories(); openResetFromLink(params.get('reset'));
+                } else if (params.has('forgot')) {
+                    loadMainCategories(); openAuth('forgot');
                 } else if (params.has('order')) {
                     loadMainCategories();
                     openTracking(parseInt(params.get('order')), params.get('t'));
@@ -1864,14 +1890,23 @@
             if (mode === 'login') { const le = ls('bp_last_email'); if (le) document.getElementById('login-email').value = le; }
         }
         function closeAuth() { authModal.classList.remove('open'); }
+        const AUTH_MODES = { login: ['login-form', 'התחברות'], register: ['register-form', 'הרשמה'], forgot: ['forgot-form', 'שכחתי סיסמה'],
+                             reset: ['reset-form', 'בחירת סיסמה חדשה'], '2fa': ['twofa-form', 'אימות דו-שלבי'] };
         window.showAuthMode = function(mode) {
-            const isLogin = mode === 'login';
-            document.getElementById('login-form').style.display = isLogin ? 'block' : 'none';
-            document.getElementById('register-form').style.display = isLogin ? 'none' : 'block';
-            document.getElementById('auth-title').textContent = isLogin ? 'התחברות' : 'הרשמה';
-            document.getElementById('auth-msg').textContent = '';
+            Object.entries(AUTH_MODES).forEach(([m, [id]]) => document.getElementById(id).style.display = m === mode ? 'block' : 'none');
+            document.getElementById('auth-title').textContent = AUTH_MODES[mode][1];
+            document.getElementById('google-box').style.display = (mode === 'login' || mode === 'register') ? '' : 'none';
+            document.getElementById('auth-msg').textContent = ''; document.getElementById('auth-msg').style.color = '';
+            if (mode === 'forgot') document.getElementById('forgot-email').value = document.getElementById('login-email').value;
+            if (mode === '2fa') setTimeout(() => document.getElementById('twofa-code').focus(), 50);
         };
+        let twoFactorChallenge = null, resetToken = null;
         async function afterAuth(d) {
+            if (d.two_factor) {      // password (or Google) was correct; the account also needs a code from the authenticator app
+                twoFactorChallenge = d.challenge;
+                if (!authModal.classList.contains('open')) authModal.classList.add('open');
+                showAuthMode('2fa'); return;
+            }
             setToken(d.token); currentUser = d.user; closeAuth();
             if (currentUser.role === 'admin') await loadAdminCats();
             renderAccount(); refreshAllCardControls();
@@ -1895,6 +1930,43 @@
                 .then(() => { if (wantsNotify) setTimeout(() => tryEnablePush().catch(() => {}), 400); })
                 .catch(err => { document.getElementById('auth-msg').textContent = err.message; });
         };
+
+        async function postAuth(path, body) {
+            const res = await fetch(`${API}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(d.detail || 'שגיאה');
+            return d;
+        }
+        window.handleTwoFactor = async function(e) {
+            e.preventDefault();
+            try { await afterAuth(await postAuth('/api/login/2fa', { challenge: twoFactorChallenge, code: document.getElementById('twofa-code').value })); }
+            catch (err) { document.getElementById('auth-msg').textContent = err.message; }
+        };
+        window.handleForgot = async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('forgot-btn'); btn.disabled = true;
+            try {
+                const d = await postAuth('/api/password/forgot', { email: document.getElementById('forgot-email').value.trim() });
+                const m = document.getElementById('auth-msg'); m.style.color = 'var(--ok)'; m.textContent = d.message;
+            } catch (err) { document.getElementById('auth-msg').textContent = err.message; }
+            finally { btn.disabled = false; }
+        };
+        window.handleReset = async function(e) {
+            e.preventDefault();
+            const p1 = document.getElementById('reset-pass').value, p2 = document.getElementById('reset-pass2').value;
+            const msg = document.getElementById('auth-msg');
+            if (p1 !== p2) { msg.textContent = 'שתי הסיסמאות לא זהות'; return; }
+            try {
+                const d = await postAuth('/api/password/reset', { token: resetToken, password: p1 });
+                resetToken = null; history.replaceState(null, '', location.pathname); renderedBase = '';
+                await afterAuth(d);
+                if (!d.two_factor) alert('הסיסמה עודכנה ונכנסת לחשבון 🙂');
+            } catch (err) { msg.textContent = err.message; }
+        };
+        function openResetFromLink(token) {
+            resetToken = token;
+            authModal.classList.add('open'); showAuthMode('reset');
+        }
 
         // ===================== Sign in with Google =====================
         let googleReady = false;

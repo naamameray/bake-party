@@ -193,7 +193,13 @@
             <label>סיסמה</label>
             <input id="password" type="password">
             <button class="btn" type="button" id="login-btn">התחבר</button>
+            <div id="twofa-box" hidden style="margin-top:14px;">
+                <label for="twofa-code">קוד מאפליקציית האימות (או קוד גיבוי)</label>
+                <input id="twofa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" style="letter-spacing:4px; text-align:center; font-size:1.2em;">
+                <button class="btn" type="button" id="twofa-btn">אישור</button>
+            </div>
             <p class="error-msg" id="login-error"></p>
+            <p style="text-align:center; margin:6px 0 0;"><a href="/#forgot" style="color:var(--pink-dark);">שכחתי סיסמה</a></p>
         </div>
     </div>
 
@@ -408,6 +414,17 @@
                     </div>
                     <p id="my-pw-msg" style="font-weight:bold; margin:6px 0 0;"></p>
                 </div>
+                <div class="card" id="twofa-card">
+                    <h2>🔐 אימות דו-שלבי</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">בכניסה לחשבון, מלבד הסיסמה, מקלידים גם קוד בן 6 ספרות מאפליקציה בטלפון (Google Authenticator או Microsoft Authenticator). גם מי שגילה את הסיסמה לא יוכל להיכנס בלי הטלפון.</p>
+                    <div id="twofa-state">טוען...</div>
+                </div>
+                <div class="card">
+                    <h2>💾 גיבוי</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">הורדת קובץ עם כל הנתונים באתר (מוצרים, קטגוריות, הזמנות, לקוחות, ביקורות, משמרות). כדאי לשמור עותק פעם בשבוע במחשב או ב-Google Drive. הסיסמאות שמורות בקובץ בצורה מוצפנת בלבד.</p>
+                    <button class="btn" type="button" onclick="downloadBackup(this)">הורדת גיבוי מלא</button>
+                    <p id="backup-msg" style="font-weight:bold; margin:6px 0 0;"></p>
+                </div>
                 <div class="card">
                     <h2>פעולות אחרונות (יומן)</h2>
                     <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">כל הוספה, שינוי תפקיד, השבתה ואיפוס סיסמה נרשמים כאן עם שם מי שביצע. אי אפשר לערוך או למחוק את היומן.</p>
@@ -536,7 +553,7 @@
     </div>
 
     <script>
-        const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // Local development talks to the local server, not the live site
+        const API = /^(localhost|127\.0\.0\.1)$|\.railway\.app$|(^|\.)bakeparty\.co\.il$/.test(location.hostname) ? '' : 'https://bake-party-production.up.railway.app';  // Same server as the page (our domain, Railway or local dev); anywhere else, the live API
         const TOKEN_KEY = 'bp_token';
 
         function token(){ return localStorage.getItem(TOKEN_KEY); }
@@ -547,21 +564,38 @@
         const loginView = document.getElementById('login-view');
         const adminView = document.getElementById('admin-view');
 
+        // The account may need a second step: a code from the authenticator app
+        let twoFactorChallenge = null;
+        function loginPost(path, body) {
+            return fetch(`${API}${path}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })
+                .then(res => res.json().then(d => ({ ok: res.ok, d })));
+        }
+        document.getElementById('twofa-btn').onclick = () => {
+            loginPost('/api/login/2fa', { challenge: twoFactorChallenge, code: document.getElementById('twofa-code').value })
+                .then(onLoginResult).catch(err => { document.getElementById('login-error').textContent = err.message; });
+        };
+        document.getElementById('twofa-code').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('twofa-btn').click(); });
         document.getElementById('login-btn').onclick = () => {
             const email = document.getElementById('email').value.trim();
             const password = document.getElementById('password').value;
-            fetch(`${API}/api/login`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ email, password }) })
-                .then(res => res.json().then(d => ({ ok: res.ok, d })))
-                .then(({ ok, d }) => {
+            loginPost('/api/login', { email, password }).then(onLoginResult)
+                .catch(err => { document.getElementById('login-error').textContent = err.message; });
+        };
+        function onLoginResult({ ok, d }) {
+                    document.getElementById('login-error').textContent = '';
                     if (!ok) throw new Error(d.detail || 'שגיאה');
+                    if (d.two_factor) {
+                        twoFactorChallenge = d.challenge;
+                        document.getElementById('twofa-box').hidden = false;
+                        document.getElementById('twofa-code').focus();
+                        return;
+                    }
                     if (d.user.role === 'employee') { setToken(d.token); location.href = '/staff.html'; return; }
                     if (d.user.role !== 'admin') throw new Error('אינך מנהל');
                     setToken(d.token);
                     if (d.user.must_change_password) { showPwChange(); return; }
                     showAdmin();
-                })
-                .catch(err => { document.getElementById('login-error').textContent = err.message; });
-        };
+        }
 
         document.getElementById('logout-btn').onclick = () => {
             fetch(`${API}/api/logout`, { method: 'POST', headers: authHeaders() }).finally(() => { clearToken(); showLogin(); });
@@ -738,7 +772,7 @@
             if (name === 'products' && !productsLoaded) loadProductsTab();
             if (name === 'categories' && !categoriesLoaded) loadCategoriesTab();
             if (name === 'faq') loadFaqTab();
-            if (name === 'staff') { loadStaffTab(); loadAuditLog(); }
+            if (name === 'staff') { loadStaffTab(); loadAuditLog(); loadTwoFactor(); }
             if (name === 'ailog') loadAiLogTab();
         };
 
@@ -1493,7 +1527,7 @@
 
         // ===================== Staff and users =====================
         const ROLE_LABELS = { admin: 'מנהל', employee: 'עובד', customer: 'לקוח' };
-        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט' };
+        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט', '2fa_enabled': 'הפעלת אימות דו-שלבי', '2fa_disabled': 'כיבוי אימות דו-שלבי', '2fa_backup_code_used': 'כניסה עם קוד גיבוי', password_reset_by_email: 'איפוס סיסמה במייל', backup_download: 'הורדת גיבוי' };
 
         async function loadStaffTab() {
             const list = document.getElementById('st-list');
@@ -1620,6 +1654,107 @@
                 document.getElementById('my-old').value = ''; document.getElementById('my-new').value = '';
                 loadAuditLog();
             } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
+        };
+
+        // ----- Two-factor authentication (authenticator app) -----
+        async function twofaCall(path, body) {
+            const res = await fetch(`${API}/api/2fa/${path}`, { method: body ? 'POST' : 'GET', headers: authHeaders(), body: body ? JSON.stringify(body) : undefined });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(d.detail || 'שגיאה');
+            return d;
+        }
+        function twofaCodeForm(btnText, onSubmit, hint) {
+            const box = document.createElement('div');
+            box.innerHTML = `<label>${hint}</label>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                  <input id="tf-code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" style="max-width:170px; letter-spacing:4px; text-align:center; font-size:1.15em;">
+                  <button class="btn" type="button" id="tf-go">${btnText}</button>
+                </div><p id="tf-msg" style="font-weight:bold; color:#d9534f; margin:6px 0 0;"></p>`;
+            const go = () => onSubmit(box.querySelector('#tf-code').value).catch(e => { box.querySelector('#tf-msg').textContent = e.message; });
+            box.querySelector('#tf-go').onclick = go;
+            box.querySelector('#tf-code').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+            return box;
+        }
+        async function loadTwoFactor() {
+            const wrap = document.getElementById('twofa-state');
+            try {
+                const st = await twofaCall('status');
+                wrap.innerHTML = '';
+                if (st.enabled) {
+                    const p = document.createElement('p');
+                    p.innerHTML = `<b style="color:var(--ok);">✓ מופעל</b> · נשארו ${st.backup_codes_left} קודי גיבוי`;
+                    wrap.appendChild(p);
+                    const off = document.createElement('button');
+                    off.className = 'btn'; off.type = 'button'; off.textContent = 'כיבוי האימות הדו-שלבי';
+                    off.style.background = '#999';
+                    off.onclick = () => {
+                        off.remove();
+                        wrap.appendChild(twofaCodeForm('לכבות', async code => {
+                            await twofaCall('disable', { code }); loadTwoFactor(); loadAuditLog();
+                        }, 'לאישור, הקלידי קוד מהאפליקציה (או קוד גיבוי):'));
+                    };
+                    wrap.appendChild(off);
+                } else {
+                    const p = document.createElement('p');
+                    p.innerHTML = '<b style="color:#d9534f;">כבוי</b> · מומלץ מאוד להפעיל בחשבון מנהלת.';
+                    const on = document.createElement('button');
+                    on.className = 'btn'; on.type = 'button'; on.textContent = 'הפעלה';
+                    on.onclick = startTwoFactorSetup;
+                    wrap.append(p, on);
+                }
+            } catch (e) { wrap.textContent = e.message; }
+        }
+        async function startTwoFactorSetup() {
+            const wrap = document.getElementById('twofa-state');
+            try {
+                const d = await twofaCall('setup', {});
+                wrap.innerHTML = `<ol style="padding-inline-start:20px; line-height:1.7;">
+                    <li>מתקינים בטלפון את <b>Google Authenticator</b> (או Microsoft Authenticator).</li>
+                    <li>באפליקציה לוחצים <b>+</b> ← <b>סריקת קוד QR</b> וסורקים את הקוד:</li></ol>
+                    <div class="tf-qr" style="width:200px; max-width:100%; background:#fff; padding:8px; border-radius:12px; border:1px solid var(--pink-light);"></div>
+                    <p style="font-size:0.85em; color:var(--muted);">אי אפשר לסרוק? מקלידים באפליקציה את המפתח: <code class="tf-secret" style="direction:ltr; display:inline-block; word-break:break-all;"></code></p>`;
+                // qr_svg is generated by our own server from the secret; it contains only rect/path elements
+                if (d.qr_svg) wrap.querySelector('.tf-qr').innerHTML = d.qr_svg; else wrap.querySelector('.tf-qr').remove();
+                const svg = wrap.querySelector('.tf-qr svg'); if (svg) { svg.style.width = '100%'; svg.style.height = 'auto'; }
+                wrap.querySelector('.tf-secret').textContent = d.secret.replace(/(.{4})/g, '$1 ').trim();
+                wrap.appendChild(twofaCodeForm('אישור והפעלה', async code => {
+                    const r = await twofaCall('enable', { code });
+                    showBackupCodes(r.backup_codes); loadAuditLog();
+                }, '3. מקלידים את הקוד בן 6 הספרות שמופיע באפליקציה:'));
+            } catch (e) { wrap.textContent = e.message; }
+        }
+        function showBackupCodes(codes) {
+            const wrap = document.getElementById('twofa-state');
+            wrap.innerHTML = `<p><b style="color:var(--ok);">✓ האימות הדו-שלבי הופעל.</b></p>
+                <p><b>קודי גיבוי:</b> אם הטלפון אבד, כל קוד כאן נכנס פעם אחת במקום הקוד מהאפליקציה. שמרי אותם במקום בטוח (צילום מסך, הדפסה). <b>הם מוצגים רק עכשיו.</b></p>
+                <div class="tf-codes" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:6px; direction:ltr; font-family:monospace; font-size:1.1em; background:var(--pink-light); padding:10px; border-radius:12px;"></div>`;
+            const box = wrap.querySelector('.tf-codes');
+            codes.forEach(c => { const el = document.createElement('span'); el.textContent = c; box.appendChild(el); });
+            const done = document.createElement('button');
+            done.className = 'btn'; done.type = 'button'; done.textContent = 'שמרתי, אפשר לסגור'; done.style.marginTop = '10px';
+            done.onclick = loadTwoFactor;
+            const copy = document.createElement('button');
+            copy.className = 'btn'; copy.type = 'button'; copy.textContent = 'העתקה'; copy.style.cssText = 'margin:10px 8px 0 0; background:#999;';
+            copy.onclick = () => navigator.clipboard?.writeText(codes.join('\n')).then(() => copy.textContent = '✓ הועתק');
+            wrap.append(done, copy);
+        }
+
+        // ----- Full backup download -----
+        window.downloadBackup = async function(btn) {
+            const msg = document.getElementById('backup-msg');
+            btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'מכין את הקובץ...';
+            try {
+                const res = await fetch(`${API}/api/admin/backup`, { headers: authHeaders() });
+                if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail || 'שגיאה'); }
+                const blob = await res.blob();
+                const name = (res.headers.get('Content-Disposition') || '').match(/filename="?([^"]+)"?/)?.[1] || 'bake-party-backup.json.gz';
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                msg.style.color = 'var(--ok)'; msg.textContent = `✓ הורד (${(blob.size / 1024).toFixed(0)} KB)`;
+                loadAuditLog();
+            } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
+            btn.disabled = false;
         };
 
         async function loadAuditLog() {
