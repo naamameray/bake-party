@@ -379,6 +379,7 @@
             display: flex; align-items: center; gap: 6px; }
         #cats-fab:hover { background: #2f1c21; }
         body.has-cart #cats-fab { bottom: 84px; }
+        @media (min-width: 761px) { #cats-fab { display: none; } }
         .cats-modal { max-width: 560px; padding: 0; display: flex; flex-direction: column; }
         .cats-head { padding: 18px 20px 12px; border-bottom: 1px solid var(--line); }
         .cats-head h2 { text-align: right; margin: 0 0 10px; }
@@ -395,6 +396,79 @@
         @media (min-width: 761px) {
             .cat-menu-bar { flex-wrap: wrap; overflow: visible; justify-content: center; row-gap: 8px; }
         }
+
+        /* ---------- עריכת מוצר (מנהלת) ---------- */
+        .detail-modal.editing { max-width: 860px; }
+        .detail-modal.editing .detail-grid { grid-template-columns: 300px 1fr; }
+        .detail-modal.editing .detail-img-wrap { flex-direction: column; gap: 12px; align-items: stretch; }
+        .detail-modal.editing .detail-img-wrap img { max-height: 240px; }
+        .detail-modal.editing .detail-info { padding: 22px 24px 20px; }
+        .ef-img-btn { border: 1.5px dashed var(--brand-2); background: #FFF6F8; color: var(--brand); border-radius: 12px; padding: 9px; font-weight: 600; cursor: pointer; font-size: .88em; }
+        .edit-form { display: flex; flex-direction: column; gap: 12px; }
+        .ef-title { font-size: 1.15em; font-weight: 700; color: var(--brand); padding-left: 40px; }
+        .ef-title span { color: var(--muted); font-weight: 400; font-size: .8em; }
+        .ef-field { display: flex; flex-direction: column; gap: 4px; margin: 0 !important; font-weight: 400 !important; }
+        .ef-field > span { font-size: .8em; color: var(--muted); font-weight: 500; }
+        .edit-form input[type=text], .edit-form input[type=number], .edit-form textarea, .edit-form .cc-input {
+            width: 100%; height: 40px; padding: 8px 12px; border: 1.5px solid var(--line); border-radius: 10px; font-size: .95em; background: #fff; }
+        .edit-form textarea { height: auto; resize: vertical; }
+        .edit-form input:focus, .edit-form textarea:focus { outline: none; border-color: var(--brand-2); }
+        .ef-row3 { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 10px; }
+        .ef-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .ef-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+        .ef-chips .deal-pick { border-radius: 999px; padding: 6px 12px; font-size: .82em; border-width: 1.5px; }
+        .modal .ef-switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; width: fit-content; margin: 2px 0 0; font-size: 1em; }
+        .ef-switch input { display: none; }
+        .ef-switch i { display: inline-block; width: 44px; height: 24px; border-radius: 999px; background: #ccc; position: relative; transition: .2s; flex: 0 0 auto; }
+        .ef-switch i::after { content: ''; position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: .2s; }
+        .ef-switch input:checked + i { background: var(--ok); }
+        .ef-switch input:checked + i::after { right: 23px; }
+        .ef-switch b { font-weight: 600; font-size: .92em; }
+        .ef-switch .on { display: none; color: var(--ok); } .ef-switch .off { color: #888; }
+        .ef-switch input:checked ~ .on { display: inline; } .ef-switch input:checked ~ .off { display: none; }
+        .ef-actions { display: flex; gap: 8px; margin-top: 4px; position: sticky; bottom: 0; background: #fff; padding-top: 8px; }
+        .ef-actions .btn { margin: 0; width: auto; }
+        .ef-actions #ef-save { flex: 1; }
+        .ef-icon { padding: 10px 14px; }
+        .ef-danger { color: #d9534f; border-color: #F3C2C1; }
+        .ef-danger:hover { background: #FDECEC; }
+        .ef-link { font-size: .82em; color: var(--muted); text-align: center; }
+        @media (max-width: 760px) {
+            .detail-modal.editing .detail-grid { grid-template-columns: 1fr; }
+            .detail-modal.editing .detail-img-wrap { flex-direction: row; align-items: center; padding: 12px 16px; }
+            .detail-modal.editing .detail-img-wrap img { width: 90px; height: 90px; max-height: 90px; }
+            .ef-row3 { grid-template-columns: 1fr 1fr 1fr; }
+            .ef-row2 { grid-template-columns: 1fr; }
+        }
+
+        /* ---------- ביקורות ---------- */
+        #reviews-section { display: none; margin: 0 0 36px; }
+        .rv-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+        .rv-top h3 { margin: 0 0 4px; font-size: 1.35em; color: #E05276; }
+        .rv-summary { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .95em; }
+        .rv-summary strong { font-size: 1.6em; color: var(--ink); }
+        .rv-stars { color: #F5B301; letter-spacing: 1px; white-space: nowrap; }
+        .rv-stars .off { color: #E6D9DC; }
+        #rv-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+        .rv-card { background: #fff; border: 2px solid #FFD1DC; border-radius: 18px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+        .rv-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+        .rv-name { font-weight: 700; }
+        .rv-date { color: var(--muted); font-size: .8em; }
+        .rv-text { margin: 0; line-height: 1.6; white-space: pre-line; }
+        .rv-replies { border-top: 1px dashed var(--line); margin-top: 4px; padding-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+        .rv-reply { background: #FBF5F6; border-radius: 12px; padding: 8px 10px; font-size: .9em; }
+        .rv-reply.store { background: #FFE4EC; }
+        .rv-reply b { font-weight: 600; }
+        .rv-reply-btn { background: none; border: none; color: var(--brand); font-weight: 600; cursor: pointer; padding: 0; font-size: .88em; align-self: flex-start; }
+        .rv-reply-form { display: none; flex-direction: column; gap: 6px; }
+        .rv-reply-form.open { display: flex; }
+        .rv-reply-form input, .rv-reply-form textarea { border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: .92em; width: 100%; }
+        .rv-pick { display: flex; gap: 4px; align-items: center; direction: ltr; justify-content: flex-end; }
+        .rv-pick button { background: none; border: none; font-size: 2.1em; line-height: 1; color: #E6D9DC; cursor: pointer; padding: 0 2px; width: auto !important; margin: 0 !important; }
+        .rv-pick button.on { color: #F5B301; }
+        .rv-pick .rv-zero { font-size: .95em; font-weight: 700; border: 1.5px solid var(--line); border-radius: 999px; width: 36px !important; height: 36px; color: var(--muted); margin-right: 8px !important; }
+        .rv-pick .rv-zero.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+        .rv-pick-label { font-size: .88em; color: var(--muted); margin-top: 4px; text-align: right; }
 
         /* ---------- נייד ---------- */
         @media (max-width: 760px) {
@@ -619,6 +693,18 @@
             <p>אפשר להגיע לחנות ביוני נתניהו 23 ולבחור בעצמכם, או ליצור קשר בטלפון ובוואטסאפ ולקבל עזרה בבחירה. חנות משפחתית, בגישה אישית וחמה.</p>
         </section>
 
+        <section id="reviews-section">
+            <div class="rv-top">
+                <div>
+                    <h3>מה הלקוחות אומרים ⭐</h3>
+                    <div class="rv-summary" id="rv-summary"></div>
+                </div>
+                <button class="btn" type="button" onclick="openReviewForm()">✍️ כתיבת ביקורת</button>
+            </div>
+            <div id="rv-list"></div>
+            <div class="more-wrap" id="rv-more"></div>
+        </section>
+
         <section id="faq-section">
             <h3>שאלות נפוצות</h3>
             <p class="faq-sub">לא מצאתם תשובה? כתבו לנו בוואטסאפ 🙂</p>
@@ -703,6 +789,30 @@
             <div class="cart-head"><h2 id="cart-title">העגלה שלי</h2></div>
             <div class="cart-body" id="cart-body"></div>
             <div class="cart-foot" id="cart-foot"></div>
+        </div>
+    </div>
+
+    <!-- כתיבת ביקורת -->
+    <div class="modal-overlay" id="review-modal">
+        <div class="modal" role="dialog" aria-labelledby="rv-title">
+            <button class="close-x" type="button" onclick="document.getElementById('review-modal').classList.remove('open')" aria-label="סגירה">×</button>
+            <h2 id="rv-title">כתיבת ביקורת</h2>
+            <form id="review-form" onsubmit="submitReview(event)">
+                <label>כמה כוכבים? (0 עד 5)</label>
+                <div class="rv-pick" id="rv-pick" role="radiogroup" aria-label="דירוג בכוכבים">
+                    <button type="button" class="rv-zero" data-v="0" role="radio" aria-checked="false" aria-label="0 כוכבים">0</button>
+                    <button type="button" data-v="1" role="radio" aria-checked="false" aria-label="1 כוכבים">★</button><button type="button" data-v="2" role="radio" aria-checked="false" aria-label="2 כוכבים">★</button><button type="button" data-v="3" role="radio" aria-checked="false" aria-label="3 כוכבים">★</button><button type="button" data-v="4" role="radio" aria-checked="false" aria-label="4 כוכבים">★</button><button type="button" data-v="5" role="radio" aria-checked="false" aria-label="5 כוכבים">★</button>
+                </div>
+                <div id="rv-pick-label" class="rv-pick-label">בחרו דירוג</div>
+                <label for="rv-name">שם</label>
+                <input id="rv-name" maxlength="60" autocomplete="name" required placeholder="אפשר גם רק שם פרטי">
+                <label for="rv-text">מה דעתך? (לא חובה)</label>
+                <textarea id="rv-text" rows="4" maxlength="1500" placeholder="ספרו לנו על החוויה שלכם בחנות או באתר"></textarea>
+                <input type="text" id="rv-website" name="website" tabindex="-1" autocomplete="off" style="position:absolute; left:-9999px;" aria-hidden="true">
+                <p style="font-size:.85em; color:var(--muted); margin:8px 0 0;">הביקורת תופיע באתר אחרי אישור של החנות.</p>
+                <button class="btn" type="submit" id="rv-submit">שליחת ביקורת</button>
+                <p class="msg" id="rv-msg"></p>
+            </form>
         </div>
     </div>
 
@@ -1195,7 +1305,7 @@
                 allCategories = cats; allProducts = prods;
                 await loadCategoryMenu();
                 loadFaq();
-                updateCartBar(); loadOrdersConfig();
+                updateCartBar(); loadOrdersConfig(); loadReviews();
                 const { p, base } = parseHash();
                 applyBase(base);
                 if (p) openProductDetail(p, true);
@@ -1274,10 +1384,11 @@
                 .catch(() => { categoryTree = allCategories.map(c => ({ ...c, subcategories: [] })); })
                 .then(() => { renderCategoryMenu(); renderFooterCats(); });
         }
+        const HOVER_DEVICE = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
         function placeDropdown(trigger, dd) {
             if (window.innerWidth <= 760) return;
             const r = trigger.getBoundingClientRect();
-            dd.style.top = (r.bottom + 6) + 'px';
+            dd.style.top = (r.bottom + 2) + 'px';
             dd.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
         }
         function renderCategoryMenu() {
@@ -1306,11 +1417,19 @@
                         dd.appendChild(b);
                     });
                     item.appendChild(dd);
-                    trigger.onclick = e => {
-                        e.stopPropagation();
+                    const openDd = () => {
                         document.querySelectorAll('.cat-menu-item.open').forEach(el => { if (el !== item) el.classList.remove('open'); });
-                        item.classList.toggle('open'); placeDropdown(trigger, dd);
+                        item.classList.add('open'); placeDropdown(trigger, dd);
                     };
+                    if (HOVER_DEVICE) {
+                        // במחשב: הרשימה נפתחת כשעומדים עם העכבר, ולחיצה על הקטגוריה פותחת אותה
+                        let closeT = null;
+                        item.addEventListener('mouseenter', () => { clearTimeout(closeT); openDd(); });
+                        item.addEventListener('mouseleave', () => { closeT = setTimeout(() => item.classList.remove('open'), 250); });
+                        trigger.onclick = e => { e.stopPropagation(); item.classList.remove('open'); openMain(main); window.scrollTo(0, 0); };
+                    } else {
+                        trigger.onclick = e => { e.stopPropagation(); if (item.classList.contains('open')) item.classList.remove('open'); else openDd(); };
+                    }
                 } else trigger.onclick = () => openMain(main);
                 bar.appendChild(item);
             });
@@ -1345,7 +1464,7 @@
         function setHomeMode(isHome) {
             const faq = document.getElementById('faq-section');
             document.getElementById('hero').style.display = isHome ? 'grid' : 'none';
-            ['about-section', 'features-section'].forEach(id => document.getElementById(id).style.display = isHome ? 'block' : 'none');
+            ['about-section', 'features-section', 'reviews-section'].forEach(id => document.getElementById(id).style.display = isHome ? 'block' : 'none');
             faq.style.display = isHome && !faq.dataset.empty ? 'block' : 'none';
             if (!isHome) document.getElementById('new-section').style.display = 'none';
             document.getElementById('back-button').style.display = isHome ? 'none' : 'inline-block';
@@ -1537,44 +1656,64 @@
             img.onerror = function () { this.onerror = null; this.src = PLACEHOLDER; };
             img.src = imgUrl(p.image); img.alt = p.name;
             const isAdmin = currentUser && currentUser.role === 'admin';
+            document.querySelector('#detail-modal .detail-modal').classList.toggle('editing', !!isAdmin);
             if (isAdmin) {
+                // אותו מוצר כבר פתוח לעריכה: לא מציירים מחדש (כדי לא למחוק מה שהוקלד בינתיים)
+                const existing = document.getElementById('edit-form');
+                if (existing && existing.dataset.pid === String(p.id)) return;
                 const opts = catOptions('');
-                document.getElementById('detail-badge').innerHTML = '';
-                document.getElementById('detail-name').innerHTML = `<input type="text" id="edit-detail-name" value="${esc(p.name)}" class="edit-input" placeholder="שם המוצר">`;
-                document.getElementById('detail-category').innerHTML = '';
-                document.getElementById('detail-price').innerHTML = `₪ <input type="number" step="0.1" id="edit-detail-price" value="${esc(p.price)}" class="edit-input" style="width:80%;">`;
                 const deals = ['4 ב-₪25', '6 ב-₪55', '8 ב-₪40', '10 ב-₪27'];
-                document.getElementById('detail-meta').innerHTML = `
-                    <li style="flex-direction:column; align-items:stretch;">
-                        <span style="font-size:0.85em; font-weight:bold; color:#d9534f; margin-bottom:6px;">🎁 מבצע:</span>
-                        <div style="display:flex; gap:4px; flex-wrap:wrap;">
-                            ${deals.map(d => `<button type="button" class="deal-pick ${p.sale_label === d ? 'deal-on' : ''}" data-deal="${d}">${d.replace(' ב-₪', 'ב')}</button>`).join('')}
-                            <button type="button" class="deal-pick deal-off ${!p.is_on_sale ? 'deal-on' : ''}" data-deal="">ללא</button>
+                ['detail-badge', 'detail-name', 'detail-category', 'detail-price', 'detail-meta'].forEach(id => document.getElementById(id).innerHTML = '');
+                document.getElementById('detail-action').innerHTML = `
+                    <form class="edit-form" id="edit-form" data-pid="${p.id}" onsubmit="event.preventDefault(); saveProductDetails(${p.id}, document.getElementById('ef-save'));">
+                        <div class="ef-title">עריכת מוצר <span>#${p.id}</span></div>
+                        <label class="ef-field"><span>שם המוצר</span><input type="text" id="edit-detail-name" value="${esc(p.name)}" required></label>
+                        <div class="ef-row3">
+                            <label class="ef-field"><span>מחיר ₪</span><input type="number" step="0.1" min="0" id="edit-detail-price" value="${esc(p.price)}" required></label>
+                            <label class="ef-field"><span>משקל (גרם)</span><input type="number" min="0" id="edit-detail-weight" value="${esc(p.weight_grams || '')}"></label>
+                            <label class="ef-field"><span>יחידות</span><input type="number" min="0" id="edit-detail-units" value="${esc(p.units_per_package || '')}"></label>
                         </div>
-                        <input type="hidden" id="edit-detail-sale" value="${p.is_on_sale ? '1' : ''}">
-                        <input type="hidden" id="edit-detail-sale-label" value="${esc(p.sale_label || '')}">
-                    </li>
-                    <li><span style="font-size:0.85em;">קטגוריה 1</span><select id="edit-detail-cat1" class="edit-input-sm cat-combo" style="width:65%;">${opts}</select></li>
-                    <li><span style="font-size:0.85em;">קטגוריה 2</span><select id="edit-detail-cat2" class="edit-input-sm cat-combo" style="width:65%;">${opts}</select></li>
-                    <li><span>משקל (גרם)</span><input type="number" id="edit-detail-weight" value="${esc(p.weight_grams || '')}" class="edit-input-sm"></li>
-                    <li><span>יחידות</span><input type="number" id="edit-detail-units" value="${esc(p.units_per_package || '')}" class="edit-input-sm"></li>
-                    <li><span style="font-size:0.85em;">הערות</span><input type="text" id="edit-detail-notes" value="${esc(p.notes || '')}" class="edit-input-sm" style="width:65%;" placeholder="אופציונלי"></li>
-                    <li><span style="font-size:0.85em;">תמונה חדשה</span><input type="file" id="edit-detail-file" accept="image/*" class="edit-input-sm"></li>`;
-                document.querySelectorAll('#detail-meta .deal-pick').forEach(b => b.onclick = () => pickDeal(b, b.dataset.deal));
+                        <div class="ef-field"><span>מלאי</span>
+                            <label class="ef-switch"><input type="checkbox" id="edit-detail-stock" ${p.in_stock ? 'checked' : ''}><i></i><b class="on">במלאי</b><b class="off">אזל מהמלאי</b></label>
+                        </div>
+                        <div class="ef-field"><span>מבצע</span>
+                            <div class="ef-chips">
+                                <button type="button" class="deal-pick deal-off ${!p.is_on_sale ? 'deal-on' : ''}" data-deal="">ללא</button>
+                                ${deals.map(d => `<button type="button" class="deal-pick ${p.sale_label === d ? 'deal-on' : ''}" data-deal="${d}">${d}</button>`).join('')}
+                            </div>
+                            <input type="hidden" id="edit-detail-sale" value="${p.is_on_sale ? '1' : ''}">
+                            <input type="hidden" id="edit-detail-sale-label" value="${esc(p.sale_label || '')}">
+                        </div>
+                        <div class="ef-row2">
+                            <label class="ef-field"><span>קטגוריה</span><select id="edit-detail-cat1" class="cat-combo">${opts}</select></label>
+                            <label class="ef-field"><span>קטגוריה נוספת</span><select id="edit-detail-cat2" class="cat-combo">${opts}</select></label>
+                        </div>
+                        <label class="ef-field"><span>הערות / תיאור</span><textarea id="edit-detail-notes" rows="2" placeholder="לא חובה">${esc(p.notes || '')}</textarea></label>
+                        <input type="file" id="edit-detail-file" accept="image/*" hidden>
+                        <div class="ef-actions">
+                            <button class="btn" type="submit" id="ef-save">💾 שמירה</button>
+                            <button class="btn btn-ghost ef-icon" type="button" onclick="duplicateProduct(${p.id})" title="שכפול מוצר">📋 שכפול</button>
+                            <button class="btn btn-ghost ef-icon ef-danger" type="button" onclick="deleteProduct(${p.id})" title="מחיקת מוצר">🗑️</button>
+                        </div>
+                        <a class="ef-link" href="/product/${p.id}" target="_blank" rel="noopener">איך גוגל רואה את המוצר ↗</a>
+                    </form>`;
+                document.querySelectorAll('#edit-form .deal-pick').forEach(btn => btn.onclick = () => pickDeal(btn, btn.dataset.deal));
                 const ids = p.category_ids && p.category_ids.length ? p.category_ids : (p.category_id ? [p.category_id] : []);
                 document.getElementById('edit-detail-cat1').value = ids[0] || '';
                 document.getElementById('edit-detail-cat2').value = ids[1] || '';
-                document.getElementById('detail-action').innerHTML = `
-                    <div style="display:flex; flex-direction:column; gap:10px; margin-top:15px;">
-                        <button class="btn" style="background:#3B7DD8;" onclick="saveProductDetails(${p.id}, this)">💾 עדכון שינויים</button>
-                        <div style="display:flex; gap:10px;">
-                            <button class="btn ${p.in_stock ? 'btn-ghost' : ''}" style="flex:1; font-size:0.9em;" onclick="updateProductStock(${p.id}, ${p.in_stock ? 0 : 100})">${p.in_stock ? 'סימון כאזל' : 'החזרה למלאי'}</button>
-                            <button class="btn btn-ghost" style="flex:1; font-size:0.9em;" onclick="duplicateProduct(${p.id})">📋 שכפול</button>
-                        </div>
-                        <button class="btn" style="font-size:0.9em; background:#d9534f;" onclick="deleteProduct(${p.id})">🗑️ מחיקת מוצר</button>
-                        <a class="btn btn-ghost" href="/product/${p.id}" target="_blank" rel="noopener">איך גוגל רואה את המוצר ↗</a>
-                    </div>`;
+                // החלפת תמונה: לחיצה על התמונה עצמה, עם תצוגה מקדימה
+                const wrap = document.querySelector('#detail-modal .detail-img-wrap');
+                wrap.querySelectorAll('.ef-img-btn').forEach(x => x.remove());
+                const imgBtn = document.createElement('button');
+                imgBtn.type = 'button'; imgBtn.className = 'ef-img-btn'; imgBtn.textContent = '📷 החלפת תמונה';
+                imgBtn.onclick = () => document.getElementById('edit-detail-file').click();
+                wrap.appendChild(imgBtn);
+                document.getElementById('edit-detail-file').onchange = e => {
+                    const f = e.target.files[0]; if (!f) return;
+                    img.src = URL.createObjectURL(f); imgBtn.textContent = '📷 תמונה חדשה נבחרה (תישמר בלחיצה על שמירה)';
+                };
             } else {
+                document.querySelectorAll('#detail-modal .ef-img-btn').forEach(x => x.remove());
                 document.getElementById('detail-name').textContent = p.name;
                 document.getElementById('detail-category').textContent = p.category || '';
                 document.getElementById('detail-price').textContent = money(p.price);
@@ -1603,10 +1742,12 @@
         // fromRoute: נסגר כי המשתמש לחץ "חזור". אחרת מוציאים את המוצר מהכתובת.
         function closeDetail(fromRoute) {
             document.getElementById('detail-modal').classList.remove('open');
+            document.getElementById('detail-action').innerHTML = '';   // בפתיחה הבאה טופס העריכה ייבנה מחדש עם נתונים עדכניים
             if (fromRoute !== true && parseHash().p) history.back();
         }
         function closeDetailQuiet() {
             document.getElementById('detail-modal').classList.remove('open');
+            document.getElementById('detail-action').innerHTML = '';
             if (parseHash().p) history.replaceState(null, '', renderedBase ? '#' + renderedBase : location.pathname);
         }
         document.getElementById('detail-modal').addEventListener('click', e => { if (e.target.id === 'detail-modal') closeDetail(); });
@@ -1634,7 +1775,8 @@
                     weight_grams: v('edit-detail-weight') ? parseInt(v('edit-detail-weight')) : null,
                     units_per_package: v('edit-detail-units') ? parseInt(v('edit-detail-units')) : null,
                     category_ids, notes: v('edit-detail-notes').trim() || null,
-                    is_on_sale: v('edit-detail-sale') === '1', sale_label: v('edit-detail-sale-label').trim() || null };
+                    is_on_sale: v('edit-detail-sale') === '1', sale_label: v('edit-detail-sale-label').trim() || null,
+                    stock_quantity: document.getElementById('edit-detail-stock').checked ? 100 : 0 };
                 const f = document.getElementById('edit-detail-file');
                 if (f.files.length) body.image_url = await uploadImage(f.files[0]);
                 const res = await fetch(`${API}/api/admin/products/${id}`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify(body) });
@@ -1642,7 +1784,7 @@
                 closeDetail();
                 await refreshProducts(); rerenderCurrent();
             } catch (err) { alert(err.message); }
-            finally { btn.textContent = '💾 עדכון שינויים'; btn.disabled = false; }
+            finally { btn.textContent = '💾 שמירה'; btn.disabled = false; }
         };
         window.updateProductStock = async function(id, newStock) {
             try {
@@ -1797,6 +1939,98 @@
             document.getElementById('footer-hours-list').innerHTML = data.weekly.map(d =>
                 `<li><span>${esc(d.day_name)}</span><span>${d.is_closed ? 'סגור' : esc(d.opening_time + '-' + d.closing_time)}</span></li>`).join('');
         }).catch(e => console.error('שגיאה בטעינת לוח שעות:', e));
+
+        // ===================== ביקורות =====================
+        let rvOffset = 0, rvRating = null;
+        function starsHtml(n) { return `<span class="rv-stars" aria-label="${n} מתוך 5 כוכבים">${'★'.repeat(n)}<span class="off">${'★'.repeat(5 - n)}</span></span>`; }
+        async function loadReviews(more) {
+            if (!more) rvOffset = 0;
+            try {
+                const d = await fetch(`${API}/api/reviews?limit=6&offset=${rvOffset}&_t=${Date.now()}`).then(r => r.json());
+                document.getElementById('rv-summary').innerHTML = d.count
+                    ? `<strong>${d.average.toFixed(1)}</strong>${starsHtml(Math.round(d.average))}<span>(${d.count} ביקורות)</span>`
+                    : '<span>עוד אין ביקורות. אפשר להיות הראשונים! 🙂</span>';
+                const list = document.getElementById('rv-list');
+                if (!more) list.innerHTML = '';
+                d.items.forEach(r => list.appendChild(reviewCard(r)));
+                rvOffset += d.items.length;
+                const moreBox = document.getElementById('rv-more');
+                moreBox.innerHTML = rvOffset < d.count ? '<button class="btn btn-ghost" type="button">עוד ביקורות</button>' : '';
+                if (moreBox.firstChild) moreBox.firstChild.onclick = () => loadReviews(true);
+            } catch (e) {}
+        }
+        function reviewCard(r) {
+            const c = document.createElement('article'); c.className = 'rv-card';
+            c.innerHTML = `<div class="rv-head"><span class="rv-name">${esc(r.name)}</span><span class="rv-date">${esc(r.created_at)}</span></div>
+                ${starsHtml(r.rating)}
+                ${r.text ? `<p class="rv-text">${esc(r.text)}</p>` : ''}
+                <div class="rv-replies">${r.replies.map(x => `<div class="rv-reply${x.is_store ? ' store' : ''}"><b>${x.is_store ? '🧁 תגובת החנות' : esc(x.name)}:</b> ${esc(x.text)}</div>`).join('')}
+                    <button class="rv-reply-btn" type="button">💬 להגיב</button>
+                    <form class="rv-reply-form">
+                        ${currentUser ? '' : '<input name="name" maxlength="60" placeholder="שם" required>'}
+                        <textarea name="text" rows="2" maxlength="800" placeholder="התגובה שלך" required></textarea>
+                        <input name="website" tabindex="-1" autocomplete="off" style="position:absolute; left:-9999px;" aria-hidden="true">
+                        <button class="btn btn-sm" type="submit">שליחת תגובה</button>
+                        <span class="msg" style="text-align:right;"></span>
+                    </form></div>`;
+            const form = c.querySelector('.rv-reply-form');
+            c.querySelector('.rv-reply-btn').onclick = () => { form.classList.toggle('open'); if (form.classList.contains('open')) form.querySelector('textarea').focus(); };
+            form.onsubmit = async e => {
+                e.preventDefault();
+                const msg = form.querySelector('.msg');
+                const q = n => (form.querySelector(`[name="${n}"]`) || {}).value || '';
+                const body = { name: currentUser ? (currentUser.name || 'לקוח/ה') : q('name'), text: q('text'), website: q('website') };
+                const headers = { 'Content-Type': 'application/json' }; if (token()) headers['Authorization'] = 'Bearer ' + token();
+                try {
+                    const res = await fetch(`${API}/api/reviews/${r.id}/replies`, { method: 'POST', headers, body: JSON.stringify(body) });
+                    const d = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(d.detail || 'לא הצלחנו לשלוח');
+                    loadReviews();
+                } catch (err) { msg.textContent = err.message; }
+            };
+            return c;
+        }
+        function setRvRating(v) {
+            rvRating = v;
+            document.querySelectorAll('#rv-pick button').forEach(b => {
+                const bv = Number(b.dataset.v);
+                b.classList.toggle('on', b.classList.contains('rv-zero') ? v === 0 : bv <= v && v > 0);
+                b.setAttribute('aria-checked', bv === v ? 'true' : 'false');
+            });
+            document.getElementById('rv-pick-label').textContent = v === 0 ? '0 כוכבים' : v === 1 ? 'כוכב אחד' : `${v} כוכבים`;
+        }
+        document.querySelectorAll('#rv-pick button').forEach(b => b.onclick = () => setRvRating(Number(b.dataset.v)));
+        function openReviewForm() {
+            rvRating = null;
+            document.querySelectorAll('#rv-pick button').forEach(b => { b.classList.remove('on'); b.setAttribute('aria-checked', 'false'); });
+            document.getElementById('rv-pick-label').textContent = 'בחרו דירוג';
+            document.getElementById('review-form').reset();
+            document.getElementById('review-form').style.display = 'block';
+            document.getElementById('rv-msg').textContent = '';
+            if (currentUser) document.getElementById('rv-name').value = currentUser.name || '';
+            document.getElementById('review-modal').classList.add('open');
+        }
+        async function submitReview(e) {
+            e.preventDefault();
+            const msg = document.getElementById('rv-msg'), btn = document.getElementById('rv-submit');
+            if (rvRating === null) { msg.textContent = 'צריך לבחור דירוג (אפשר גם 0)'; return; }
+            btn.disabled = true;
+            try {
+                const headers = { 'Content-Type': 'application/json' }; if (token()) headers['Authorization'] = 'Bearer ' + token();
+                const res = await fetch(`${API}/api/reviews`, { method: 'POST', headers, body: JSON.stringify({
+                    name: document.getElementById('rv-name').value, rating: rvRating, text: document.getElementById('rv-text').value,
+                    website: document.getElementById('rv-website').value }) });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'לא הצלחנו לשלוח');
+                document.getElementById('review-form').style.display = 'none';
+                document.getElementById('rv-title').textContent = 'תודה רבה! 💗';
+                msg.textContent = '';
+                document.getElementById('review-form').insertAdjacentHTML('afterend', '<p class="ok-box" id="rv-thanks">קיבלנו את הביקורת. היא תופיע באתר אחרי שנאשר אותה.</p>');
+                setTimeout(() => { document.getElementById('review-modal').classList.remove('open'); document.getElementById('rv-title').textContent = 'כתיבת ביקורת';
+                    const t = document.getElementById('rv-thanks'); if (t) t.remove(); }, 3500);
+            } catch (err) { msg.textContent = err.message; }
+            finally { btn.disabled = false; }
+        }
 
         // ===================== התקנת האפליקציה (PWA) =====================
         let deferredInstall = null;
