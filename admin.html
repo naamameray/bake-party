@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ניהול שעות ומשלוחים | Bake & Party</title>
+    <title>ניהול החנות | Bake & Party</title>
+    <meta name="theme-color" content="#E05276">
+    <link rel="icon" type="image/png" href="/icon-192.png">
     <meta name="robots" content="noindex, nofollow">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -125,6 +127,60 @@
             .chip { border: 2px solid var(--pink-light); background: #fff; border-radius: 16px; padding: 6px 12px; font-family: inherit; font-weight: 600; cursor: pointer; color: var(--text-color, #4A2E35); }
         .chip.active { background: var(--pink-dark); border-color: var(--pink-dark); color: #fff; }
         .chip:disabled { opacity: .5; cursor: default; }
+
+        /* ========== סידור כללי לפאנל (גם בטלפון) ========== */
+        html, body { overflow-x: hidden; }
+        input[type="radio"], input[type="checkbox"] { width: auto; }
+        header { position: sticky; top: 0; z-index: 60; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+        .header-actions { flex-wrap: wrap; }
+        .header-actions .btn { text-decoration: none; display: inline-flex; align-items: center; }
+        .tab-bar { gap: 6px; padding-top: 4px; padding-bottom: 4px; }
+        .tab-btn { border-radius: 999px; border-bottom: 2px solid var(--pink-light); opacity: 1; padding: 8px 16px; font-size: .9em; }
+        .tab-btn.active { background: var(--pink-dark); color: #fff; border-color: var(--pink-dark); }
+        .radio-group label { font-weight: 500; }
+        /* שעות שבועיות: שורה קומפקטית */
+        .day-row { grid-template-columns: 80px 1fr auto; gap: 10px; padding: 8px 12px; }
+        .day-name { font-size: .95em; }
+        .day-times { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .day-times .dash { color: var(--muted); font-size: .85em; }
+        .day-times .dt-wrap { width: auto !important; }
+        .day-times .dt-text { width: 66px !important; min-width: 0 !important; flex: none !important; text-align: center; padding: 6px 4px; }
+        .day-times .dt-wrap button { padding: 4px 5px !important; font-size: .8em !important; }
+        .day-times .closed-txt { display: none; color: var(--muted); font-weight: 600; }
+        .day-row.closed { opacity: 1; background: #f4f1f2; }
+        .day-row.closed .dt-wrap, .day-row.closed .dash { display: none !important; }
+        .day-row.closed .closed-txt { display: inline; }
+        .day-switch { display: inline-flex !important; align-items: center; cursor: pointer; margin: 0 !important; }
+        .day-switch input { display: none; }
+        .day-switch i { display: inline-block; width: 42px; height: 24px; border-radius: 999px; background: #ccc; position: relative; transition: .2s; }
+        .day-switch i::after { content: ''; position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: .2s; }
+        .day-switch input:checked + i { background: var(--ok); }
+        .day-switch input:checked + i::after { right: 21px; }
+
+        @media (max-width: 700px) {
+            header { padding: 10px 12px; gap: 8px; }
+            header h1 { font-size: 1.05em; }
+            .header-actions { width: 100%; flex-wrap: nowrap; overflow-x: auto; gap: 6px; scrollbar-width: none; }
+            .header-actions::-webkit-scrollbar { display: none; }
+            .header-actions .btn { padding: 7px 12px; font-size: .82em; white-space: nowrap; flex: 0 0 auto; border-radius: 999px; }
+            .tab-bar { flex-wrap: nowrap; overflow-x: auto; padding: 4px 12px; margin-top: 10px; scrollbar-width: none; }
+            .tab-bar::-webkit-scrollbar { display: none; }
+            .tab-btn { padding: 7px 13px; font-size: .84em; flex: 0 0 auto; }
+            .container { margin: 12px auto 40px; padding: 0 12px; }
+            .card { padding: 14px; border-radius: 14px; margin-bottom: 14px; }
+            .card h2 { font-size: 1.08em; padding-bottom: 8px; }
+            .radio-group { flex-direction: column; gap: 10px; }
+            .btn { padding: 9px 14px; }
+            .day-row { grid-template-columns: 52px 1fr auto; gap: 8px; padding: 8px 10px; }
+            .day-name { font-size: .9em; }
+            .day-times .dt-wrap button { display: none; }
+            .day-times { flex-wrap: nowrap; gap: 4px; }
+            .day-times .dt-text { width: 54px !important; padding: 6px 2px; font-size: .9em; }
+            .day-times .dash { font-size: .8em; }
+            .special-form { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .special-item { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+            .login-card { margin: 30px 14px; padding: 22px; }
+        }
 </style>
 </head>
 <body>
@@ -158,12 +214,12 @@
 
     <div id="admin-view" style="display:none;">
         <header>
-            <h1>פאנל ניהול חנות</h1>
+            <h1>⚙️ ניהול החנות</h1>
             <div class="header-actions">
                 <a href="/staff.html" class="btn">🛒 הזמנות</a>
                 <a href="/staff.html" class="btn ghost">⏱️ משמרת</a>
-                <a href="/" class="btn ghost">← חזור לאתר הראשי</a>
-                <button class="btn ghost" type="button" id="logout-btn">התנתק</button>
+                <a href="/" class="btn ghost">🏠 לאתר</a>
+                <button class="btn ghost" type="button" id="logout-btn">יציאה</button>
             </div>
         </header>
 
@@ -381,6 +437,14 @@
                     </div>
                     <p id="nt-msg" style="margin-top:10px; font-weight:600;"></p>
                 </div>
+                <div class="card">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <h2 style="margin:0;">🧾 יומן שליחות</h2>
+                        <button class="chip" type="button" onclick="loadNotifyLog()">רענון</button>
+                    </div>
+                    <p style="color:var(--muted); font-size:0.9em;">כל מייל והתראה שהאתר ניסה לשלוח (הזמנות, ביקורות, הודעות), האם יצא, ואם לא, למה. כך רואים בדיוק איפה התקלה.</p>
+                    <div id="nt-log" style="font-size:0.9em;">טוען...</div>
+                </div>
             </div>
 
             <div class="tab-page" id="tab-page-pay">
@@ -541,17 +605,18 @@
                 const row = document.createElement('div');
                 row.className = `day-row ${d.is_closed ? 'closed' : ''}`;
                 row.innerHTML = `
-                    <strong>${d.day_name}</strong>
-                    <div class="time-group">
-                        <span>פתיחה:</span>
-                        <input type="time" class="w-open" value="${d.opening_time}" ${d.is_closed ? 'disabled' : ''}>
+                    <strong class="day-name">${escHtml(d.day_name)}</strong>
+                    <div class="day-times">
+                        <input type="time" class="w-open" value="${d.opening_time}" ${d.is_closed ? 'disabled' : ''} aria-label="פתיחה ${escHtml(d.day_name)}">
+                        <span class="dash">–</span>
+                        <input type="time" class="w-close" value="${d.closing_time}" ${d.is_closed ? 'disabled' : ''} aria-label="סגירה ${escHtml(d.day_name)}">
+                        <span class="closed-txt">סגור</span>
                     </div>
-                    <div class="time-group">
-                        <span>סגירה:</span>
-                        <input type="time" class="w-close" value="${d.closing_time}" ${d.is_closed ? 'disabled' : ''}>
-                    </div>
-                    <label><input type="checkbox" class="w-closed" ${d.is_closed ? 'checked' : ''}> סגור</label>
+                    <label class="day-switch" title="פתוח / סגור"><input type="checkbox" class="w-open-toggle" ${d.is_closed ? '' : 'checked'}><i></i></label>
+                    <input type="checkbox" class="w-closed" ${d.is_closed ? 'checked' : ''} hidden>
                 `;
+                // המתג מראה "פתוח" (ירוק). מתחתיו נשאר w-closed כמו קודם, כדי שהשמירה תמשיך לעבוד
+                row.querySelector('.w-open-toggle').onchange = e => { const c = row.querySelector('.w-closed'); c.checked = !e.target.checked; c.onchange(); };
                 const chk = row.querySelector('.w-closed');
                 const inpOpen = row.querySelector('.w-open');
                 const inpClose = row.querySelector('.w-close');
@@ -1272,6 +1337,22 @@
                     `התראות טלפון: ${d.configured ? '<span style="color:var(--ok);">פעיל</span>' : '<span style="color:#d9534f;">לא מוגדר (חסרים מפתחות VAPID)</span>'}` +
                     (d.last_email_error ? `<br><span style="color:#d9534f;">שגיאת מייל אחרונה: ${escHtml(d.last_email_error)}</span>` : '');
             } catch (e) { box.textContent = 'שגיאה בטעינה'; }
+            loadNotifyLog();
+        }
+        async function loadNotifyLog() {
+            const box = document.getElementById('nt-log');
+            try {
+                const res = await fetch(`${API}/api/admin/notification-log?limit=60`, { headers: authHeaders() });
+                const rows = await res.json();
+                if (!rows.length) { box.innerHTML = '<p style="color:var(--muted);">עוד לא נשלח כלום.</p>'; return; }
+                box.innerHTML = rows.map(r => `<div style="display:flex; gap:10px; padding:7px 0; border-bottom:1px solid #f6e3e8; align-items:flex-start;">
+                    <span style="font-size:1.2em;">${r.ok ? '✅' : '❌'}</span>
+                    <div style="flex:1; min-width:0;">
+                        <div><strong>${r.channel === 'email' ? '📧 מייל' : '📱 התראה'}</strong> · ${escHtml(r.subject)} <span style="color:var(--muted);">· אל ${escHtml(r.recipient)}</span></div>
+                        ${r.error ? `<div style="color:#d9534f;">${escHtml(r.error)}</div>` : ''}
+                    </div>
+                    <span style="color:var(--muted); white-space:nowrap;">${escHtml(r.at)}</span></div>`).join('');
+            } catch (e) { box.textContent = 'שגיאה בטעינת היומן'; }
         }
         async function sendPush(testOnly) {
             const msg = document.getElementById('nt-msg'); msg.style.color = 'var(--muted)';
