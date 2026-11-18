@@ -809,7 +809,7 @@
                 <label for="rv-text">מה דעתך? (לא חובה)</label>
                 <textarea id="rv-text" rows="4" maxlength="1500" placeholder="ספרו לנו על החוויה שלכם בחנות או באתר"></textarea>
                 <input type="text" id="rv-website" name="website" tabindex="-1" autocomplete="off" style="position:absolute; left:-9999px;" aria-hidden="true">
-                <p style="font-size:.85em; color:var(--muted); margin:8px 0 0;">הביקורת תופיע באתר אחרי אישור של החנות.</p>
+                <p style="font-size:.85em; color:var(--muted); margin:8px 0 0;">הביקורת שלך תעלה לאתר בקרוב 💗</p>
                 <button class="btn" type="submit" id="rv-submit">שליחת ביקורת</button>
                 <p class="msg" id="rv-msg"></p>
             </form>
@@ -2025,7 +2025,7 @@
                 document.getElementById('review-form').style.display = 'none';
                 document.getElementById('rv-title').textContent = 'תודה רבה! 💗';
                 msg.textContent = '';
-                document.getElementById('review-form').insertAdjacentHTML('afterend', '<p class="ok-box" id="rv-thanks">קיבלנו את הביקורת. היא תופיע באתר אחרי שנאשר אותה.</p>');
+                document.getElementById('review-form').insertAdjacentHTML('afterend', '<p class="ok-box" id="rv-thanks">קיבלנו את הביקורת שלך, והיא תעלה לאתר בקרוב 💗</p>');
                 setTimeout(() => { document.getElementById('review-modal').classList.remove('open'); document.getElementById('rv-title').textContent = 'כתיבת ביקורת';
                     const t = document.getElementById('rv-thanks'); if (t) t.remove(); }, 3500);
             } catch (err) { msg.textContent = err.message; }
