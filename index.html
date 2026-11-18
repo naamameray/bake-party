@@ -210,7 +210,7 @@
             box-shadow: 0 6px 16px rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; text-decoration: none; }
         #wa-btn { bottom: 16px; background: #25D366; }
         #a11y-btn { bottom: 76px; background: #1F5FAD; font-size: 22px; width: 42px; height: 42px; left: 20px; }
-        #back-to-top { left: auto; right: 16px; bottom: 16px; background: #fff; color: var(--brand); border: 1px solid var(--line); display: none; font-size: 20px; }
+        #back-to-top { left: auto; right: 16px; bottom: 76px; background: #fff; color: var(--brand); border: 1px solid var(--line); display: none; font-size: 20px; }
 
         #a11y-panel { position: fixed; bottom: 126px; left: 16px; width: 270px; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.25);
             z-index: 10000; padding: 16px; display: none; border: 2px solid #1F5FAD; }
@@ -230,6 +230,11 @@
         body.a11y-links a, body.a11y-links button:not(.a11y-opt):not(#a11y-reset) { text-decoration: underline !important; outline: 2px solid currentColor; outline-offset: 1px; }
         body.a11y-noanim *, body.a11y-noanim *::before, body.a11y-noanim *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
         body.a11y-readable, body.a11y-readable * { font-family: Arial, sans-serif !important; letter-spacing: 0.4px; line-height: 1.7 !important; }
+        body.a11y-readable p, body.a11y-readable li { word-spacing: 2px; }
+        html.a11y-gray-on { filter: grayscale(1); }
+        body.a11y-headings h1, body.a11y-headings h2, body.a11y-headings h3, body.a11y-headings h4 { outline: 2px dashed #1F5FAD; outline-offset: 3px; background: #EEF4FB; }
+        body.a11y-cursor, body.a11y-cursor * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24'><path d='M4 2l16 9-7 2-3 7z' fill='black' stroke='white' stroke-width='1.5'/></svg>") 4 2, auto !important; }
+        body.a11y-focus :focus { outline: 4px solid #FFB000 !important; outline-offset: 3px !important; box-shadow: 0 0 0 7px #1F5FAD !important; }
 
         /* ---------- תפריט צד ---------- */
         .sidebar-overlay { position: fixed; inset: 0; background: rgba(43,28,33,0.45); display: none; z-index: 999; }
@@ -333,7 +338,7 @@
             display: none; justify-content: space-between; align-items: center; box-shadow: 0 10px 30px rgba(224,82,118,.45); }
         #cart-bar .cnt { background: rgba(255,255,255,.25); border-radius: 999px; padding: 2px 10px; font-size: .9em; }
         body.has-cart #cart-bar { display: flex; }
-        body.has-cart #wa-btn { bottom: 84px; } body.has-cart #a11y-btn { bottom: 144px; } body.has-cart #back-to-top { bottom: 84px; }
+        body.has-cart #wa-btn { bottom: 84px; } body.has-cart #a11y-btn { bottom: 144px; } body.has-cart #back-to-top { bottom: 144px; }
         body.has-cart footer#site-footer { padding-bottom: 90px; }
         .cart-modal { max-width: 520px; padding: 0; display: flex; flex-direction: column; }
         .cart-head { padding: 20px 22px 10px; border-bottom: 1px solid var(--line); }
@@ -367,6 +372,29 @@
         .detail-buy { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
         .detail-buy .qty { box-shadow: none; border: 1px solid var(--line); }
         .detail-buy .btn { flex: 1; margin: 0; }
+
+        /* ---------- כפתור קטגוריות צף + חלון כל הקטגוריות ---------- */
+        #cats-fab { position: fixed; right: 16px; bottom: 16px; z-index: 740; border: none; border-radius: 999px; padding: 13px 18px;
+            background: #4A2E35; color: #fff; font-weight: 700; font-size: .95em; cursor: pointer; box-shadow: 0 8px 22px rgba(0,0,0,.25);
+            display: flex; align-items: center; gap: 6px; }
+        #cats-fab:hover { background: #2f1c21; }
+        body.has-cart #cats-fab { bottom: 84px; }
+        .cats-modal { max-width: 560px; padding: 0; display: flex; flex-direction: column; }
+        .cats-head { padding: 18px 20px 12px; border-bottom: 1px solid var(--line); }
+        .cats-head h2 { text-align: right; margin: 0 0 10px; }
+        .cats-head input { border-radius: 999px !important; }
+        .cats-body { padding: 8px 20px 20px; overflow-y: auto; }
+        .cat-group { border-bottom: 1px solid var(--line); }
+        .cat-group > button { width: 100%; background: none; border: none; padding: 13px 0; font-size: 1.02em; font-weight: 600; color: var(--ink);
+            display: flex; justify-content: space-between; align-items: center; cursor: pointer; text-align: right; }
+        .cat-group > button span { color: var(--muted); font-weight: 400; font-size: .85em; }
+        .cat-subs { display: none; flex-wrap: wrap; gap: 6px; padding: 0 0 12px; }
+        .cat-group.open .cat-subs { display: flex; }
+        .cat-subs button { border: 1.5px solid var(--line); background: #fff; border-radius: 999px; padding: 7px 12px; font-size: .88em; cursor: pointer; color: var(--ink); }
+        .cat-subs button.all { background: var(--brand-soft); color: var(--brand); border-color: var(--brand-soft); font-weight: 600; }
+        @media (min-width: 761px) {
+            .cat-menu-bar { flex-wrap: wrap; overflow: visible; justify-content: center; row-gap: 8px; }
+        }
 
         /* ---------- נייד ---------- */
         @media (max-width: 760px) {
@@ -515,6 +543,8 @@
         <button class="sidebar-item" type="button" onclick="toggleAccordion('info-orders'); loadMyOrders()">🧾 ההזמנות שלי <span>▾</span></button>
         <div id="info-orders" class="sidebar-content"><div id="my-orders-list">טוען...</div></div>
 
+        <button class="sidebar-item" type="button" id="install-item" onclick="installApp()">📲 התקנת האפליקציה בטלפון <span></span></button>
+
         <button class="sidebar-item ai-btn" type="button" onclick="openAI()">✨ שאל/י את ה-AI שלנו <span></span></button>
     </aside>
 
@@ -619,16 +649,16 @@
                 <p style="margin-top:8px;"><a href="https://wolt.com/he/isr/petah-tikva/venue/pinookim-givat-shmuel" target="_blank" rel="noopener">הזמנה באפליקציית Wolt 🛵</a></p>
             </div>
         </div>
-        <div class="footer-bottom">© <span id="f-year"></span> Bake & Party – אפייה ומסיבות. כל הזכויות שמורות.</div>
+        <div class="footer-bottom">© <span id="f-year"></span> Bake & Party – אפייה ומסיבות. כל הזכויות שמורות. · <a href="#" onclick="openA11yStatement(); return false;" style="color:inherit;">הצהרת נגישות</a></div>
     </footer>
 
     <a id="wa-btn" class="fab" href="#" target="_blank" rel="noopener" title="וואטסאפ" aria-label="צ'אט וואטסאפ">
         <svg viewBox="0 0 32 32" width="28" height="28" fill="#fff" aria-hidden="true"><path d="M16.005 3C9.377 3 4 8.373 4 15c0 2.34.68 4.523 1.86 6.36L4 29l7.84-1.83A11.93 11.93 0 0 0 16.005 27C22.633 27 28 21.627 28 15S22.633 3 16.005 3zm0 21.7c-1.94 0-3.75-.53-5.31-1.45l-.38-.22-4.65 1.09 1.11-4.53-.25-.4A9.63 9.63 0 0 1 6.3 15c0-5.36 4.36-9.7 9.7-9.7 5.36 0 9.7 4.34 9.7 9.7 0 5.36-4.34 9.7-9.7 9.7zm5.32-7.27c-.29-.15-1.72-.85-1.99-.95-.27-.1-.46-.15-.66.15-.2.29-.76.95-.93 1.15-.17.2-.34.22-.63.07-.29-.15-1.22-.45-2.32-1.43-.86-.76-1.44-1.71-1.6-2-.17-.29-.02-.45.13-.6.13-.13.29-.34.44-.51.15-.17.2-.29.29-.49.1-.2.05-.37-.02-.51-.07-.15-.66-1.59-.9-2.18-.24-.57-.48-.5-.66-.51-.17-.01-.37-.01-.56-.01-.2 0-.51.07-.78.37-.27.29-1.02 1-1.02 2.43 0 1.43 1.05 2.81 1.19 3 .15.2 2.06 3.14 5 4.4.7.3 1.24.48 1.67.62.7.22 1.34.19 1.84.12.56-.08 1.72-.7 1.97-1.38.24-.68.24-1.26.17-1.38-.07-.13-.26-.2-.55-.35z"/></svg>
     </a>
-    <button id="a11y-btn" class="fab" type="button" onclick="toggleA11yPanel()" title="נגישות" aria-label="פתיחת תפריט נגישות" aria-haspopup="true">♿</button>
+    <button id="a11y-btn" class="fab" type="button" onclick="toggleA11yPanel()" title="נגישות" aria-label="פתיחת תפריט נגישות" aria-haspopup="dialog" aria-expanded="false" aria-controls="a11y-panel">♿</button>
     <button id="back-to-top" class="fab" type="button" onclick="window.scrollTo({top: 0, behavior: 'smooth'})" aria-label="חזרה למעלה">↑</button>
 
-    <div id="a11y-panel" role="dialog" aria-label="הגדרות נגישות">
+    <div id="a11y-panel" role="dialog" aria-label="הגדרות נגישות" style="max-height: calc(100vh - 150px); overflow-y: auto;">
         <h3>הגדרות נגישות</h3>
         <div class="a11y-row">
             <span>גודל טקסט</span>
@@ -641,13 +671,30 @@
         <div class="a11y-row"><span>ניגודיות גבוהה</span><button class="a11y-opt" data-a11y="high-contrast" onclick="a11yToggle('high-contrast')">הפעל</button></div>
         <div class="a11y-row"><span>הדגשת קישורים</span><button class="a11y-opt" data-a11y="a11y-links" onclick="a11yToggle('a11y-links')">הפעל</button></div>
         <div class="a11y-row"><span>עצירת אנימציות</span><button class="a11y-opt" data-a11y="a11y-noanim" onclick="a11yToggle('a11y-noanim')">הפעל</button></div>
-        <div class="a11y-row"><span>גופן קריא</span><button class="a11y-opt" data-a11y="a11y-readable" onclick="a11yToggle('a11y-readable')">הפעל</button></div>
+        <div class="a11y-row"><span>גופן קריא ומרווח</span><button class="a11y-opt" data-a11y="a11y-readable" onclick="a11yToggle('a11y-readable')">הפעל</button></div>
+        <div class="a11y-row"><span>גווני אפור</span><button class="a11y-opt" data-a11y="a11y-gray" onclick="a11yToggle('a11y-gray')">הפעל</button></div>
+        <div class="a11y-row"><span>הדגשת כותרות</span><button class="a11y-opt" data-a11y="a11y-headings" onclick="a11yToggle('a11y-headings')">הפעל</button></div>
+        <div class="a11y-row"><span>סמן עכבר גדול</span><button class="a11y-opt" data-a11y="a11y-cursor" onclick="a11yToggle('a11y-cursor')">הפעל</button></div>
+        <div class="a11y-row"><span>ניווט במקלדת (מסגרת בולטת)</span><button class="a11y-opt" data-a11y="a11y-focus" onclick="a11yToggle('a11y-focus')">הפעל</button></div>
         <button id="a11y-reset" onclick="a11yReset()">איפוס כל ההגדרות</button>
+        <button type="button" class="a11y-opt" style="width:100%; margin-top:8px;" onclick="openA11yStatement()">📄 הצהרת נגישות</button>
     </div>
 
     <button id="cart-bar" type="button" onclick="openCart()" aria-label="פתיחת העגלה">
         <span>🛒 לעגלה <span class="cnt" id="cart-count">0</span></span><span id="cart-sum">₪0.00</span>
     </button>
+
+    <button id="cats-fab" type="button" onclick="openCatsSheet()" aria-label="כל הקטגוריות וחיפוש">☰ קטגוריות</button>
+    <div class="modal-overlay" id="cats-modal">
+        <div class="modal cats-modal" role="dialog" aria-labelledby="cats-title">
+            <button class="close-x" type="button" onclick="closeCatsSheet()" aria-label="סגירה">×</button>
+            <div class="cats-head">
+                <h2 id="cats-title">כל הקטגוריות</h2>
+                <input type="search" id="cats-search" placeholder="🔍 חיפוש מוצר..." autocomplete="off" enterkeyhint="search">
+            </div>
+            <div class="cats-body" id="cats-body"></div>
+        </div>
+    </div>
 
     <!-- עגלה, הזמנה ומעקב -->
     <div class="modal-overlay" id="cart-modal">
@@ -656,6 +703,41 @@
             <div class="cart-head"><h2 id="cart-title">העגלה שלי</h2></div>
             <div class="cart-body" id="cart-body"></div>
             <div class="cart-foot" id="cart-foot"></div>
+        </div>
+    </div>
+
+    <!-- הוראות התקנת האפליקציה -->
+    <div class="modal-overlay" id="install-modal">
+        <div class="modal" role="dialog" aria-labelledby="install-title">
+            <button class="close-x" type="button" onclick="document.getElementById('install-modal').classList.remove('open')" aria-label="סגירה">×</button>
+            <h2 id="install-title">📲 האפליקציה של Bake & Party</h2>
+            <div id="install-steps" style="line-height:1.8;"></div>
+        </div>
+    </div>
+
+    <!-- הצהרת נגישות -->
+    <div class="modal-overlay" id="a11y-modal">
+        <div class="modal" role="dialog" aria-labelledby="a11y-st-title" style="max-width:640px;">
+            <button class="close-x" type="button" onclick="document.getElementById('a11y-modal').classList.remove('open')" aria-label="סגירה">×</button>
+            <h2 id="a11y-st-title">הצהרת נגישות</h2>
+            <div style="line-height:1.7; font-size:.95em;">
+                <p>ב-Bake & Party אנחנו רוצים שכל אחד ואחת יוכלו להשתמש באתר ולהזמין בקלות, כולל אנשים עם מוגבלות. האתר נבנה ומשופר בהתאם לתקן הישראלי ת"י 5568 (המבוסס על הנחיות WCAG 2.0 ברמה AA), ככל שהדבר אפשרי.</p>
+                <h3 style="font-size:1.05em; margin:14px 0 6px;">מה עשינו באתר</h3>
+                <ul style="padding-inline-start:20px; margin:0;">
+                    <li>תפריט נגישות (כפתור ♿): הגדלת טקסט, ניגודיות גבוהה, גווני אפור, הדגשת קישורים וכותרות, עצירת אנימציות, גופן קריא, סמן עכבר גדול ומסגרת בולטת לניווט במקלדת.</li>
+                    <li>אפשר לנווט במקלדת (Tab, Enter, Esc) ולסגור חלונות במקש Esc.</li>
+                    <li>לכפתורים ולשדות יש תיאורים לקוראי מסך, ולתמונות יש טקסט חלופי.</li>
+                    <li>האתר מותאם לטלפון, למחשב ולהגדלת תצוגה בדפדפן.</li>
+                </ul>
+                <h3 style="font-size:1.05em; margin:14px 0 6px;">מגבלות ידועות</h3>
+                <p style="margin:0;">חלק מתמונות המוצרים מגיעות מספקים חיצוניים, וייתכן שהתיאור שלהן כללי. אנחנו ממשיכים לשפר.</p>
+                <h3 style="font-size:1.05em; margin:14px 0 6px;">נגישות החנות הפיזית</h3>
+                <p style="margin:0;" id="a11y-store-text">החנות נמצאת ב<span class="a11y-addr"></span>. לפרטים על נגישות המקום (כניסה, חניה וכו') אפשר לפנות אלינו, ונשמח לעזור גם בטלפון או בוואטסאפ.</p>
+                <h3 style="font-size:1.05em; margin:14px 0 6px;">נתקלתם בבעיה? דברו איתנו</h3>
+                <p style="margin:0;">אם משהו באתר לא נגיש לכם, נשמח לשמוע ולתקן:<br>
+                    טלפון: <a class="a11y-phone" href="#"></a> · מייל: <a class="a11y-mail" href="#"></a></p>
+                <p style="color:var(--muted); font-size:.85em; margin-top:14px;">ההצהרה עודכנה בתאריך 18/11/2026.</p>
+            </div>
         </div>
     </div>
 
@@ -809,18 +891,31 @@
 
         // ---------- נגישות ----------
         const A11Y_KEY = 'bp_a11y';
+        const A11Y_CLASSES = ['high-contrast', 'a11y-links', 'a11y-noanim', 'a11y-readable', 'a11y-gray', 'a11y-headings', 'a11y-cursor', 'a11y-focus'];
         let a11yState; try { a11yState = JSON.parse(ls(A11Y_KEY) || '{"font":0,"classes":[]}'); } catch (e) { a11yState = {font:0, classes:[]}; }
         function a11ySave() { ls(A11Y_KEY, JSON.stringify(a11yState)); }
         function a11yApply() {
             document.documentElement.style.fontSize = (100 + a11yState.font * 12) + '%';
-            ['high-contrast','a11y-links','a11y-noanim','a11y-readable'].forEach(c => document.body.classList.remove(c));
+            A11Y_CLASSES.forEach(c => document.body.classList.remove(c));
             a11yState.classes.forEach(c => document.body.classList.add(c));
+            // גווני אפור על כל הדף מלבד חלון הנגישות עצמו, דרך ה-html כדי לא לשבור מיקום של חלונות קבועים
+            document.documentElement.classList.toggle('a11y-gray-on', a11yState.classes.includes('a11y-gray'));
             document.querySelectorAll('.a11y-opt[data-a11y]').forEach(btn => {
                 const on = a11yState.classes.includes(btn.dataset.a11y);
                 btn.classList.toggle('active', on); btn.textContent = on ? 'בטל' : 'הפעל';
             });
         }
-        window.toggleA11yPanel = () => document.getElementById('a11y-panel').classList.toggle('open');
+        window.toggleA11yPanel = () => {
+            const open = document.getElementById('a11y-panel').classList.toggle('open');
+            document.getElementById('a11y-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) document.querySelector('#a11y-panel .a11y-opt').focus();
+        };
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && document.getElementById('a11y-panel').classList.contains('open')) {
+                document.getElementById('a11y-panel').classList.remove('open'); document.getElementById('a11y-btn').focus();
+            }
+        });
+        window.openA11yStatement = () => { document.getElementById('a11y-panel').classList.remove('open'); document.getElementById('a11y-modal').classList.add('open'); };
         window.a11yFont = dir => { a11yState.font = dir === 0 ? 0 : Math.max(-2, Math.min(4, a11yState.font + dir)); a11ySave(); a11yApply(); };
         window.a11yToggle = cls => { const i = a11yState.classes.indexOf(cls); if (i >= 0) a11yState.classes.splice(i, 1); else a11yState.classes.push(cls); a11ySave(); a11yApply(); };
         window.a11yReset = () => { a11yState = { font: 0, classes: [] }; a11ySave(); a11yApply(); };
@@ -841,6 +936,9 @@
                 document.getElementById('c-phone-link').href = tel; document.getElementById('f-phone-link').href = tel;
                 document.getElementById('c-map').href = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(c.address);
                 const fem = document.getElementById('f-email'); fem.textContent = c.email; fem.href = `mailto:${c.email}`;
+                document.querySelectorAll('.a11y-addr').forEach(e => e.textContent = c.address);
+                document.querySelectorAll('.a11y-phone').forEach(e => { e.textContent = c.phone; e.href = tel; });
+                document.querySelectorAll('.a11y-mail').forEach(e => { e.textContent = c.email; e.href = 'mailto:' + c.email; });
                 const hi = 'שלום, באתי מהאתר של Bake & Party ואני מתעניין/ת בנוגע ל...';
                 document.getElementById('wa-btn').href = waLink(hi);
                 document.getElementById('f-whatsapp').href = waLink(hi);
@@ -1700,6 +1798,72 @@
                 `<li><span>${esc(d.day_name)}</span><span>${d.is_closed ? 'סגור' : esc(d.opening_time + '-' + d.closing_time)}</span></li>`).join('');
         }).catch(e => console.error('שגיאה בטעינת לוח שעות:', e));
 
+        // ===================== התקנת האפליקציה (PWA) =====================
+        let deferredInstall = null;
+        const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+        window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
+        window.addEventListener('appinstalled', () => { deferredInstall = null; document.getElementById('install-item').style.display = 'none'; });
+        if (isStandalone()) document.getElementById('install-item').style.display = 'none';
+        async function installApp() {
+            closeSidebar();
+            if (deferredInstall) { deferredInstall.prompt(); await deferredInstall.userChoice.catch(() => {}); deferredInstall = null; return; }
+            const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+            document.getElementById('install-steps').innerHTML = ios
+                ? `<p>באייפון מתקינים כך (בדפדפן Safari):</p><ol style="padding-inline-start:20px">
+                     <li>לוחצים על כפתור השיתוף <strong>⬆️</strong> בתחתית המסך.</li>
+                     <li>גוללים ובוחרים <strong>"הוספה למסך הבית"</strong>.</li>
+                     <li>לוחצים <strong>"הוסף"</strong>. האייקון של Bake & Party יופיע במסך הבית.</li></ol>
+                   <p style="color:var(--muted); font-size:.9em;">מהאפליקציה אפשר גם לקבל התראות כשההזמנה מוכנה.</p>`
+                : `<p>מתקינים כך:</p><ol style="padding-inline-start:20px">
+                     <li>לוחצים על תפריט הדפדפן <strong>⋮</strong> (למעלה).</li>
+                     <li>בוחרים <strong>"התקנת אפליקציה"</strong> או <strong>"הוספה למסך הבית"</strong>.</li>
+                     <li>מאשרים. האייקון של Bake & Party יופיע במסך הבית.</li></ol>`;
+            document.getElementById('install-modal').classList.add('open');
+        }
+
+        // ===================== חלון "כל הקטגוריות" (כפתור צף) =====================
+        function openCatsSheet() {
+            const body = document.getElementById('cats-body');
+            body.innerHTML = '';
+            const top = document.createElement('div'); top.className = 'cat-subs'; top.style.display = 'flex'; top.style.padding = '12px 0';
+            [['🎁 מבצעים', openSales], ['🛒 כל המוצרים', showAllProducts], ['🏠 דף ראשי', goHome]].forEach(([t, fn]) => {
+                const b = document.createElement('button'); b.type = 'button'; b.className = 'all'; b.textContent = t;
+                b.onclick = () => { closeCatsSheet(); fn(); window.scrollTo(0, 0); }; top.appendChild(b);
+            });
+            body.appendChild(top);
+            categoryTree.forEach(main => {
+                const g = document.createElement('div'); g.className = 'cat-group';
+                const hasSubs = main.subcategories && main.subcategories.length;
+                const head = document.createElement('button'); head.type = 'button';
+                head.innerHTML = `${esc(main.name)} <span>${hasSubs ? '▾' : (main.product_count ? main.product_count + ' מוצרים' : '')}</span>`;
+                head.onclick = () => { if (hasSubs) g.classList.toggle('open'); else { closeCatsSheet(); openMain(main); window.scrollTo(0, 0); } };
+                g.appendChild(head);
+                if (hasSubs) {
+                    const subs = document.createElement('div'); subs.className = 'cat-subs';
+                    const all = document.createElement('button'); all.type = 'button'; all.className = 'all'; all.textContent = 'הכול ב' + main.name;
+                    all.onclick = () => { closeCatsSheet(); openMainAll(main); window.scrollTo(0, 0); };
+                    subs.appendChild(all);
+                    main.subcategories.forEach(sub => {
+                        const b = document.createElement('button'); b.type = 'button'; b.textContent = sub.name;
+                        b.onclick = () => { closeCatsSheet(); currentMain = main; openSub(sub); window.scrollTo(0, 0); };
+                        subs.appendChild(b);
+                    });
+                    g.appendChild(subs);
+                }
+                body.appendChild(g);
+            });
+            document.getElementById('cats-search').value = '';
+            document.getElementById('cats-modal').classList.add('open');
+        }
+        function closeCatsSheet() { document.getElementById('cats-modal').classList.remove('open'); }
+        document.getElementById('cats-modal').addEventListener('click', e => { if (e.target.id === 'cats-modal') closeCatsSheet(); });
+        document.getElementById('cats-search').addEventListener('keydown', e => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            const term = e.target.value.trim(); if (!term) return;
+            closeCatsSheet(); searchInput.value = term; syncSearchBox(); runSearch(term); nav('q=' + encodeURIComponent(term)); window.scrollTo(0, 0);
+        });
+
         // ===================== עגלה והזמנה לאיסוף עצמי =====================
         const CART_KEY = 'bp_cart', MY_ORDERS_KEY = 'bp_orders';
         let cart = {}; try { cart = JSON.parse(ls(CART_KEY) || '{}') || {}; } catch (e) { cart = {}; }
@@ -1883,20 +2047,38 @@
                 <div class="order-big">מספר הזמנה<strong>#${d.number}</strong></div>
                 <div class="ok-box">קיבלנו את ההזמנה. נכין אותה ונעדכן ${d.email ? 'במייל ' : ''}כשהיא מוכנה לאיסוף. התשלום בחנות בזמן האיסוף (${money(d.total)}).</div>
                 <p style="font-size:.92em; color:var(--muted);">📍 ${esc(ordersConfig.address || '')}</p>
-                ${!d.email ? '<div class="info-box">לא השארת מייל, אז כדאי לשמור את הקישור למעקב (הוא שמור גם בתפריט, תחת "ההזמנות שלי").</div>' : ''}
+                ${!d.email ? '<div class="info-box">לא השארת מייל, אז נעדכן אותך בוואטסאפ או בטלפון. אפשר גם לקבל התראה לטלפון (כפתור למטה). הקישור למעקב שמור בתפריט, תחת "ההזמנות שלי".</div>' : ''}
                 <div id="push-offer"></div>`;
             document.getElementById('cart-foot').innerHTML = `
                 <div style="display:flex; gap:8px;"><button class="btn btn-ghost" type="button" onclick="closeCart()">חזרה לחנות</button>
                 <button class="btn" style="flex:1;" type="button" onclick="openTracking(${d.id}, '${d.token}', true)">מעקב אחרי ההזמנה</button></div>`;
-            if (currentUser && pushSupported()) {
-                const box = document.getElementById('push-offer');
-                const enable = async () => { try { await notifApi('/api/notifications/consent', { method: 'POST' }); const r = await tryEnablePush(); box.innerHTML = r === 'ok' ? '<div class="ok-box">🔔 מעולה, נשלח לך התראה כשההזמנה מוכנה.</div>' : ''; } catch (e) { box.innerHTML = ''; } };
-                if (wantsPush) enable();
-                else {
-                    box.innerHTML = '<button class="btn btn-ghost btn-block" type="button">🔔 קבלת התראה בטלפון כשההזמנה מוכנה</button>';
-                    box.querySelector('button').onclick = enable;
-                }
+            offerOrderPush(d.id, d.token, document.getElementById('push-offer'));
+            if (wantsPush) tryEnablePush().catch(() => {});      // נרשם לחשבון ואישר התראות כלליות
+        }
+
+        // התראה בטלפון על ההזמנה הזו בלבד. עובד גם ללקוח שלא נרשם (לא נחשב הסכמה לפרסומות).
+        function orderPushKey(id) { return 'bp_order_push_' + id; }
+        function offerOrderPush(id, t, box) {
+            if (!box) return;
+            if (!ordersConfig.push) { box.innerHTML = ''; return; }
+            if (ls(orderPushKey(id))) { box.innerHTML = '<div class="ok-box">🔔 נשלח לך התראה לטלפון כשההזמנה מוכנה.</div>'; return; }
+            const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+            if (!pushSupported()) {
+                box.innerHTML = ios ? '<div class="info-box">📱 באייפון אפשר לקבל התראה רק מהאפליקציה: לוחצים על כפתור השיתוף ואז "הוספה למסך הבית", ופותחים את האתר משם.</div>' : '';
+                return;
             }
+            box.innerHTML = '<button class="btn btn-block" type="button">🔔 שלחו לי התראה לטלפון כשההזמנה מוכנה</button>';
+            box.querySelector('button').onclick = async () => {
+                try {
+                    if (await Notification.requestPermission() !== 'granted') throw new Error('ההתראות לא אושרו בדפדפן. אפשר לאשר בהגדרות הדפדפן.');
+                    const reg = await navigator.serviceWorker.ready;
+                    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(ordersConfig.public_key) });
+                    const res = await fetch(`${API}/api/orders/${id}/push?t=${encodeURIComponent(t)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub.toJSON()) });
+                    if (!res.ok) throw new Error('לא הצלחנו להפעיל התראה');
+                    ls(orderPushKey(id), '1');
+                    box.innerHTML = '<div class="ok-box">🔔 מעולה! נשלח לך התראה לטלפון כשההזמנה מוכנה.</div>';
+                } catch (e) { box.innerHTML = `<div class="info-box">${esc(e.message)}</div>`; }
+            };
         }
 
         let trackTimer = null, trackCtx = null;
@@ -1937,13 +2119,14 @@
                 ${o.status === 'cancelled' ? `<div class="info-box">ההזמנה בוטלה. לשאלות: ${esc((contactInfo || {}).phone || '')}</div>` : `
                 <div class="steps">${names.map((n, i) => `<div class="step${i <= idx ? ' done' : ''}"><div class="b">${i < idx ? '✓' : i + 1}</div>${n}</div>`).join('')}</div>
                 ${o.status === 'ready' ? `<div class="ok-box">🎉 ההזמנה מוכנה! מחכה לך ב${esc(o.address)}. התשלום בחנות.</div>` : ''}
-                ${o.status === 'new' || o.status === 'preparing' ? '<div class="info-box">נעדכן כשההזמנה מוכנה לאיסוף. הדף מתעדכן לבד.</div>' : ''}`}
+                ${o.status === 'new' || o.status === 'preparing' ? '<div class="info-box">נעדכן כשההזמנה מוכנה לאיסוף. הדף מתעדכן לבד.</div><div id="track-push"></div>' : ''}`}
                 ${missingHtml(o, missing)}
                 ${o.items.map(i => `<div class="cart-line${i.missing ? ' bad' : ''}"><img src="${esc(imgUrl(i.image))}" alt="" loading="lazy">
                     <div><div class="nm">${i.added_by_staff ? '🔄 ' : ''}${esc(i.name)}</div><div class="pr">${i.quantity} × ${money(i.unit_price)}${i.added_by_staff ? ' · תחליף' : ''}</div></div><div>${i.missing ? 'חסר' : money(i.line_total)}</div></div>`).join('')}
                 <p style="font-size:.85em; color:var(--muted);">הוזמן ב-${esc(o.created_at)}${o.note ? ' · הערה: ' + esc(o.note) : ''}</p>`;
             document.getElementById('cart-body').querySelectorAll('img').forEach(i => i.onerror = function () { this.onerror = null; this.src = PLACEHOLDER; });
             bindMissing();
+            offerOrderPush(trackCtx.id, trackCtx.t, document.getElementById('track-push'));
             document.getElementById('cart-foot').innerHTML = `<div class="sum-row"><span>לתשלום בחנות</span><span>${money(o.total)}</span></div>
                 <button class="btn btn-ghost btn-block" type="button" onclick="closeCart()">חזרה לחנות</button>`;
         }

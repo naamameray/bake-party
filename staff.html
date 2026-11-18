@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="/manifest-staff.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#E05276">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="B&P צוות">
 <title>אזור צוות | Bake & Party</title>
 <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -115,6 +121,7 @@ td.num,th.num{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         <button class="btn ghost small" type="button" id="sound-btn">🔊 הפעלת צליל להזמנה חדשה</button>
         <button class="btn ghost small" type="button" id="push-btn">🔔 התראות בטלפון על הזמנות</button>
+        <button class="btn ghost small" type="button" id="install-btn" style="display:none">📲 התקנה כאפליקציה</button>
       </div>
       <div class="tabs"><button class="tab on" type="button" data-scope="active">פעילות</button><button class="tab" type="button" data-scope="done">הושלמו (7 ימים)</button></div>
       <div id="today-line" class="note" style="margin:0 0 10px"></div>
@@ -253,6 +260,17 @@ $('m-prev').onclick = () => shiftMonth(-1);
 $('m-next').onclick = () => shiftMonth(1);
 $('month').onchange = loadHours;
 
+// ===================== אפליקציית צוות =====================
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+let deferredInstall = null;
+const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; $('install-btn').style.display = 'inline-block'; });
+if (!standalone && /iphone|ipad|ipod/i.test(navigator.userAgent)) $('install-btn').style.display = 'inline-block';
+$('install-btn').onclick = async () => {
+  if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; $('install-btn').style.display = 'none'; return; }
+  alert('באייפון: לוחצים על כפתור השיתוף ⬆️ ואז "הוספה למסך הבית". מהאפליקציה אפשר לקבל התראות על הזמנות חדשות.');
+};
+
 // ===================== הזמנות =====================
 const ST_LABEL = { new: 'חדשה', preparing: 'בהכנה', ready: 'מוכנה לאיסוף', picked_up: 'נאספה', cancelled: 'בוטלה' };
 let pausePolling = false, ordersScope = 'active', ordersTimer = null, knownOrderIds = null, soundOn = false, audioCtx = null;
@@ -293,13 +311,29 @@ $('orders-open').onchange = async e => {
   catch (err) { $('orders-error').textContent = err.message; }
   loadOrders();
 };
+// הודעת וואטסאפ מוכנה ללקוח (נשלחת מהטלפון של החנות, בחינם), לפי מצב ההזמנה
+function waHref(o) {
+  const digits = (o.phone || '').replace(/\D/g, '');
+  const intl = digits.startsWith('0') ? '972' + digits.slice(1) : digits;
+  const first = (o.name || '').split(' ')[0];
+  const missing = o.items.filter(i => i.missing && !i.choice).map(i => i.name);
+  let text;
+  if (o.awaiting_customer && missing.length)
+    text = `שלום ${first}, כאן Bake & Party 🎉\nבהזמנה #${o.number} חסר לנו: ${missing.join(', ')}.\nמה תעדיפו? להמשיך בלעדיו, תחליף, או לבטל? אפשר לענות כאן או בקישור:\n${o.track_url}`;
+  else if (o.status === 'ready')
+    text = `שלום ${first}, ההזמנה שלך #${o.number} מוכנה לאיסוף! 🎉\nלתשלום בחנות: ₪${o.total.toFixed(2)}\nפרטים: ${o.track_url}`;
+  else
+    text = `שלום ${first}, כאן Bake & Party 🎉\nלגבי הזמנה #${o.number}:\n${o.track_url}`;
+  return `https://wa.me/${intl}?text=${encodeURIComponent(text)}`;
+}
 function orderHtml(o) {
   const next = { new: ['preparing', 'התחלתי להכין'], preparing: ['ready', '✓ מוכנה לאיסוף (הלקוח יקבל עדכון)'], ready: ['picked_up', '✓ נאספה ושולמה'] }[o.status];
   const active = ['new', 'preparing', 'ready'].includes(o.status);
   return `<div class="order st-${o.status}" data-id="${o.id}">
     <div class="o-head"><div><div class="o-num">#${o.number}</div><div style="color:var(--muted);font-size:.85em">${esc(o.created_at)}${o.registered ? ' · לקוח רשום' : ''}</div></div>
       <span class="o-badge ${o.status}">${ST_LABEL[o.status] || o.status}</span></div>
-    <div class="o-cust"><strong>${esc(o.name)}</strong> · <a href="tel:${esc(o.phone)}">${esc(o.phone)}</a>${o.email ? ' · ' + esc(o.email) : ''}</div>
+    <div class="o-cust"><strong>${esc(o.name)}</strong> · <a href="tel:${esc(o.phone)}">${esc(o.phone)}</a>${o.email ? ' · ' + esc(o.email) : ' · <span style="color:#9A5B00">בלי מייל, לעדכן בוואטסאפ</span>'}
+      <a class="btn small" style="background:#25D366;margin-right:6px" target="_blank" rel="noopener" href="${waHref(o)}">💬 וואטסאפ ללקוח</a></div>
     ${o.note ? `<div class="o-note">📝 ${esc(o.note)}</div>` : ''}
     ${o.awaiting_customer ? '<div class="o-note" style="background:#FFE9D6;color:#8A4B00">⏳ ממתינים לתשובת הלקוח על מוצר חסר (נשלחה לו הודעה). אם לא יענה, ממשיכים בלי המוצר.</div>' : ''}
     <ul class="o-items">${o.items.map(i => `<li class="${i.missing ? 'miss' : ''}" style="flex-wrap:wrap"><span class="q">${i.quantity}×</span><span class="nm">${i.added_by_staff ? '🔄 ' : ''}${esc(i.name)}</span>
@@ -418,5 +452,6 @@ async function init() {
 }
 init();
 </script>
+<script src="/ui-inputs.js"></script>
 </body>
 </html>

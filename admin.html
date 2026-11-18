@@ -279,7 +279,7 @@
                         <button class="btn ghost" type="button" id="add-cat-toggle" onclick="toggleAddCat()">+ קטגוריה</button>
                         <div id="add-cat-form" style="display:none; margin-top:10px; background:var(--cream); border:2px solid var(--pink-light); border-radius:12px; padding:12px; gap:10px; flex-wrap:wrap; align-items:center;">
                             <input type="text" id="add-cat-name" placeholder="שם הקטגוריה החדשה" style="flex:1; min-width:160px; width:auto;">
-                            <select id="add-cat-parent" style="flex:1; min-width:160px; width:auto;"></select>
+                            <select id="add-cat-parent" class="cat-combo" data-none-label="— קטגוריה ראשית חדשה —" style="flex:1; min-width:160px; width:auto;"></select>
                             <button class="btn" type="button" onclick="submitAddCat()" style="width:auto;">הוספה</button>
                             <span id="add-cat-msg" class="msg" style="margin:0;"></span>
                         </div>
@@ -1687,7 +1687,7 @@
             }
             list.innerHTML = ''; items = []; active = -1;
             const none = document.createElement('div');
-            none.className = 'cc-item cc-none'; none.textContent = '— ללא קטגוריה —';
+            none.className = 'cc-item cc-none'; none.textContent = sel.dataset.noneLabel || '— ללא קטגוריה —';
             none.onmousedown = e => { e.preventDefault(); pick(''); };
             list.appendChild(none);
             if (!opts.length) { const e = document.createElement('div'); e.className = 'cc-empty'; e.textContent = 'לא נמצאה קטגוריה'; list.appendChild(e); }
@@ -1742,5 +1742,6 @@
     setInterval(() => document.querySelectorAll('select.cat-combo').forEach(s => { if (s._ccSync) s._ccSync(); }), 400);
 })();
 </script>
+<script src="/ui-inputs.js"></script>
 </body>
 </html>

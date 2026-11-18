@@ -326,6 +326,18 @@ try:
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_choice VARCHAR(20);")
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS customer_note TEXT;")
     init_cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS added_by_staff BOOLEAN NOT NULL DEFAULT FALSE;")
+    # התראות בטלפון לפי הזמנה: גם לקוח שלא נרשם יכול לבקש התראה כשההזמנה שלו מוכנה (בלי הסכמה לפרסומות)
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS order_push_subs (
+            id         SERIAL PRIMARY KEY,
+            order_id   INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+            endpoint   TEXT NOT NULL,
+            p256dh     TEXT NOT NULL,
+            auth       TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (order_id, endpoint)
+        );
+    """)
     # עכשיו יש הזמנות באתר: מעדכנים את תשובת ה-FAQ הישנה ("אין הזמנות באתר") אם לא נערכה ידנית
     init_cur.execute("""UPDATE faq_items SET question = 'איך מזמינים? אפשר להזמין דרך האתר?',
         answer = 'כן! מוסיפים מוצרים לעגלה באתר ושולחים הזמנה לאיסוף עצמי מהחנות. כשההזמנה מוכנה נעדכן אתכם, והתשלום בחנות בזמן האיסוף. אפשר להזמין גם בטלפון, בוואטסאפ או בוולט.',
@@ -1836,7 +1848,7 @@ PUSH_MIN_INTERVAL_HOURS = 12
 def _push_configured():
     return bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)
 
-def _send_push_rows(rows, title, body, url="/"):
+def _send_push_rows(rows, title, body, url="/", table="push_subscriptions"):
     """rows: [(sub_id, endpoint, p256dh, auth)]. שולח, ומוחק מנויים שכבר לא תקפים. מחזיר כמה נשלחו."""
     if not _push_configured() or not rows:
         return 0
@@ -1858,7 +1870,7 @@ def _send_push_rows(rows, title, body, url="/"):
             print(f"[PUSH] error: {e}")
     if dead:
         conn = get_conn(); cur = conn.cursor()
-        cur.execute("DELETE FROM push_subscriptions WHERE id = ANY(%s);", (dead,))
+        cur.execute(f"DELETE FROM {table} WHERE id = ANY(%s);", (dead,))
         conn.commit(); cur.close(); conn.close()
     return sent
 
@@ -2153,6 +2165,20 @@ def _push_to_user(user_id, title, body, url="/"):
     rows = cur.fetchall(); cur.close(); conn.close()
     return _send_push_rows(rows, title, body, url)
 
+def _push_order(order_id, user_id, title, body, url="/"):
+    """התראה על הזמנה: למכשירים שנרשמו להזמנה הזו, ולמכשירים של הלקוח אם הוא רשום (בלי כפילויות)."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, endpoint, p256dh, auth FROM order_push_subs WHERE order_id = %s;", (order_id,))
+    order_rows = cur.fetchall(); cur.close(); conn.close()
+    sent = _send_push_rows(order_rows, title, body, url, table="order_push_subs")
+    if user_id:
+        seen = {r[1] for r in order_rows}
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = %s;", (user_id,))
+        rows = [r for r in cur.fetchall() if r[1] not in seen]; cur.close(); conn.close()
+        sent += _send_push_rows(rows, title, body, url)
+    return sent
+
 def _track_link(order_id, token):
     return f"{SITE_URL}/#order={order_id}&t={token}"
 
@@ -2165,7 +2191,7 @@ def _order_dict(cur, row, with_items=True, staff=False):
          "ready_at": _il(ready_at).strftime("%d/%m %H:%M") if ready_at else None,
          "picked_up_at": _il(picked_at).strftime("%d/%m %H:%M") if picked_at else None}
     if staff:
-        d.update({"phone": phone, "email": email or "", "registered": bool(user_id)})
+        d.update({"phone": phone, "email": email or "", "registered": bool(user_id), "track_url": _track_link(oid, token)})
     if with_items:
         cur.execute("SELECT id, product_id, name, unit_price, quantity, missing, image_url, customer_choice, customer_note, added_by_staff "
                     "FROM order_items WHERE order_id = %s ORDER BY id;", (oid,))
@@ -2200,7 +2226,29 @@ class OrderCreateBody(BaseModel):
 def orders_config():
     conn = get_conn(); cur = conn.cursor()
     open_ = _orders_open(cur); cur.close(); conn.close()
-    return {"open": open_, "pickup_only": True, "payment": "בתשלום בחנות באיסוף", "address": _get_contact()["address"]}
+    return {"open": open_, "pickup_only": True, "payment": "בתשלום בחנות באיסוף", "address": _get_contact()["address"],
+            "push": _push_configured(), "public_key": VAPID_PUBLIC_KEY}
+
+@app.post("/api/orders/{order_id}/push")
+def order_push_subscribe(order_id: int, t: str, body: PushSubBody):
+    """רישום המכשיר להתראות על ההזמנה הזו בלבד (מתאים גם ללקוח שלא נרשם)."""
+    p256dh, auth = body.keys.get("p256dh"), body.keys.get("auth")
+    if not (body.endpoint.startswith("https://") and p256dh and auth):
+        raise HTTPException(status_code=400, detail="נתוני מנוי לא תקינים")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT token FROM orders WHERE id = %s;", (order_id,))
+    o = cur.fetchone()
+    if not o or not hmac.compare_digest(o[0], t or ""):
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="ההזמנה לא נמצאה")
+    cur.execute("INSERT INTO order_push_subs (order_id, endpoint, p256dh, auth) VALUES (%s,%s,%s,%s) "
+                "ON CONFLICT (order_id, endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth RETURNING id;",
+                (order_id, body.endpoint, p256dh, auth))
+    sub_id = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    _send_push_rows([(sub_id, body.endpoint, p256dh, auth)], f"מעולה! 🎉", f"נשלח לך התראה כשהזמנה #{_order_number(order_id)} מוכנה.",
+                    f"/#order={order_id}&t={t}", table="order_push_subs")
+    return {"ok": True}
 
 @app.post("/api/orders")
 def create_order(body: OrderCreateBody, request: Request, authorization: str = Header(None)):
@@ -2376,7 +2424,7 @@ def staff_update_order(order_id: int, body: OrderStatusBody, sess: dict = Depend
         else:
             title, text = f"הזמנה #{number} בוטלה", f"ההזמנה בוטלה. לשאלות אפשר להתקשר אלינו: {_get_contact()['phone']}."
         def _n():
-            _push_to_user(user_id, title, text, f"/#order={order_id}&t={token}")
+            _push_order(order_id, user_id, title, text, f"/#order={order_id}&t={token}")
             if email:
                 _send_order_email(email, title, [f"שלום {name.split()[0] if name.split() else ''},", text], link)
         threading.Thread(target=_n, daemon=True).start()
@@ -2435,7 +2483,7 @@ def _send_missing_notice(order_id):
         listed = ", ".join(names[:5]) + ("..." if len(names) > 5 else "")
         title = f"חסר מוצר בהזמנה #{number}"
         text = f"לצערנו חסר בחנות: {listed}. מה תעדיפו? להמשיך בלעדיו, לבקש תחליף, או לבטל את ההזמנה. בוחרים בקישור."
-        _push_to_user(user_id, title, text, f"/#order={order_id}&t={token}")
+        _push_order(order_id, user_id, title, text, f"/#order={order_id}&t={token}")
         if email:
             _send_order_email(email, title, [f"שלום {name.split()[0] if name.split() else ''},", f"לצערנו חסר בחנות: {listed}.",
                                              "מה תעדיפו? להמשיך בלי המוצר, לבקש תחליף, או לבטל את ההזמנה.",
@@ -2576,6 +2624,10 @@ def serve_sw():
 @app.get("/manifest.webmanifest")
 def serve_manifest():
     return FileResponse(os.path.join(STATIC_DIR, "manifest.webmanifest"), media_type="application/manifest+json")
+
+@app.get("/manifest-staff.webmanifest")
+def serve_manifest_staff():
+    return FileResponse(os.path.join(STATIC_DIR, "manifest-staff.webmanifest"), media_type="application/manifest+json")
 
 @app.get("/icon-192.png")
 def serve_icon192():
@@ -3703,6 +3755,10 @@ def serve_admin():
 @app.get("/staff.html")
 def serve_staff():
     return FileResponse(os.path.join(STATIC_DIR, "staff.html"), headers=_NO_CACHE_HTML)
+
+@app.get("/ui-inputs.js")
+def serve_ui_inputs():
+    return FileResponse(os.path.join(STATIC_DIR, "ui-inputs.js"), media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
 @app.get("/logo-web.jpg")
 def serve_logo_web():
