@@ -297,6 +297,8 @@ try:
     # Store address fix: Yoni Netanyahu 25 (also when an old address, 21 or 23, was saved before)
     init_cur.execute("UPDATE settings SET value = regexp_replace(value, 'יוני נתניהו (21|23)\\M', 'יוני נתניהו 25') "
                      "WHERE key = 'contact_address' AND value ~ 'יוני נתניהו (21|23)\\M';")
+    # The shop's new email address (replaces the old one if it was saved in the settings)
+    init_cur.execute("UPDATE settings SET value = 'bakeparty2026@gmail.com' WHERE key = 'contact_email' AND lower(trim(value)) = 'pinukimmam@gmail.com';")
 
     # --- FAQ, including items that are "discovered" automatically from the chat ---
     # topic_key: a fixed label the AI assigns to every chat question (see _ai_build_context / ai_chat).
@@ -2020,7 +2022,7 @@ def get_categories_tree():
 CONTACT_DEFAULTS = {
     "contact_phone": "054-9881998",
     "contact_address": "יוני נתניהו 25, גבעת שמואל",
-    "contact_email": "pinukimmam@gmail.com",
+    "contact_email": "bakeparty2026@gmail.com",
     "contact_whatsapp": "972549881998",
 }
 
