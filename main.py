@@ -454,6 +454,31 @@ try:
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_notification_log_id ON notification_log(id DESC);")
     init_cur.execute("DELETE FROM notification_log WHERE created_at < NOW() - INTERVAL '60 days';")
 
+    # Wolt API connection: OAuth tokens per venue (secret, never exported) and incoming order notifications
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS wolt_connection (
+            id            SERIAL PRIMARY KEY,
+            venue_id      TEXT UNIQUE,
+            access_token  TEXT,
+            refresh_token TEXT,
+            expires_at    TIMESTAMPTZ,
+            extra         TEXT,
+            connected_at  TIMESTAMPTZ DEFAULT NOW(),
+            updated_at    TIMESTAMPTZ DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS wolt_events (
+            id          SERIAL PRIMARY KEY,
+            order_id    TEXT,
+            status      TEXT,
+            venue_id    TEXT,
+            payload     TEXT,
+            verified    BOOLEAN NOT NULL DEFAULT FALSE,
+            received_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_wolt_events_id ON wolt_events(id DESC);")
+    init_cur.execute("DELETE FROM wolt_events WHERE received_at < NOW() - INTERVAL '90 days';")
+
     admin_email = os.environ.get("ADMIN_EMAIL")
     admin_pass = os.environ.get("ADMIN_PASSWORD")
     if admin_email and admin_pass:
@@ -4520,9 +4545,193 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         return {"reply": fallback, "ok": False, "reason": "api_error"}
 
 
+# --- Wolt API (OAuth connection + order webhook) ---
+# Flow (per Wolt): the shop clicks "connect" -> Wolt's authorization page -> Wolt redirects back to
+# /api/wolt/oauth/callback with a one-time code -> we exchange it for an access token (~1 hour)
+# and a refresh token (~1 month, single use). Orders arrive as a small "ping" on /api/wolt/webhook/orders
+# with the order id; the full order is then fetched from Wolt's API.
+# The URLs of Wolt's own endpoints come from their documentation, so they are configured by env vars.
+WOLT_CLIENT_ID = os.environ.get("WOLT_CLIENT_ID", "")
+WOLT_CLIENT_SECRET = os.environ.get("WOLT_CLIENT_SECRET", "")
+WOLT_AUTHORIZE_URL = os.environ.get("WOLT_AUTHORIZE_URL", "")
+WOLT_TOKEN_URL = os.environ.get("WOLT_TOKEN_URL", "")
+WOLT_SCOPE = os.environ.get("WOLT_SCOPE", "")
+WOLT_WEBHOOK_SECRET = os.environ.get("WOLT_WEBHOOK_SECRET", "")
+WOLT_REDIRECT_PATH = "/api/wolt/oauth/callback"
+_wolt_webhook_hits = defaultdict(list)
+
+def _wolt_redirect_uri():
+    return SITE_URL.rstrip("/") + WOLT_REDIRECT_PATH
+
+def _wolt_oauth_configured():
+    return bool(WOLT_CLIENT_ID and WOLT_CLIENT_SECRET and WOLT_AUTHORIZE_URL and WOLT_TOKEN_URL)
+
+def _wolt_token_request(fields):
+    """POST to Wolt's token endpoint (standard OAuth 2.0 form body). Returns the JSON reply."""
+    import urllib.request, urllib.error, urllib.parse
+    data = urllib.parse.urlencode({**fields, "client_id": WOLT_CLIENT_ID, "client_secret": WOLT_CLIENT_SECRET}).encode()
+    req = urllib.request.Request(WOLT_TOKEN_URL, data=data, headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=20).read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Wolt {e.code}: {e.read().decode('utf-8', 'replace')[:200]}")
+
+def _wolt_save_tokens(cur, tok, venue_id=None, extra=None):
+    expires = datetime.now(timezone.utc) + timedelta(seconds=int(tok.get("expires_in") or 3600))
+    venue = venue_id or tok.get("venue_id") or "default"
+    cur.execute("""INSERT INTO wolt_connection (venue_id, access_token, refresh_token, expires_at, extra)
+                   VALUES (%s,%s,%s,%s,%s)
+                   ON CONFLICT (venue_id) DO UPDATE SET access_token = EXCLUDED.access_token,
+                       refresh_token = COALESCE(EXCLUDED.refresh_token, wolt_connection.refresh_token),
+                       expires_at = EXCLUDED.expires_at, extra = COALESCE(EXCLUDED.extra, wolt_connection.extra),
+                       updated_at = NOW();""",
+                (venue, tok.get("access_token"), tok.get("refresh_token"), expires, json.dumps(extra) if extra else None))
+
+def wolt_access_token(venue_id="default"):
+    """A valid access token, refreshed when it is about to expire. The refresh token is single use,
+    so the row is locked while refreshing: two parallel requests never spend the same refresh token."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT access_token, refresh_token, expires_at FROM wolt_connection WHERE venue_id = %s FOR UPDATE;", (venue_id,))
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("החנות עוד לא מחוברת לוולט")
+        access, refresh, expires = row
+        if access and expires and expires - datetime.now(timezone.utc) > timedelta(minutes=5):
+            return access
+        tok = _wolt_token_request({"grant_type": "refresh_token", "refresh_token": refresh})
+        _wolt_save_tokens(cur, tok, venue_id)
+        conn.commit()
+        return tok["access_token"]
+    finally:
+        conn.rollback(); cur.close(); conn.close()
+
+@app.get("/api/admin/wolt/status")
+def wolt_status(sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT venue_id, expires_at, connected_at, updated_at FROM wolt_connection ORDER BY id;")
+    venues = [{"venue_id": r[0], "token_expires": r[1].isoformat() if r[1] else None,
+               "connected_at": r[2].isoformat() if r[2] else None} for r in cur.fetchall()]
+    cur.execute("SELECT COUNT(*), MAX(received_at) FROM wolt_events;")
+    n, last = cur.fetchone()
+    cur.close(); conn.close()
+    return {"configured": _wolt_oauth_configured(), "venues": venues,
+            "redirect_url": _wolt_redirect_uri(), "webhook_url": SITE_URL.rstrip("/") + "/api/wolt/webhook/orders",
+            "webhook_secret_set": bool(WOLT_WEBHOOK_SECRET), "events": n, "last_event": last.isoformat() if last else None}
+
+@app.post("/api/admin/wolt/connect")
+def wolt_connect(sess: dict = Depends(require_admin)):
+    """Builds the link to Wolt's authorization page. 'state' ties the answer to this request (CSRF protection)."""
+    import urllib.parse
+    if not _wolt_oauth_configured():
+        raise HTTPException(status_code=400, detail="חסרים פרטי החיבור מוולט (WOLT_CLIENT_ID וכו') ב-Railway")
+    state = secrets.token_urlsafe(24)
+    conn = get_conn(); cur = conn.cursor()
+    _setting_set(cur, "wolt_oauth_state", json.dumps({"h": hashlib.sha256(state.encode()).hexdigest(),
+                                                      "t": time_module.time(), "by": sess["user_id"]}))
+    conn.commit(); cur.close(); conn.close()
+    q = {"response_type": "code", "client_id": WOLT_CLIENT_ID, "redirect_uri": _wolt_redirect_uri(), "state": state}
+    if WOLT_SCOPE:
+        q["scope"] = WOLT_SCOPE
+    sep = "&" if "?" in WOLT_AUTHORIZE_URL else "?"
+    return {"url": WOLT_AUTHORIZE_URL + sep + urllib.parse.urlencode(q)}
+
+def _wolt_result_page(ok, text):
+    color = "#2e7d32" if ok else "#c62828"
+    return HTMLResponse(f'<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+                        f'<title>חיבור לוולט</title><body style="font-family:Arial,sans-serif;background:#FFF8F5;color:#4A2E35;text-align:center;padding:40px 16px">'
+                        f'<h2 style="color:{color}">{"✓ " if ok else ""}{_html_escape(text)}</h2>'
+                        f'<p><a href="/admin.html" style="color:#E05276">חזרה לפאנל הניהול</a></p></body></html>',
+                        status_code=200 if ok else 400)
+
+@app.get(WOLT_REDIRECT_PATH)
+def wolt_oauth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    """Wolt sends the shop back here after it approves (or declines) the connection."""
+    if error:
+        return _wolt_result_page(False, "החיבור לוולט בוטל או נדחה")
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        saved = json.loads(_setting_get(cur, "wolt_oauth_state") or "{}")
+        good_state = (state and saved.get("h") and hmac.compare_digest(saved["h"], hashlib.sha256(state.encode()).hexdigest())
+                      and time_module.time() - saved.get("t", 0) < 900)
+        if not good_state or not code:
+            return _wolt_result_page(False, "הקישור לא תקף או שפג תוקפו. מתחילים שוב מהכפתור בפאנל הניהול.")
+        _setting_set(cur, "wolt_oauth_state", "")          # the state works once
+        conn.commit()
+        try:
+            tok = _wolt_token_request({"grant_type": "authorization_code", "code": code, "redirect_uri": _wolt_redirect_uri()})
+        except Exception as e:
+            print(f"[WOLT] token exchange failed: {e}")
+            return _wolt_result_page(False, "וולט לא אישרו את החיבור. נסו שוב בעוד כמה דקות.")
+        extra = {k: v for k, v in request.query_params.items() if k not in ("code", "state")}
+        venue = request.query_params.get("venue_id") or tok.get("venue_id")
+        _wolt_save_tokens(cur, tok, venue, extra or None)
+        conn.commit()
+        _audit({"user_id": saved.get("by"), "name": None}, "wolt_connected", "wolt", None, {"venue": venue or "default"})
+        return _wolt_result_page(True, "החנות חוברה לוולט בהצלחה")
+    finally:
+        cur.close(); conn.close()
+
+def _wolt_signature_ok(request, raw):
+    """Wolt may sign webhook calls with the secret we give them. Until their docs confirm the exact header,
+    accept an HMAC-SHA256 of the body (hex or base64, any header) or the secret itself in a header."""
+    if not WOLT_WEBHOOK_SECRET:
+        return None                                  # no secret configured: accepted, marked unverified
+    import base64
+    mac = hmac.new(WOLT_WEBHOOK_SECRET.encode(), raw, hashlib.sha256).digest()
+    wanted = {mac.hex(), "sha256=" + mac.hex(), base64.b64encode(mac).decode(), WOLT_WEBHOOK_SECRET}
+    for name, val in request.headers.items():
+        if name.lower() in ("content-type", "content-length", "host", "user-agent", "accept", "accept-encoding", "connection"):
+            continue
+        for part in [val.strip()] + [p.strip() for p in val.replace(";", ",").split(",")]:
+            if any(hmac.compare_digest(part, w) for w in wanted):
+                return True
+    return False
+
+@app.post("/api/wolt/webhook/orders")
+async def wolt_order_webhook(request: Request):
+    """Order notifications from Wolt (statuses chosen with Wolt). Stored right away and answered fast."""
+    ip = request.client.host if request.client else "?"
+    _simple_rate_limit(_wolt_webhook_hits, ip, 600, 60, "Too many requests")
+    raw = await request.body()
+    if len(raw) > 1_000_000:
+        raise HTTPException(status_code=413, detail="Payload too large")
+    verified = _wolt_signature_ok(request, raw)
+    if verified is False:
+        raise HTTPException(status_code=401, detail="Bad signature")
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    def pick(d, *keys):
+        for k in keys:
+            cur_v = d
+            for part in k.split("."):
+                cur_v = cur_v.get(part) if isinstance(cur_v, dict) else None
+            if cur_v not in (None, ""):
+                return str(cur_v)[:120]
+        return None
+    order_id = pick(body, "order.id", "order_id", "id", "resource_id", "body.order.id")
+    status = pick(body, "order.status", "status", "type", "event", "body.order.status")
+    venue = pick(body, "order.venue_id", "venue_id", "venue.id", "body.order.venue_id")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("INSERT INTO wolt_events (order_id, status, venue_id, payload, verified) VALUES (%s,%s,%s,%s,%s);",
+                (order_id, status, venue, raw.decode("utf-8", "replace")[:100_000], bool(verified)))
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True}
+
+@app.get("/api/admin/wolt/events")
+def wolt_events(limit: int = 50, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, order_id, status, venue_id, verified, received_at FROM wolt_events ORDER BY id DESC LIMIT %s;", (max(1, min(limit, 200)),))
+    rows = [{"id": r[0], "order_id": r[1], "status": r[2], "venue_id": r[3], "verified": r[4], "at": r[5].isoformat()} for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return rows
+
+
 # --- Backups ---
 # Never exported: login sessions and one-time tokens (useless after a restore, and dangerous if leaked)
-_BACKUP_SKIP_TABLES = {"sessions", "login_challenges", "password_resets"}
+_BACKUP_SKIP_TABLES = {"sessions", "login_challenges", "password_resets", "wolt_connection"}
 # Secrets removed from the export: 2FA keys (staff re-enroll after a restore) and the unsubscribe-link key
 _BACKUP_SKIP_COLUMNS = {"users": {"totp_secret", "totp_pending", "backup_codes"}}
 _BACKUP_SKIP_SETTINGS = {"unsub_secret"}
