@@ -291,6 +291,13 @@
 
             <div class="tab-page" id="tab-page-products">
 
+                <!-- Wolt API connection -->
+                <div class="card" id="wolt-api-card">
+                    <h2>🔗 חיבור ישיר לוולט (API)</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">אחרי החיבור, המלאי וההזמנות יתעדכנו בין וולט לאתר לבד, בלי להעלות קבצים.</p>
+                    <div id="wolt-api-state">טוען...</div>
+                </div>
+
                 <!-- Wolt product import -->
                 <div class="card">
                     <h2>📥 ייבוא מוצרים מאקסל של וולט</h2>
@@ -761,6 +768,7 @@
             
             document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
+            if (name === 'products') loadWoltApi();
             document.getElementById('tab-page-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-page-faq').classList.toggle('active', name === 'faq');
             document.getElementById('tab-btn-reviews').classList.toggle('active', name === 'reviews');
@@ -1655,6 +1663,41 @@
                 loadAuditLog();
             } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
         };
+
+        // ----- Wolt API connection -----
+        async function loadWoltApi() {
+            const wrap = document.getElementById('wolt-api-state');
+            try {
+                const res = await fetch(`${API}/api/admin/wolt/status`, { headers: authHeaders() });
+                const st = await res.json();
+                if (!res.ok) throw new Error(st.detail || 'שגיאה');
+                const fmt = t => t ? new Date(t).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '–';
+                let html = '';
+                if (st.venues.length) html += `<p><b style="color:var(--ok);">✓ מחובר</b> · מאז ${fmt(st.venues[0].connected_at)}</p>`;
+                else if (st.configured) html += `<p><b>עוד לא מחובר.</b> לוחצים על הכפתור, מתחברים לוולט ומאשרים.</p>`;
+                else html += `<p><b>ממתין לפרטים מוולט.</b> אחרי שוולט ישלחו Client ID ו-Secret, מכניסים אותם ב-Railway ואז יופיע כאן כפתור חיבור.</p>`;
+                html += `<p style="font-size:0.85em; color:var(--muted);">הודעות הזמנה שהתקבלו מוולט: ${st.events}${st.last_event ? ' · אחרונה ' + fmt(st.last_event) : ''}</p>`;
+                html += `<details style="font-size:0.85em;"><summary style="cursor:pointer;">הכתובות למסירה לוולט</summary>
+                    <p style="direction:ltr; text-align:left; word-break:break-all;">Redirect URL: <code class="w-r"></code><br>Webhook: <code class="w-w"></code></p></details>`;
+                wrap.innerHTML = html;
+                wrap.querySelector('.w-r').textContent = st.redirect_url;
+                wrap.querySelector('.w-w').textContent = st.webhook_url;
+                if (st.configured) {
+                    const b = document.createElement('button');
+                    b.className = 'btn'; b.type = 'button';
+                    b.textContent = st.venues.length ? 'חיבור מחדש לוולט' : 'חיבור לוולט';
+                    b.onclick = async () => {
+                        try {
+                            const r = await fetch(`${API}/api/admin/wolt/connect`, { method: 'POST', headers: authHeaders() });
+                            const d = await r.json();
+                            if (!r.ok) throw new Error(d.detail || 'שגיאה');
+                            location.href = d.url;
+                        } catch (e) { alert(e.message); }
+                    };
+                    wrap.prepend(b);
+                }
+            } catch (e) { wrap.textContent = e.message; }
+        }
 
         // ----- Two-factor authentication (authenticator app) -----
         async function twofaCall(path, body) {
