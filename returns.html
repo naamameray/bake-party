@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>החזרות והחלפות | Bake & Party</title>
+<meta name="description" content="מדיניות ההחזרות וההחלפות של Bake & Party בגבעת שמואל: מה אפשר להחליף, תוך כמה זמן ואיך.">
+<link rel="canonical" href="{{SITE_URL}}/returns">
+<link rel="icon" href="/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root { --pink: #E05276; --pink-light: #FFE4EC; --text: #4A2E35; --muted: #8A6B72; --bg: #FFF8F5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Rubik', Arial, sans-serif; line-height: 1.75; }
+  header { background: #fff; border-bottom: 1px solid var(--pink-light); padding: 14px 16px; }
+  header a { color: var(--pink); font-weight: 700; text-decoration: none; font-size: 1.15em; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { color: var(--pink); margin: 0 0 4px; font-size: 1.8em; }
+  h2 { color: var(--pink); font-size: 1.2em; margin: 28px 0 6px; }
+  .updated { color: var(--muted); margin: 0 0 18px; }
+  .card { background: #fff; border: 1px solid var(--pink-light); border-radius: 16px; padding: 4px 20px 16px; }
+  ul { padding-inline-start: 22px; margin: 6px 0; }
+  li { margin: 3px 0; }
+  a { color: var(--pink); }
+  .box { border-radius: 12px; padding: 12px 16px; margin: 10px 0; }
+  .yes { background: #E8F5E9; } .no { background: #FDECEA; }
+  .contact { background: var(--pink-light); border-radius: 12px; padding: 12px 16px; }
+</style>
+</head>
+<body>
+<header><a href="/">🎉 Bake & Party</a></header>
+<main>
+  <h1>החזרות והחלפות</h1>
+  <p class="updated">עודכן לאחרונה: נובמבר 2026</p>
+  <div class="card">
+    <h2>בקצרה</h2>
+    <div class="box yes">✓ <b>אפשר להחליף</b> מוצר שאינו מזון, שמחירו {{MIN_PRICE}} ₪ ומעלה, תוך <b>{{DAYS}} ימים</b> מיום הקנייה או האיסוף.</div>
+    <div class="box no">✗ <b>אי אפשר להחזיר או להחליף</b> מוצרי מזון, שתייה, מוצרים קפואים ומקוררים, ומוצרים שמחירם נמוך מ-{{MIN_PRICE}} ₪.</div>
+
+    <h2>1. איך מחליפים</h2>
+    <ul>
+      <li>מגיעים לחנות עם המוצר ועם <b>הקבלה</b> (או מספר ההזמנה מהאתר) תוך {{DAYS}} ימים.</li>
+      <li>המוצר צריך להיות חדש, לא בשימוש, באריזה המקורית ועם כל החלקים.</li>
+      <li>ההחלפה היא למוצר אחר מהחנות בשווי זהה. אם המוצר החדש יקר יותר, משלמים את ההפרש.</li>
+      <li>ההחלפה ללא עלות.</li>
+    </ul>
+
+    <h2>2. מה לא ניתן להחזרה או להחלפה</h2>
+    <ul>
+      <li>כל מוצרי המזון: שוקולד, ממתקים, חטיפים, חומרי גלם לאפייה, צבעי מאכל ועוד.</li>
+      <li>שתייה.</li>
+      <li>גלידות, שלגונים, מוצרים קפואים ומקוררים.</li>
+      <li>מוצרים שמחירם נמוך מ-{{MIN_PRICE}} ₪.</li>
+      <li>מוצר שנפתח, נעשה בו שימוש או שנפגם אחרי הקנייה.</li>
+    </ul>
+    <p>בעמוד של כל מוצר באתר כתוב אם הוא ניתן להחלפה.</p>
+
+    <h2>3. כסף או זיכוי</h2>
+    <p>החנות מציעה <b>החלפה בלבד</b>, ואינה מחזירה כסף או נותנת זיכוי, למעט במקרים שבהם החוק מחייב זאת.</p>
+
+    <h2>4. מוצר פגום</h2>
+    <p>קיבלת מוצר פגום, או מוצר שונה ממה שהוזמן? פנו אלינו בהקדם ונטפל בזה, גם אם מדובר במוצר מזון.</p>
+
+    <h2>5. זכויות לפי החוק</h2>
+    <p>האמור בעמוד זה אינו גורע מזכויות הצרכן לפי חוק הגנת הצרכן, התשמ"א-1981, והתקנות לפיו.</p>
+
+    <h2>6. יצירת קשר</h2>
+    <div class="contact">
+      Bake & Party · {{ADDRESS}}<br>
+      טלפון: {{PHONE}}<br>
+      מייל: {{EMAIL}}
+    </div>
+  </div>
+  <p style="text-align:center; margin-top:24px;"><a href="/">← חזרה לחנות</a></p>
+</main>
+</body>
+</html>
