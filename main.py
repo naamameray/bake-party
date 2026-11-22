@@ -3843,9 +3843,16 @@ def product_seo_page(product_id: int):
     desc_text = (notes or "").strip()
     meta_desc = (desc_text[:140] + " | " if desc_text else "") + f"{name} ב-₪{price:.2f}" + \
                 (f" | {cat_name}" if cat_name else "") + " | Bake & Party, חנות אפייה ומסיבות בגבעת שמואל"
+    # Google wants a real description. Most products have no written one, so build a useful sentence
+    # from what we know (category, weight, pack size, pickup) instead of repeating the name.
+    facts = [f"משקל {weight} גרם" if weight else "", f"{units} יחידות באריזה" if units else ""]
+    auto_desc = (f"{name}" + (f" ({', '.join(f for f in facts if f)})" if any(facts) else "") +
+                 (f", מקטגוריית {cat_name}" if cat_name else "") +
+                 f". נמכר ב-{SITE_NAME}, חנות אפייה ומסיבות בגבעת שמואל. הזמנה באתר ואיסוף עצמי מהחנות.")
     product_ld = {
         "@context": "https://schema.org", "@type": "Product", "name": name, "image": [img_abs],
-        "description": desc_text or f"{name} - {cat_name or 'אפייה ומסיבות'}", "sku": str(pid),
+        "description": desc_text if len(desc_text) >= 40 else (f"{auto_desc} {desc_text}." if desc_text else auto_desc),
+        "sku": str(pid),
         "category": " > ".join(n for _, n in chain) or None,
         "offers": {"@type": "Offer", "url": canonical, "price": f"{price:.2f}", "priceCurrency": "ILS",
                    "availability": "https://schema.org/InStock" if in_stock else "https://schema.org/OutOfStock",
