@@ -3797,6 +3797,37 @@ def _category_chain(cur, cat_id):
         chain.insert(0, (r[0], r[1])); cat_id = r[2]
     return chain
 
+# --- Return policy (exchange only) ---
+# The shop's policy: exchange only (no refund or credit), within RETURN_DAYS days, with the receipt,
+# for items priced RETURN_MIN_PRICE or more. Food, drinks and frozen/refrigerated items are never returned.
+RETURN_DAYS = 3
+RETURN_MIN_PRICE = 50
+# A product is food if any of its categories (or their parents) has one of these words in its name.
+# Matching by name keeps working even if category ids differ between databases.
+_FOOD_CATEGORY_WORDS = ("גליד", "קפוא", "שלגונ", "ארטיק", "שוקולד", "חטיפ", "ממתק", "סוכרי", "מסטיק",
+                        "וופל", "מרשמלו", "חמצוצ", "חומרי גלם", "שתי", "פחיות", "מאכל", "ממרח", "סירופ")
+
+def _product_is_food(cur, product_id, main_cat_id):
+    cur.execute("SELECT category_id FROM product_categories WHERE product_id = %s;", (product_id,))
+    names = []
+    for cid in {main_cat_id, *[r[0] for r in cur.fetchall()]} - {None}:
+        names += [n for _, n in _category_chain(cur, cid)]
+    return any(w in n for n in names for w in _FOOD_CATEGORY_WORDS)
+
+def _product_returnable(is_food, price):
+    return not is_food and price >= RETURN_MIN_PRICE
+
+def _return_policy_ld(returnable):
+    """schema.org MerchantReturnPolicy for one product (what Google's merchant listings ask for)."""
+    pol = {"@type": "MerchantReturnPolicy", "applicableCountry": "IL", "merchantReturnLink": f"{SITE_URL}/returns"}
+    if not returnable:
+        pol["returnPolicyCategory"] = "https://schema.org/MerchantReturnNotPermitted"
+        return pol
+    pol.update({"returnPolicyCategory": "https://schema.org/MerchantReturnFiniteReturnWindow",
+                "merchantReturnDays": RETURN_DAYS, "returnMethod": "https://schema.org/ReturnInStore",
+                "returnFees": "https://schema.org/FreeReturn", "refundType": "https://schema.org/ExchangeRefund"})
+    return pol
+
 def _breadcrumb_ld(items):
     return {"@context": "https://schema.org", "@type": "BreadcrumbList",
             "itemListElement": [{"@type": "ListItem", "position": i + 1, "name": n, "item": u} for i, (n, u) in enumerate(items)]}
@@ -3812,6 +3843,7 @@ def sitemap():
     cur.close(); conn.close()
     urls = [f"  <url><loc>{SITE_URL}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>"]
     urls.append(f"  <url><loc>{SITE_URL}/privacy</loc><changefreq>yearly</changefreq><priority>0.2</priority></url>")
+    urls.append(f"  <url><loc>{SITE_URL}/returns</loc><changefreq>yearly</changefreq><priority>0.2</priority></url>")
     urls += [f"  <url><loc>{SITE_URL}/category/{c}</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>" for c in cats]
     urls += [f"  <url><loc>{SITE_URL}/product/{p}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>" for p in prods]
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + "\n".join(urls) + "\n</urlset>"
@@ -3835,6 +3867,7 @@ def product_seo_page(product_id: int):
         cur.execute("SELECT id, name, price, image_url FROM Products WHERE category_id = %s AND id <> %s "
                     "ORDER BY (stock_quantity > 0) DESC, id LIMIT 12;", (cat_id, pid))
         related = cur.fetchall()
+    returnable = _product_returnable(_product_is_food(cur, pid, cat_id), price)
     cur.close(); conn.close()
 
     cat_name = chain[-1][1] if chain else ""
@@ -3843,13 +3876,21 @@ def product_seo_page(product_id: int):
     desc_text = (notes or "").strip()
     meta_desc = (desc_text[:140] + " | " if desc_text else "") + f"{name} ב-₪{price:.2f}" + \
                 (f" | {cat_name}" if cat_name else "") + " | Bake & Party, חנות אפייה ומסיבות בגבעת שמואל"
+    # Google wants a real description. Most products have no written one, so build a useful sentence
+    # from what we know (category, weight, pack size, pickup) instead of repeating the name.
+    facts = [f"משקל {weight} גרם" if weight else "", f"{units} יחידות באריזה" if units else ""]
+    auto_desc = (f"{name}" + (f" ({', '.join(f for f in facts if f)})" if any(facts) else "") +
+                 (f", מקטגוריית {cat_name}" if cat_name else "") +
+                 f". נמכר ב-{SITE_NAME}, חנות אפייה ומסיבות בגבעת שמואל. הזמנה באתר ואיסוף עצמי מהחנות.")
     product_ld = {
         "@context": "https://schema.org", "@type": "Product", "name": name, "image": [img_abs],
-        "description": desc_text or f"{name} - {cat_name or 'אפייה ומסיבות'}", "sku": str(pid),
+        "description": desc_text if len(desc_text) >= 40 else (f"{auto_desc} {desc_text}." if desc_text else auto_desc),
+        "sku": str(pid),
         "category": " > ".join(n for _, n in chain) or None,
         "offers": {"@type": "Offer", "url": canonical, "price": f"{price:.2f}", "priceCurrency": "ILS",
                    "availability": "https://schema.org/InStock" if in_stock else "https://schema.org/OutOfStock",
                    "itemCondition": "https://schema.org/NewCondition",
+                   "hasMerchantReturnPolicy": _return_policy_ld(returnable),
                    "seller": {"@id": f"{SITE_URL}/#store", "@type": "Store", "name": SITE_NAME}},
     }
     crumbs = [("דף הבית", SITE_URL + "/")] + [(n, f"{SITE_URL}/category/{cid}") for cid, n in chain] + [(name, canonical)]
@@ -3870,6 +3911,7 @@ def product_seo_page(product_id: int):
     <span class="stock{'' if in_stock else ' out'}">{'במלאי בחנות' if in_stock else 'אזל מהמלאי'}</span>
     {f'<p class="desc">{_e(desc_text)}</p>' if desc_text else ''}
     {f'<p class="desc">{_e(" · ".join(meta))}</p>' if meta else ''}
+    <p class="desc" style="font-size:.9em"><a href="/returns">{'🔄 ניתן להחלפה בחנות תוך ' + str(RETURN_DAYS) + ' ימים, עם קבלה' if returnable else 'מוצר זה אינו ניתן להחזרה או להחלפה'}</a></p>
     <div class="actions">
       <a class="pill" href="/#p={pid}">לצפייה בחנות האונליין</a>
       <a class="pill ghost" href="https://wa.me/{_e(wa)}?text={_e(_url_quote(wa_text))}" rel="noopener">הזמנה בוואטסאפ</a>
@@ -4854,6 +4896,17 @@ def serve_privacy():
     c = _get_contact()
     page = open(os.path.join(STATIC_DIR, "privacy.html"), encoding="utf-8").read()
     for key, val in (("SITE_URL", SITE_URL), ("ADDRESS", c["address"]), ("PHONE", c["phone"]), ("EMAIL", c["email"])):
+        page = page.replace("{{" + key + "}}", _html_escape(val or ""))
+    return HTMLResponse(page, headers=_NO_CACHE_HTML)
+
+@app.get("/returns")
+@app.get("/returns.html")
+def serve_returns():
+    """Return / exchange policy page."""
+    c = _get_contact()
+    page = open(os.path.join(STATIC_DIR, "returns.html"), encoding="utf-8").read()
+    for key, val in (("SITE_URL", SITE_URL), ("ADDRESS", c["address"]), ("PHONE", c["phone"]), ("EMAIL", c["email"]),
+                     ("DAYS", str(RETURN_DAYS)), ("MIN_PRICE", str(RETURN_MIN_PRICE))):
         page = page.replace("{{" + key + "}}", _html_escape(val or ""))
     return HTMLResponse(page, headers=_NO_CACHE_HTML)
 
