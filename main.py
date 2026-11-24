@@ -4814,17 +4814,19 @@ def _build_invoice_lines(extracted, cur):
     by_barcode = {p["barcode"]: p for p in catalog if p["barcode"]}
     by_sku = {p["sku"]: p for p in catalog if p["sku"]}
     out = []
-    inv_disc = extracted.get("invoice_discount_percent") or 0
     for i, ln in enumerate(extracted.get("lines") or []):
         match, method, cands = _match_line(ln, catalog, by_barcode, by_sku)
         cost = ln.get("unit_cost")
-        # Double-check the AI's arithmetic against the printed line total: a misread digit shows up here
+        # Double-check the AI's reading against the printed line total: a misread digit shows up here.
+        # The cost is the list price (before discounts), so the line discount is added back for the check.
         check = None
         qty, total = ln.get("quantity"), ln.get("line_total")
-        if cost and qty and total and qty > 0:
-            expected = total / qty * (1 - float(inv_disc) / 100)
+        disc = float(ln.get("line_discount_percent") or 0)
+        if cost and qty and total and qty > 0 and 0 <= disc < 100:
+            expected = total / qty / (1 - disc / 100)
             if expected > 0 and abs(cost - expected) / expected > 0.03:
-                check = f"העלות ({cost:.2f}) לא מתאימה לסה\"כ השורה ({total:.2f} ÷ {qty:g} = {expected:.2f}). כדאי לבדוק מול החשבונית."
+                check = (f"המחיר ליחידה ({cost:.2f}) לא מתאים לסה\"כ השורה "
+                         f"({total:.2f} ÷ {qty:g}{f' לפני הנחה {disc:g}%' if disc else ''} = {expected:.2f}). כדאי לבדוק מול החשבונית.")
         new_price = invoice_ai.site_price_from_cost(cost) if cost and cost > 0 else None
         out.append({
             "index": i, "invoice": ln,

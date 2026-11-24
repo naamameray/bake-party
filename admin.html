@@ -296,7 +296,7 @@
                     <h2>🧾 קליטת חשבונית מספק</h2>
                     <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
                         מעלים חשבונית (PDF, סריקה או צילום מהטלפון). ה-AI קורא את השורות, מוצא כל מוצר באתר, ומציע מחיר:
-                        <b>עלות × 2 + 1.90</b>, מעוגל למעלה ל-.00 / .50 / .90. מוצר שלא קיים מוצע כמוצר חדש.
+                        <b>מחיר הספק × 2 + 1.90</b>, מעוגל למעלה ל-.00 / .50 / .90. ההנחות שהספק נותן לא יורדות מהחישוב. מוצר שלא קיים מוצע כמוצר חדש.
                         <b>שום דבר לא משתנה עד שמאשרים.</b>
                     </p>
                     <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
@@ -1729,7 +1729,7 @@
             const catOpts = '<option value="">בחירת קטגוריה...</option>' + invoiceCats.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('');
             el.innerHTML = `
                 <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; font-size:0.85em; color:var(--muted);">
-                    <span>שורה ${ln.index + 1}: ${escHtml(inv.description)}${inv.quantity != null ? ' · כמות ' + escHtml(String(inv.quantity)) : ''}</span>${conf}
+                    <span>שורה ${ln.index + 1}: ${escHtml(inv.description)}${inv.quantity != null ? ' · כמות ' + escHtml(String(inv.quantity)) : ''}${inv.line_discount_percent ? ' · הנחת ספק ' + escHtml(String(inv.line_discount_percent)) + '%' : ''}</span>${conf}
                 </div>
                 ${inv.note ? `<div style="font-size:0.85em; color:#c77700; margin-top:2px;">📝 ${escHtml(inv.note)}</div>` : ''}
                 ${ln.check ? `<div style="font-size:0.85em; color:#c62828; margin-top:2px;">⚠️ ${escHtml(ln.check)}</div>` : ''}
@@ -1741,7 +1741,7 @@
                     <label style="font-size:0.85em;">תיאור</label><textarea class="inv-desc" rows="2" style="width:100%;"></textarea>
                 </div>
                 <div class="inv-prices" style="display:flex; gap:10px; flex-wrap:wrap; align-items:end; font-size:0.9em;">
-                    <label>עלות ליחידה<br><input class="inv-cost" type="number" step="0.01" min="0" style="width:95px;"></label>
+                    <label>מחיר ספק ליחידה<br><input class="inv-cost" type="number" step="0.01" min="0" style="width:95px;"></label>
                     <label>מחיר באתר<br><input class="inv-price" type="number" step="0.01" min="0" style="width:95px;"></label>
                     <span>בוולט: <b class="inv-wolt">–</b></span>
                     <span class="inv-change"></span>
@@ -1779,7 +1779,7 @@
             const d = invoiceDoc, wrap = document.getElementById('inv-review');
             wrap.innerHTML = `<div style="background:var(--pink-light); border-radius:12px; padding:10px 12px; margin-top:10px;">
                 <b>${escHtml(d.supplier || 'ספק לא מזוהה')}</b>${d.invoice_number ? ' · חשבונית ' + escHtml(d.invoice_number) : ''}${d.invoice_date ? ' · ' + escHtml(d.invoice_date) : ''}
-                · ${d.lines.length} שורות${d.invoice_discount_percent ? ' · הנחה כללית ' + escHtml(String(d.invoice_discount_percent)) + '% (כבר בתוך העלות)' : ''}</div>
+                · ${d.lines.length} שורות${d.invoice_discount_percent ? ' · הנחה כללית ' + escHtml(String(d.invoice_discount_percent)) + '% (לא יורדת מהמחיר)' : ''}</div>
                 ${d.duplicate_of ? '<p style="color:#c62828; font-weight:bold;">⚠️ חשבונית עם אותו מספר כבר נקלטה בעבר. כדאי לבדוק שזו לא כפילות.</p>' : ''}
                 <div id="inv-lines"></div>
                 <div style="position:sticky; bottom:0; background:#fff; padding:10px 0; border-top:1px solid var(--pink-light); display:flex; gap:8px; flex-wrap:wrap; align-items:center;">

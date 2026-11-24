@@ -60,6 +60,7 @@ INVOICE_SCHEMA = {
                     "quantity": _nullable("number"),
                     "units_per_pack": _nullable("integer"),
                     "unit_cost": _nullable("number"),
+                    "line_discount_percent": _nullable("number"),
                     "line_total": _nullable("number"),
                     "suggested_name": {"type": "string"},
                     "suggested_category_id": _nullable("integer"),
@@ -67,7 +68,7 @@ INVOICE_SCHEMA = {
                     "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                     "note": _nullable("string"),
                 },
-                "required": ["description", "barcode", "supplier_sku", "quantity", "units_per_pack", "unit_cost",
+                "required": ["description", "barcode", "supplier_sku", "quantity", "units_per_pack", "unit_cost", "line_discount_percent",
                              "line_total", "suggested_name", "suggested_category_id", "suggested_description",
                              "confidence", "note"],
                 "additionalProperties": False,
@@ -89,6 +90,7 @@ products (delivery, deposits, totals, VAT).
 
 Invoice level:
 - invoice_discount_percent: a discount on the whole invoice (e.g. "הנחה 3.05%" in the totals box), otherwise null.
+  For information only: it is NOT taken off unit_cost.
 
 For each product line:
 - description: the line text exactly as written.
@@ -96,10 +98,12 @@ For each product line:
 - supplier_sku: the supplier's item code if printed, otherwise null.
 - quantity: the quantity as written.
 - units_per_pack: if the line is a carton/pack and the number of single units inside is stated, that number; otherwise null.
-- unit_cost: the cost of ONE unit as the shop would sell it, WITHOUT VAT, after the line discount AND after
-  invoice_discount_percent. Work it out as line_total / quantity, then apply the invoice discount.
-  Example: price 25.80, discount 5%, total 294.12, quantity 12 -> 24.51. With a 3.05% invoice discount -> 23.76.
+- unit_cost: the LIST price of ONE unit as printed in the price column (מחיר), WITHOUT VAT, BEFORE any
+  discount. The shop prices from the list price, so do not take off the line discount or the invoice discount.
+  Example: price 25.80, discount 5%, total 294.12, quantity 12 -> unit_cost 25.80.
+  If the price column is missing, work it out as line_total / quantity / (1 - line_discount_percent / 100).
   If the numbers can't be read, null.
+- line_discount_percent: the discount % printed on the line (הנחה), or null if none.
 - line_total: the line total as printed, or null.
 - suggested_name: a clean, short Hebrew product name for the shop's website: product + size/weight/colour,
   keeping kashrut words that matter to customers (חלבי, פרווה). Drop codes and abbreviations such as (ח.א), **, item numbers.
