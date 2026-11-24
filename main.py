@@ -510,6 +510,27 @@ try:
     init_cur.execute("ALTER TABLE wolt_events ADD COLUMN IF NOT EXISTS event_type TEXT;")
     init_cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wolt_events_notification ON wolt_events(notification_id);")
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_wolt_events_id ON wolt_events(id DESC);")
+    # Wolt orders as fetched from Wolt's Order API (GET /v2/orders/{id}), shown on the staff board.
+    # Customer details are kept only for a short time.
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS wolt_orders (
+            order_id         TEXT PRIMARY KEY,
+            venue_id         TEXT,
+            order_number     TEXT,
+            status           TEXT,
+            delivery_type    TEXT,
+            consumer_name    TEXT,
+            consumer_comment TEXT,
+            items            TEXT,
+            total_cents      INTEGER,
+            currency         TEXT,
+            wolt_created_at  TIMESTAMPTZ,
+            fetched_at       TIMESTAMPTZ,
+            last_error       TEXT,
+            updated_at       TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    init_cur.execute("DELETE FROM wolt_orders WHERE updated_at < NOW() - INTERVAL '30 days';")
     init_cur.execute("DELETE FROM wolt_events WHERE received_at < NOW() - INTERVAL '90 days';")
 
     admin_email = os.environ.get("ADMIN_EMAIL")
@@ -5369,7 +5390,152 @@ async def wolt_order_webhook(request: Request):
                    VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (notification_id) DO NOTHING;""",
                 (s(body.get("id")), s(body.get("type")), s(order.get("id")), s(order.get("status")), s(order.get("venue_id")),
                  raw.decode("utf-8", "replace")[:100_000], bool(verified)))
+    is_new = cur.rowcount == 1 or not body.get("id")
     conn.commit(); cur.close(); conn.close()
+    if is_new and order.get("id") and order.get("venue_id"):
+        # Acknowledge first, work after: fetching the full order happens in the background
+        threading.Thread(target=_wolt_sync_order, args=(str(order["id"]), str(order["venue_id"]), order.get("status")),
+                         daemon=True).start()
+    return {"ok": True}
+
+# --- Wolt orders on the staff board ---
+WOLT_STATUS_HE = {"received": "חדשה, ממתינה לאישור", "production": "בהכנה", "ready": "מוכנה", "delivered": "נמסרה",
+                  "rejected": "בוטלה", "other": "אחר"}
+
+def _wolt_norm_status(raw):
+    """Webhook statuses are uppercase and differ from the Order API's; map both to one set."""
+    st = str(raw or "").strip().lower()
+    return {"created": "received", "acknowledged": "received", "fetched": "received", "canceled": "rejected",
+            "cancelled": "rejected"}.get(st, st or None)
+
+def _wolt_api(method, path, venue_id, body=None):
+    """Calls Wolt's Order API for a venue with its (auto-refreshed) access token."""
+    import urllib.request, urllib.error
+    token = wolt_access_token(venue_id)
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(WOLT_API_BASE.rstrip("/") + path, data=data, method=method,
+                                 headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
+                                          **({"Content-Type": "application/json"} if data else {})})
+    try:
+        resp = urllib.request.urlopen(req, timeout=20)
+        raw = resp.read()
+        return json.loads(raw) if raw.strip() else None
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300]
+        print(f"[WOLT] {method} {path} -> {e.code}: {detail}")
+        raise RuntimeError(f"וולט החזירו שגיאה {e.code}")
+
+def _cents(obj):
+    try:
+        return int((obj or {}).get("amount"))
+    except (TypeError, ValueError):
+        return None
+
+def _wolt_sync_order(order_id, venue_id, status_hint=None, fetch=None):
+    """Keeps wolt_orders up to date. The full order is fetched when it's new, and again at "ready"
+    (in retail, items can change while the order is picked)."""
+    status = _wolt_norm_status(status_hint)
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO wolt_orders (order_id, venue_id, status) VALUES (%s,%s,%s) "
+                    "ON CONFLICT (order_id) DO UPDATE SET status = COALESCE(EXCLUDED.status, wolt_orders.status), updated_at = NOW() "
+                    "RETURNING fetched_at;", (order_id, venue_id, status))
+        fetched_at = cur.fetchone()[0]
+        conn.commit()
+        if fetch is None:
+            fetch = fetched_at is None or status in ("ready", "received")
+        if not fetch:
+            return
+        try:
+            o = _wolt_api("GET", f"/v2/orders/{order_id}", venue_id) or {}
+        except Exception as e:
+            cur.execute("UPDATE wolt_orders SET last_error = %s WHERE order_id = %s;", (str(e)[:300], order_id))
+            conn.commit(); return
+        # Map the order's lines to site products: SKU = our product id, GTIN = barcode
+        items = []
+        cur.execute("SELECT id, name, barcode FROM Products;")
+        by_id, by_barcode = {}, {}
+        for pid, name, bc in cur.fetchall():
+            by_id[str(pid)] = (pid, name)
+            if bc:
+                by_barcode[bc] = (pid, name)
+        for it in o.get("items") or []:
+            price = it.get("item_price") or {}
+            prod = by_id.get(str(it.get("sku") or "").strip()) or by_barcode.get(str(it.get("gtin") or "").strip())
+            items.append({"name": it.get("name"), "count": it.get("count"), "sku": it.get("sku"), "gtin": it.get("gtin"),
+                          "unit_cents": _cents(price.get("unit_price")), "total_cents": _cents(price.get("total")),
+                          "product_id": prod[0] if prod else None, "product_name": prod[1] if prod else None})
+        total = (o.get("basket_price") or {}).get("total") or {}
+        cur.execute("""UPDATE wolt_orders SET order_number = %s, status = COALESCE(%s, status), delivery_type = %s,
+                           consumer_name = %s, consumer_comment = %s, items = %s, total_cents = %s, currency = %s,
+                           wolt_created_at = %s, fetched_at = NOW(), last_error = NULL, updated_at = NOW()
+                       WHERE order_id = %s;""",
+                    (o.get("order_number"), _wolt_norm_status(o.get("order_status")), (o.get("delivery") or {}).get("type"),
+                     o.get("consumer_name"), o.get("consumer_comment"), json.dumps(items, ensure_ascii=False),
+                     _cents(total), total.get("currency"), o.get("created_at"), order_id))
+        conn.commit()
+    except Exception as e:
+        print(f"[WOLT] order sync failed for {order_id}: {e}")
+    finally:
+        cur.close(); conn.close()
+
+@app.get("/api/staff/wolt-orders")
+def staff_wolt_orders(sess: dict = Depends(require_staff)):
+    """Wolt orders for the staff board: open ones, plus those closed in the last 24 hours."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM wolt_connection WHERE status = 'active';")
+    connected = cur.fetchone()[0] > 0
+    # Notifications whose order was never fetched (e.g. received before this feature, or Wolt was briefly
+    # unreachable) are picked up here, a few at a time, in the background
+    cur.execute("""SELECT DISTINCT ON (e.order_id) e.order_id, e.venue_id, e.status FROM wolt_events e
+                   WHERE e.order_id IS NOT NULL AND e.venue_id IS NOT NULL AND e.received_at > NOW() - INTERVAL '2 days'
+                     AND NOT EXISTS (SELECT 1 FROM wolt_orders o WHERE o.order_id = e.order_id)
+                   ORDER BY e.order_id, e.id DESC LIMIT 5;""")
+    for oid, vid, st in cur.fetchall():
+        threading.Thread(target=_wolt_sync_order, args=(oid, vid, st), daemon=True).start()
+    cur.execute("""SELECT order_id, order_number, status, delivery_type, consumer_name, consumer_comment, items,
+                          total_cents, currency, COALESCE(wolt_created_at, updated_at), last_error
+                   FROM wolt_orders
+                   WHERE status NOT IN ('delivered', 'rejected') OR updated_at > NOW() - INTERVAL '24 hours'
+                   ORDER BY COALESCE(wolt_created_at, updated_at) DESC LIMIT 40;""")
+    orders = [{"id": r[0], "number": r[1], "status": r[2], "status_he": WOLT_STATUS_HE.get(r[2] or "", r[2] or "ממתין לפרטים"),
+               "delivery_type": r[3], "name": r[4], "comment": r[5], "items": json.loads(r[6]) if r[6] else [],
+               "total": (r[7] or 0) / 100 if r[7] is not None else None, "currency": r[8],
+               "created_at": r[9].isoformat() if r[9] else None, "error": r[10]} for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return {"connected": connected, "test_mode": WOLT_ENV == "development", "orders": orders}
+
+class WoltOrderAction(BaseModel):
+    action: str                  # accept | ready | delivered | reject | refresh
+    reason: Optional[str] = None
+
+@app.post("/api/staff/wolt-orders/{order_id}/action")
+def staff_wolt_order_action(order_id: str, body: WoltOrderAction, sess: dict = Depends(require_staff)):
+    """In Wolt's TEST environment, staff can play the part of Wolt's tablet (accept / ready / reject).
+    In the real store this is done on Wolt's tablet, so these are refused outside test mode."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT venue_id FROM wolt_orders WHERE order_id = %s;", (order_id,))
+    r = cur.fetchone(); cur.close(); conn.close()
+    if not r:
+        raise HTTPException(status_code=404, detail="הזמנה לא נמצאה")
+    venue = r[0]
+    if body.action == "refresh":
+        _wolt_sync_order(order_id, venue, None, fetch=True)
+        return {"ok": True}
+    if WOLT_ENV != "development":
+        raise HTTPException(status_code=403, detail="בחנות האמיתית מאשרים הזמנות באייפד של וולט")
+    paths = {"accept": ("/accept", None, "production"), "ready": ("/ready", None, "ready"),
+             "delivered": ("/delivered", None, "delivered"),
+             "reject": ("/reject", {"reason": (body.reason or "המוצר אזל מהמלאי")[:200]}, "rejected")}
+    if body.action not in paths:
+        raise HTTPException(status_code=400, detail="פעולה לא מוכרת")
+    path, payload, new_status = paths[body.action]
+    try:
+        _wolt_api("PUT", f"/orders/{order_id}{path}", venue, payload)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    _audit(sess, "wolt_order_" + body.action, "wolt_order", None, {"order": order_id})
+    _wolt_sync_order(order_id, venue, new_status, fetch=(new_status == "ready"))
     return {"ok": True}
 
 @app.get("/api/admin/wolt/events")

@@ -134,6 +134,14 @@ td.num,th.num{text-align:left;direction:ltr;font-variant-numeric:tabular-nums}
       <div id="orders-list"><div class="empty">טוען...</div></div>
       <p class="err" id="orders-error"></p>
     </div>
+    <div class="card" id="wolt-card" style="display:none">
+      <div class="orders-top">
+        <h2 style="margin:0">🛵 הזמנות וולט <span id="wolt-count"></span></h2>
+        <span class="note" id="wolt-mode" style="margin:0"></span>
+      </div>
+      <div id="wolt-list"></div>
+      <p class="err" id="wolt-error"></p>
+    </div>
   </div>
   <div class="wrap">
     <div class="card status">
@@ -435,11 +443,65 @@ function bindOrderButtons() {
     loadOrders();
   });
 }
+// ----- Wolt orders (read from Wolt; in the real store they're handled on Wolt's tablet) -----
+let knownWoltIds = null;
+function woltOrderHtml(o, testMode) {
+  const money = v => v == null ? '' : '₪' + Number(v).toFixed(2);
+  const when = o.created_at ? new Date(o.created_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) : '';
+  const cls = o.status === 'received' ? 'new' : o.status === 'production' ? 'preparing' : o.status === 'ready' ? 'ready' : '';
+  const items = (o.items || []).map(it => `<li>${esc(it.name || '')} × ${esc(String(it.count || 1))}${it.total_cents != null ? ' · ' + money(it.total_cents / 100) : ''}${it.product_id ? '' : ' <span class="note" style="margin:0">(לא מקושר למוצר באתר)</span>'}</li>`).join('');
+  const btns = [];
+  if (testMode) {
+    if (o.status === 'received') btns.push(['accept', 'אישור (בדיקה)', ''], ['reject', 'דחייה (בדיקה)', 'ghost small']);
+    if (o.status === 'production') btns.push(['ready', 'מוכנה (בדיקה)', 'green']);
+    if (o.status === 'ready' && o.delivery_type === 'takeaway') btns.push(['delivered', 'נאספה (בדיקה)', 'green']);
+  }
+  if (!o.items || !o.items.length || o.error) btns.push(['refresh', 'רענון פרטים', 'ghost small']);
+  return `<div class="order st-${cls}" data-wid="${esc(o.id)}">
+    <div class="o-head"><div><span class="o-num">וולט ${esc(o.number || '')}</span> <span class="note" style="margin:0">${esc(when)} · ${o.delivery_type === 'takeaway' ? 'איסוף עצמי' : 'משלוח וולט'}</span></div>
+      <span class="o-badge ${cls}">${esc(o.status_he || '')}</span></div>
+    ${o.name ? `<div class="o-cust">${esc(o.name)}</div>` : ''}
+    ${items ? `<ul style="margin:6px 0;padding-inline-start:18px">${items}</ul>` : '<div class="note">הפרטים נטענים מוולט...</div>'}
+    ${o.comment ? `<div class="note">💬 ${esc(o.comment)}</div>` : ''}
+    ${o.error ? `<div class="err" style="margin:4px 0">${esc(o.error)}</div>` : ''}
+    <div class="o-actions">${o.total != null ? `<div class="total" style="margin:0;padding:8px 14px">סה"כ בוולט: <span class="sum" style="margin-right:6px">${money(o.total)}</span></div>` : '<div></div>'}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${btns.map(b => `<button class="btn ${b[2]}" type="button" data-wact="${b[0]}">${b[1]}</button>`).join('')}</div></div>
+  </div>`;
+}
+async function loadWoltOrders() {
+  try {
+    const d = await api('/api/staff/wolt-orders');
+    if (!d.connected && !d.orders.length) { $('wolt-card').style.display = 'none'; return; }
+    $('wolt-card').style.display = '';
+    $('wolt-error').textContent = '';
+    $('wolt-mode').textContent = d.test_mode ? '🧪 סביבת בדיקות של וולט' : 'מאשרים ומסמנים מוכנה באייפד של וולט';
+    const open = d.orders.filter(o => !['delivered', 'rejected'].includes(o.status));
+    const ids = d.orders.map(o => o.id);
+    const fresh = knownWoltIds ? ids.filter(id => !knownWoltIds.includes(id)) : [];
+    if (fresh.length) beep();
+    knownWoltIds = ids;
+    $('wolt-count').textContent = open.length ? `(${open.length})` : '';
+    $('wolt-list').innerHTML = d.orders.length ? d.orders.map(o => woltOrderHtml(o, d.test_mode)).join('') : '<div class="empty">אין הזמנות וולט כרגע</div>';
+    document.querySelectorAll('#wolt-list [data-wact]').forEach(b => b.onclick = async () => {
+      const id = b.closest('[data-wid]').dataset.wid, action = b.dataset.wact;
+      let reason = null;
+      if (action === 'reject') { reason = prompt('סיבת הדחייה (הלקוח יראה אותה):', 'המוצר אזל מהמלאי'); if (reason === null) return; }
+      b.disabled = true;
+      try { await api(`/api/staff/wolt-orders/${encodeURIComponent(id)}/action`, { method: 'POST', body: JSON.stringify({ action, reason }) }); }
+      catch (e) { $('wolt-error').textContent = e.message; }
+      loadWoltOrders();
+    });
+  } catch (e) { $('wolt-error').textContent = e.message; }
+}
+
 function startOrders() {
   try { soundOn = !!localStorage.getItem('bp_staff_sound'); } catch (e) {}
   $('sound-btn').textContent = soundOn ? '🔊 צליל פעיל (לחיצה לכיבוי)' : '🔇 הפעלת צליל להזמנה חדשה';
-  loadOrders(); clearInterval(ordersTimer);
-  ordersTimer = setInterval(() => { if (ordersScope === 'active' && !(pausePolling && document.querySelector('.add-sub[open]'))) loadOrders(); }, 20000);
+  loadOrders(); loadWoltOrders(); clearInterval(ordersTimer);
+  ordersTimer = setInterval(() => {
+    if (ordersScope === 'active' && !(pausePolling && document.querySelector('.add-sub[open]'))) loadOrders();
+    loadWoltOrders();
+  }, 20000);
 }
 
 function start(user) {
