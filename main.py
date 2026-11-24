@@ -5086,21 +5086,44 @@ def _wolt_oauth_configured():
 class WoltTokenRejected(Exception):
     """Wolt answered the token request with 4xx: the code/refresh token is dead, the venue must reconnect."""
 
+_wolt_auth_method = None   # "basic" or "post", learned from the first successful call
+
 def _wolt_token_request(fields):
-    """POST to Wolt's token endpoint: form body + HTTP Basic auth with client id and secret."""
+    """POST to Wolt's token endpoint. Wolt's docs say HTTP Basic auth with the client id and secret,
+    but an OAuth server can be set up to expect them in the form body instead ("client_secret_post").
+    So: try Basic first; if Wolt answers 401 invalid_client (client authentication failed, which is
+    checked BEFORE the code or refresh token is looked at, so nothing was used up), try the body
+    method once. The method that works is remembered."""
     import urllib.request, urllib.error, urllib.parse, base64
-    basic = base64.b64encode(f"{WOLT_CLIENT_ID}:{WOLT_CLIENT_SECRET}".encode()).decode()   # no trailing newline
-    req = urllib.request.Request(WOLT_TOKEN_URL, data=urllib.parse.urlencode(fields).encode(),
-                                 headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
-                                          "Authorization": f"Basic {basic}"})
-    try:
-        return json.loads(urllib.request.urlopen(req, timeout=20).read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "replace")[:300]
-        print(f"[WOLT] token endpoint {e.code}: {body}")       # Wolt documents no error codes: the body is the only clue
-        if 400 <= e.code < 500:
-            raise WoltTokenRejected(f"{e.code}: {body}")
-        raise RuntimeError(f"Wolt {e.code}")
+    global _wolt_auth_method
+    methods = [_wolt_auth_method] if _wolt_auth_method else ["basic", "post"]
+    last = None
+    for method in methods:
+        form = dict(fields)
+        headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
+        if method == "basic":
+            # RFC 6749 2.3.1: id and secret are form-encoded, then joined with ":" and base64-encoded (no newline)
+            pair = f"{urllib.parse.quote(WOLT_CLIENT_ID, safe='')}:{urllib.parse.quote(WOLT_CLIENT_SECRET, safe='')}"
+            headers["Authorization"] = "Basic " + base64.b64encode(pair.encode()).decode()
+        else:
+            form.update({"client_id": WOLT_CLIENT_ID, "client_secret": WOLT_CLIENT_SECRET})
+        req = urllib.request.Request(WOLT_TOKEN_URL, data=urllib.parse.urlencode(form).encode(), headers=headers)
+        try:
+            out = json.loads(urllib.request.urlopen(req, timeout=20).read())
+            if _wolt_auth_method != method:
+                _wolt_auth_method = method
+                print(f"[WOLT] token endpoint accepts client auth method: {method}")
+            return out
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")[:300]
+            print(f"[WOLT] token endpoint {e.code} ({method}): {body}")   # Wolt documents no error codes: the body is the only clue
+            last = (e.code, body)
+            if e.code == 401 and "invalid_client" in body and method != methods[-1]:
+                continue                          # client not recognised this way: try the other method
+            if 400 <= e.code < 500:
+                raise WoltTokenRejected(f"{e.code}: {body}")
+            raise RuntimeError(f"Wolt {e.code}")
+    raise WoltTokenRejected(f"{last[0]}: {last[1]}")
 
 def _wolt_jwt_claims(token):
     """Reads the payload of Wolt's access token (we received it directly from Wolt over HTTPS)."""
