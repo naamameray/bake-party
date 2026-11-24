@@ -531,6 +531,26 @@ try:
         );
     """)
     init_cur.execute("DELETE FROM wolt_orders WHERE updated_at < NOW() - INTERVAL '30 days';")
+    # Price/stock changes waiting to be sent to Wolt. A database trigger queues EVERY change, whatever
+    # made it (product edit, invoice, staff stock toggle, imports), so nothing is missed.
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS wolt_sync_queue (
+            product_id INTEGER PRIMARY KEY REFERENCES Products(id) ON DELETE CASCADE,
+            queued_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE OR REPLACE FUNCTION wolt_queue_product() RETURNS trigger AS $$
+        BEGIN
+            IF TG_OP = 'INSERT' OR NEW.price IS DISTINCT FROM OLD.price
+               OR (NEW.stock_quantity > 0) IS DISTINCT FROM (OLD.stock_quantity > 0) THEN
+                INSERT INTO wolt_sync_queue (product_id, queued_at) VALUES (NEW.id, NOW())
+                ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();
+            END IF;
+            RETURN NEW;
+        END $$ LANGUAGE plpgsql;
+        DROP TRIGGER IF EXISTS trg_wolt_queue ON Products;
+        CREATE TRIGGER trg_wolt_queue AFTER INSERT OR UPDATE OF price, stock_quantity ON Products
+            FOR EACH ROW EXECUTE FUNCTION wolt_queue_product();
+    """)
     init_cur.execute("DELETE FROM wolt_events WHERE received_at < NOW() - INTERVAL '90 days';")
 
     admin_email = os.environ.get("ADMIN_EMAIL")
@@ -2669,6 +2689,7 @@ async def _start_background_jobs():
     asyncio.create_task(_digest_loop())
     asyncio.create_task(_backup_loop())
     asyncio.create_task(_wolt_maintenance_loop())
+    asyncio.create_task(_wolt_items_loop())
 
 class PushSubBody(BaseModel):
     endpoint: str
@@ -5403,6 +5424,139 @@ async def wolt_order_webhook(request: Request):
                          daemon=True).start()
     return {"ok": True}
 
+# --- Price and stock: site -> Wolt ---
+# Wolt price = site price + 30%, rounded up to .00/.50/.90. Items are matched by SKU = our product id.
+# Wolt allows one item update per venue per interval (default 15 minutes), so changes are queued
+# (see the trigger on Products) and sent together; within the queue, only the latest state counts.
+WOLT_ITEMS_BATCH = 500
+WOLT_DEFAULT_ITEM_INTERVAL_MIN = 15
+
+def _wolt_item_interval(cur, venue_id):
+    """Minutes between item updates for this venue, read from Wolt's venue status (cached for an hour)."""
+    key = f"wolt_item_interval_{venue_id}"
+    try:
+        cached = json.loads(_setting_get(cur, key) or "null")
+    except ValueError:
+        cached = None
+    if cached and time_module.time() - cached.get("t", 0) < 3600:
+        return cached["minutes"]
+    minutes = WOLT_DEFAULT_ITEM_INTERVAL_MIN
+    try:
+        st = _wolt_api("GET", f"/venues/{venue_id}/status", venue_id) or {}
+        rl = (((st.get("venue_config") or {}).get("rate_limit_settings") or {}).get("itemsUpdate") or {})
+        if rl.get("limit") and rl.get("refresh_rate_in_minutes"):
+            minutes = max(0.1, float(rl["refresh_rate_in_minutes"]) / float(rl["limit"]))
+    except Exception as e:
+        print(f"[WOLT] venue status unavailable, using {minutes} min: {e}")
+    _setting_set(cur, key, json.dumps({"t": time_module.time(), "minutes": minutes}))
+    return minutes
+
+def _wolt_venue_kind(cur):
+    """'retail' or 'restaurant', learned from the item types on fetched orders; unknown until the first order.
+    Retail shows sold-out items as out of stock (in_stock); restaurants can only hide them (enabled)."""
+    return _setting_get(cur, "wolt_venue_kind") or ""
+
+def run_wolt_item_sync(force=False):
+    """Sends queued price/stock changes to every connected venue, respecting Wolt's rate limit."""
+    if not _wolt_oauth_configured():
+        return None
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT venue_id FROM wolt_connection WHERE status = 'active';")
+        venues = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT COUNT(*) FROM wolt_sync_queue;")
+        if not venues or cur.fetchone()[0] == 0:
+            return None
+        kind = _wolt_venue_kind(cur)
+        result = None
+        for venue in venues:
+            state = json.loads(_setting_get(cur, f"wolt_items_state_{venue}") or "{}")
+            interval = _wolt_item_interval(cur, venue)
+            conn.commit()
+            next_ok = max(state.get("last_sent", 0) + interval * 60, state.get("retry_after", 0))
+            if not force and time_module.time() < next_ok:
+                continue
+            cur.execute("""SELECT q.product_id, q.queued_at, p.price, p.stock_quantity FROM wolt_sync_queue q
+                           JOIN Products p ON p.id = q.product_id ORDER BY q.queued_at LIMIT %s;""", (WOLT_ITEMS_BATCH,))
+            rows = cur.fetchall()
+            if not rows:
+                continue
+            data = []
+            for pid, _, price, stock in rows:
+                item = {"sku": str(pid)}
+                if price and float(price) > 0:
+                    item["price"] = int(round(invoice_ai.wolt_price_from_site(float(price)) * 100))
+                if kind == "retail":
+                    item.update({"enabled": True, "in_stock": (stock or 0) > 0})
+                else:
+                    item["enabled"] = (stock or 0) > 0
+                data.append(item)
+            try:
+                _wolt_api("PATCH", f"/venues/{venue}/items", venue, {"data": data})
+                # Remove only what was sent and hasn't changed again since
+                for pid, queued_at, _, _ in rows:
+                    cur.execute("DELETE FROM wolt_sync_queue WHERE product_id = %s AND queued_at = %s;", (pid, queued_at))
+                state.update({"last_sent": time_module.time(), "last_count": len(data), "last_error": None, "retry_after": 0})
+                result = {"sent": len(data)}
+            except WoltApiError as e:
+                state["last_error"] = f"{e.code}: {e.detail[:150]}"
+                if e.code == 429:
+                    state["retry_after"] = time_module.time() + 15 * 60     # Wolt's window; never retry a 429 at once
+                else:
+                    state["retry_after"] = time_module.time() + interval * 60
+                result = {"error": state["last_error"]}
+            except Exception as e:
+                state["last_error"] = str(e)[:150]
+                state["retry_after"] = time_module.time() + 5 * 60
+                result = {"error": state["last_error"]}
+            _setting_set(cur, f"wolt_items_state_{venue}", json.dumps(state))
+            conn.commit()
+        return result
+    finally:
+        cur.close(); conn.close()
+
+async def _wolt_items_loop():
+    import asyncio
+    await asyncio.sleep(90)
+    while True:
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, run_wolt_item_sync)
+        except Exception as e:
+            print(f"[WOLT] item sync error: {e}")
+        await asyncio.sleep(60)
+
+@app.get("/api/admin/wolt/sync-status")
+def wolt_sync_status(sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM wolt_sync_queue;")
+    queued = cur.fetchone()[0]
+    cur.execute("SELECT venue_id FROM wolt_connection WHERE status = 'active' ORDER BY id LIMIT 1;")
+    r = cur.fetchone()
+    state, interval = {}, WOLT_DEFAULT_ITEM_INTERVAL_MIN
+    if r:
+        state = json.loads(_setting_get(cur, f"wolt_items_state_{r[0]}") or "{}")
+        cached = json.loads(_setting_get(cur, f"wolt_item_interval_{r[0]}") or "null")
+        if cached:
+            interval = cached["minutes"]
+    kind = _wolt_venue_kind(cur)
+    cur.close(); conn.close()
+    nxt = max(state.get("last_sent", 0) + interval * 60, state.get("retry_after", 0))
+    return {"queued": queued, "interval_minutes": interval, "venue_kind": kind or None,
+            "last_sent": datetime.fromtimestamp(state["last_sent"], timezone.utc).isoformat() if state.get("last_sent") else None,
+            "last_count": state.get("last_count"), "last_error": state.get("last_error"),
+            "next_send": datetime.fromtimestamp(nxt, timezone.utc).isoformat() if nxt > time_module.time() else None}
+
+@app.post("/api/admin/wolt/sync-all")
+def wolt_sync_all(sess: dict = Depends(require_admin)):
+    """Queues every product, for a full price/stock refresh on Wolt (sent in batches as the rate limit allows)."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("INSERT INTO wolt_sync_queue (product_id) SELECT id FROM Products ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();")
+    n = cur.rowcount
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "wolt_sync_all", "wolt", None, {"products": n})
+    return {"queued": n}
+
+
 # --- Wolt orders on the staff board ---
 WOLT_STATUS_HE = {"received": "חדשה, ממתינה לאישור", "production": "בהכנה", "ready": "מוכנה", "delivered": "נמסרה",
                   "rejected": "בוטלה", "other": "אחר"}
@@ -5476,6 +5630,9 @@ def _wolt_sync_order(order_id, venue_id, status_hint=None, fetch=None):
             by_id[str(pid)] = (pid, name)
             if bc:
                 by_barcode[bc] = (pid, name)
+        item_types = {str(it.get("item_type") or "") for it in o.get("items") or []}
+        if item_types:
+            _setting_set(cur, "wolt_venue_kind", "retail" if any("retail" in t for t in item_types) else "restaurant")
         for it in o.get("items") or []:
             price = it.get("item_price") or {}
             prod = by_id.get(str(it.get("sku") or "").strip()) or by_barcode.get(str(it.get("gtin") or "").strip())
