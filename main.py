@@ -5428,7 +5428,19 @@ def _wolt_api(method, path, venue_id, body=None):
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
         print(f"[WOLT] {method} {path} -> {e.code}: {detail}")
-        raise RuntimeError(f"וולט החזירו שגיאה {e.code}")
+        raise WoltApiError(e.code, detail)
+
+class WoltApiError(RuntimeError):
+    def __init__(self, code, detail):
+        super().__init__(f"וולט החזירו שגיאה {code}")
+        self.code, self.detail = code, detail
+
+# An order only moves forward. A status read back from Wolt right after a change can still show the
+# previous state for a moment, so a fetched status never overrides a later one we already know.
+_WOLT_RANK_SQL = ("CASE {x} WHEN 'received' THEN 1 WHEN 'production' THEN 2 WHEN 'ready' THEN 3 "
+                  "WHEN 'delivered' THEN 4 WHEN 'rejected' THEN 4 ELSE 0 END")
+_WOLT_FORWARD_SQL = ("CASE WHEN {new} IS NULL THEN wolt_orders.status WHEN " + _WOLT_RANK_SQL.format(x="{new}") +
+                     " >= " + _WOLT_RANK_SQL.format(x="wolt_orders.status") + " THEN {new} ELSE wolt_orders.status END")
 
 def _cents(obj):
     try:
@@ -5443,7 +5455,7 @@ def _wolt_sync_order(order_id, venue_id, status_hint=None, fetch=None):
     conn = get_conn(); cur = conn.cursor()
     try:
         cur.execute("INSERT INTO wolt_orders (order_id, venue_id, status) VALUES (%s,%s,%s) "
-                    "ON CONFLICT (order_id) DO UPDATE SET status = COALESCE(EXCLUDED.status, wolt_orders.status), updated_at = NOW() "
+                    "ON CONFLICT (order_id) DO UPDATE SET status = " + _WOLT_FORWARD_SQL.format(new="EXCLUDED.status") + ", updated_at = NOW() "
                     "RETURNING fetched_at;", (order_id, venue_id, status))
         fetched_at = cur.fetchone()[0]
         conn.commit()
@@ -5471,11 +5483,11 @@ def _wolt_sync_order(order_id, venue_id, status_hint=None, fetch=None):
                           "unit_cents": _cents(price.get("unit_price")), "total_cents": _cents(price.get("total")),
                           "product_id": prod[0] if prod else None, "product_name": prod[1] if prod else None})
         total = (o.get("basket_price") or {}).get("total") or {}
-        cur.execute("""UPDATE wolt_orders SET order_number = %s, status = COALESCE(%s, status), delivery_type = %s,
+        cur.execute("""UPDATE wolt_orders SET order_number = %s, status = """ + _WOLT_FORWARD_SQL.format(new="%s::text") + """, delivery_type = %s,
                            consumer_name = %s, consumer_comment = %s, items = %s, total_cents = %s, currency = %s,
                            wolt_created_at = %s, fetched_at = NOW(), last_error = NULL, updated_at = NOW()
                        WHERE order_id = %s;""",
-                    (o.get("order_number"), _wolt_norm_status(o.get("order_status")), (o.get("delivery") or {}).get("type"),
+                    (o.get("order_number"), *[_wolt_norm_status(o.get("order_status"))] * 3, (o.get("delivery") or {}).get("type"),
                      o.get("consumer_name"), o.get("consumer_comment"), json.dumps(items, ensure_ascii=False),
                      _cents(total), total.get("currency"), o.get("created_at"), order_id))
         conn.commit()
@@ -5537,6 +5549,14 @@ def staff_wolt_order_action(order_id: str, body: WoltOrderAction, sess: dict = D
     path, payload, new_status = paths[body.action]
     try:
         _wolt_api("PUT", f"/orders/{order_id}{path}", venue, payload)
+    except WoltApiError as e:
+        # "Order already moved to READY state": the order is already where we wanted it (e.g. a double tap)
+        if e.code == 409 and "already" in e.detail.lower():
+            import re
+            m = re.search(r"to (\w+) state", e.detail, re.I)
+            _wolt_sync_order(order_id, venue, (m.group(1) if m else new_status), fetch=False)
+            return {"ok": True, "already": True}
+        raise HTTPException(status_code=502, detail=f"וולט לא אישרו את הפעולה ({e.code})")
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
     _audit(sess, "wolt_order_" + body.action, "wolt_order", None, {"order": order_id})
