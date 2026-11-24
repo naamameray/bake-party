@@ -1681,6 +1681,32 @@
             } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
         };
 
+        // Price/stock updates from the site to Wolt
+        async function loadWoltSync(box, fmt) {
+            try {
+                const r = await fetch(`${API}/api/admin/wolt/sync-status`, { headers: authHeaders() });
+                const d = await r.json();
+                const time = t => t ? new Date(t).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) : '';
+                let h = '<b>📤 עדכון מחירים ומלאי לוולט</b> (מחיר בוולט = מחיר באתר + 30%)<br>';
+                h += d.queued ? `${d.queued} שינויים ממתינים לשליחה` : '✓ אין שינויים שממתינים';
+                if (d.last_sent) h += ` · נשלח לאחרונה ב-${time(d.last_sent)} (${d.last_count} מוצרים)`;
+                if (d.queued && d.next_send) h += ` · השליחה הבאה ב-${time(d.next_send)}`;
+                else if (d.queued) h += ' · יישלח בדקה הקרובה';
+                h += `<br><span style="color:var(--muted);">וולט מאפשרים עדכון אחד כל ${Math.round(d.interval_minutes * 10) / 10} דקות, אז שינויים נאספים ונשלחים יחד.</span>`;
+                if (d.last_error) h += `<br><span style="color:#c62828;">השליחה האחרונה נכשלה: <span class="w-sync-err"></span></span>`;
+                h += '<br><button class="btn" type="button" style="margin-top:6px; padding:6px 12px;">שליחת כל המוצרים לוולט</button>';
+                box.innerHTML = h;
+                if (d.last_error) box.querySelector('.w-sync-err').textContent = d.last_error;
+                box.querySelector('button').onclick = async () => {
+                    if (!confirm('לשלוח לוולט את המחיר והמלאי של כל המוצרים באתר? זה נשלח במנות, לפי המגבלה של וולט.')) return;
+                    const rr = await fetch(`${API}/api/admin/wolt/sync-all`, { method: 'POST', headers: authHeaders() });
+                    const dd = await rr.json().catch(() => ({}));
+                    alert(rr.ok ? `✓ ${dd.queued} מוצרים בתור לשליחה` : (dd.detail || 'שגיאה'));
+                    loadWoltSync(box, fmt);
+                };
+            } catch (e) { box.textContent = 'לא הצלחתי לטעון את מצב העדכונים'; }
+        }
+
         // ----- Supplier invoices -----
         // Same rules as the server (invoice_ai.py): cost x 2 + 1.90, then round UP to .00 / .50 / .90; Wolt = site + 30%
         function niceRoundUp(v) {
@@ -1873,11 +1899,13 @@
                 else if (st.configured) html += `<p><b>עוד לא מחובר.</b> לוחצים על הכפתור, מתחברים לוולט ומאשרים.</p>`;
                 else html += `<p><b>ממתין לפרטים מוולט.</b> אחרי שוולט ישלחו Client ID ו-Secret, מכניסים אותם ב-Railway ואז יופיע כאן כפתור חיבור.</p>`;
                 html += `<p style="font-size:0.85em; color:var(--muted);">הודעות הזמנה שהתקבלו מוולט: ${st.events}${st.last_event ? ' · אחרונה ' + fmt(st.last_event) : ''}</p>`;
+                if (st.venues.some(v => v.status === 'active')) html += `<div class="w-sync" style="background:var(--pink-light); border-radius:12px; padding:8px 12px; margin:8px 0; font-size:0.9em;">טוען מצב עדכונים...</div>`;
                 html += `<details style="font-size:0.85em;"><summary style="cursor:pointer;">הכתובות למסירה לוולט</summary>
                     <p style="direction:ltr; text-align:left; word-break:break-all;">Redirect URL: <code class="w-r"></code><br>Webhook: <code class="w-w"></code></p></details>`;
                 wrap.innerHTML = html;
                 if (wrap.querySelector('.w-err')) wrap.querySelector('.w-err').textContent = st.last_error.reason;
                 wrap.querySelector('.w-r').textContent = st.redirect_url;
+                if (wrap.querySelector('.w-sync')) loadWoltSync(wrap.querySelector('.w-sync'), fmt);
                 wrap.querySelector('.w-w').textContent = st.webhook_url;
                 if (st.configured) {
                     const b = document.createElement('button');
