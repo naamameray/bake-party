@@ -974,7 +974,14 @@
                 <select id="add-p-cat-1" class="cat-combo"><option value="">ללא קטגוריה</option></select>
                 <label>קטגוריה שנייה (אופציונלי)</label>
                 <select id="add-p-cat-2" class="cat-combo"><option value="">ללא</option></select>
-                <label>תמונה (העלאת קובץ)</label>
+                <label>ברקוד (לא חובה, המספר שמתחת לפסים על האריזה)</label>
+                <input type="text" id="add-p-barcode" inputmode="numeric" autocomplete="off" dir="ltr" placeholder="למשל 7290012345678">
+                <label>תמונה</label>
+                <div id="add-p-img-mount"></div>
+                <img id="add-p-preview" alt="" style="display:none; width:120px; height:120px; object-fit:contain; border-radius:12px; border:1px solid var(--line, #eee); background:#fff; margin-bottom:6px;">
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+                    <button type="button" class="btn btn-ghost" id="add-p-suggest" style="padding:6px 12px;">🔍 הצעות תמונה</button>
+                </div>
                 <input type="file" id="add-p-file" accept="image/*">
                 <label style="display:flex; gap:8px; align-items:center; font-weight:400; font-size:0.9em; margin:6px 0 0;">
                     <input type="checkbox" id="add-p-studio" checked style="width:auto; margin:0;"> ✨ סידור אוטומטי של התמונה (רקע לבן, מרכוז ויישור)
@@ -1217,6 +1224,12 @@
             return m[b.length][a.length];
         }
         function searchProducts(term) {
+            // A number of 5+ digits is looked up as a barcode (e.g. typed or scanned off the package)
+            const digits = term.replace(/\s/g, '');
+            if (/^\d{5,}$/.test(digits)) {
+                const byCode = allProducts.filter(p => p.barcode && p.barcode.includes(digits));
+                if (byCode.length) return byCode;
+            }
             const words = normalize(term).split(' ').filter(Boolean);
             if (!words.length) return [];
             const scored = [];
@@ -1392,9 +1405,21 @@
         function catOptions(selected) {
             return '<option value="">ללא קטגוריה</option>' + adminSubcategories.map(c => `<option value="${c.id}"${String(c.id) === String(selected) ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
         }
+        let addPendingImage = null, addPendingCredit = null;   // a suggested/linked photo chosen in the add-product window
         window.openAddProductModal = function() {
             closeSidebar();
             document.getElementById('add-product-form').reset();
+            addPendingImage = null; addPendingCredit = null;
+            document.getElementById('add-p-preview').style.display = 'none';
+            document.getElementById('img-sug')?.remove();
+            document.getElementById('add-p-suggest').onclick = () => openImageSuggestions({
+                suggestUrl: `${API}/api/admin/image-suggestions?barcode=${encodeURIComponent(document.getElementById('add-p-barcode').value)}`,
+                mount: document.getElementById('add-p-img-mount'),
+                onChosen: (url, credit) => { addPendingImage = url; addPendingCredit = credit;
+                    const pv = document.getElementById('add-p-preview'); pv.src = url; pv.style.display = 'block';
+                    document.getElementById('add-p-file').value = ''; } });
+            document.getElementById('add-p-file').onchange = () => { addPendingImage = null; addPendingCredit = null;
+                document.getElementById('add-p-preview').style.display = 'none'; };
             document.getElementById('add-p-cat-1').innerHTML = catOptions('');
             document.getElementById('add-p-cat-2').innerHTML = catOptions('');
             document.getElementById('add-sale-opts').style.display = 'none';
@@ -1418,8 +1443,8 @@
             btn.textContent = 'שומר...'; btn.disabled = true;
             try {
                 const fileInput = document.getElementById('add-p-file');
-                let imageUrl = null;
-                if (fileInput.files.length) {
+                let imageUrl = addPendingImage;
+                if (!imageUrl && fileInput.files.length) {
                     const studio = document.getElementById('add-p-studio').checked;
                     if (studio) btn.textContent = '✨ מסדר את התמונה...';
                     try { imageUrl = await uploadImage(fileInput.files[0], studio); }
@@ -1435,7 +1460,8 @@
                 const notes = document.getElementById('add-p-notes').value.trim(), saleLabel = document.getElementById('add-p-sale-label').value.trim();
                 const res = await fetch(`${API}/api/admin/products`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({
                     name: document.getElementById('add-p-name').value.trim(), price: parseFloat(document.getElementById('add-p-price').value),
-                    category_ids, image_url: imageUrl, weight_grams: weight ? parseInt(weight) : null, units_per_package: units ? parseInt(units) : null,
+                    category_ids, image_url: imageUrl, image_credit: addPendingImage ? addPendingCredit : null,
+                    barcode: document.getElementById('add-p-barcode').value.trim() || null, weight_grams: weight ? parseInt(weight) : null, units_per_package: units ? parseInt(units) : null,
                     notes: notes || null, is_on_sale: document.getElementById('add-p-sale').checked, sale_label: saleLabel || null }) });
                 if (!res.ok) throw new Error('שגיאה בהוספת המוצר');
                 document.getElementById('add-p-msg').textContent = 'המוצר נוסף בהצלחה! ✓';
@@ -1779,7 +1805,10 @@
                 // Photo suggestions: by barcode from an open database, or from a pasted link. Approve with one click.
                 const sugBtn = document.createElement('button');
                 sugBtn.type = 'button'; sugBtn.className = 'ef-img-btn'; sugBtn.textContent = '🔍 הצעות תמונה';
-                sugBtn.onclick = () => openImageSuggestions(p.id, img, imgBtn);
+                sugBtn.onclick = () => openImageSuggestions({ suggestUrl: `${API}/api/admin/products/${p.id}/image-suggestions`,
+                    mount: document.getElementById('edit-form'),
+                    onChosen: (url, credit) => { editPendingImage = url; editPendingCredit = credit; img.src = url;
+                        imgBtn.textContent = '✓ תמונה נבחרה (תישמר בלחיצה על שמירה) · 📷 החלפה'; } });
                 wrap.appendChild(sugBtn);
                 // A new photo is cleaned up right away so the result can be checked before saving
                 editPendingImage = null; editPendingCredit = null;
@@ -1827,7 +1856,8 @@
 
         let editPendingImage = null;   // url of an already-processed photo waiting for "save"
         let editPendingCredit = null;  // credit line required by the photo's licence (open databases)
-        async function openImageSuggestions(productId, img, imgBtn) {
+        // opts: { suggestUrl, mount (element the panel goes into), onChosen(url, credit) }
+        async function openImageSuggestions(opts) {
             let panel = document.getElementById('img-sug');
             if (panel) { panel.remove(); return; }
             panel = document.createElement('div');
@@ -1840,7 +1870,7 @@
                 </div>
                 <label style="display:flex; gap:6px; align-items:center; font-size:.85em; margin-top:6px;"><input type="checkbox" class="sug-studio" checked style="width:auto; margin:0;"> ✨ לסדר את התמונה (רקע לבן ומרכוז)</label>
                 <p class="sug-msg" style="font-size:.85em; margin:6px 0 0; color:#c62828;"></p>`;
-            document.getElementById('edit-form').prepend(panel);
+            opts.mount.prepend(panel);
             const msg = panel.querySelector('.sug-msg');
             const choose = async (url, credit) => {
                 msg.style.color = 'var(--muted)'; msg.textContent = '✨ מוריד ומסדר את התמונה...';
@@ -1849,8 +1879,7 @@
                         body: JSON.stringify({ url, studio: panel.querySelector('.sug-studio').checked }) });
                     const d = await res.json().catch(() => ({}));
                     if (!res.ok) throw new Error(d.detail || 'שגיאה');
-                    editPendingImage = d.url; editPendingCredit = credit || null; img.src = d.url;
-                    imgBtn.textContent = '✓ תמונה נבחרה (תישמר בלחיצה על שמירה) · 📷 החלפה';
+                    opts.onChosen(d.url, credit || null);
                     panel.remove();
                 } catch (e) { msg.style.color = '#c62828'; msg.textContent = e.message; }
             };
@@ -1860,7 +1889,7 @@
                 choose(u, null);
             };
             try {
-                const res = await fetch(`${API}/api/admin/products/${productId}/image-suggestions`, { headers: authHeaders() });
+                const res = await fetch(opts.suggestUrl, { headers: authHeaders() });
                 const d = await res.json();
                 const list = panel.querySelector('.sug-list');
                 if (!d.suggestions || !d.suggestions.length) { list.textContent = d.reason || 'לא נמצאו הצעות.'; return; }

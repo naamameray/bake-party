@@ -1769,8 +1769,7 @@ def _fetch_image(url, max_bytes=MAX_IMAGE_BYTES):
 
 @app.get("/api/admin/products/{product_id}/image-suggestions")
 def image_suggestions(product_id: int, sess: dict = Depends(require_admin)):
-    """Photo suggestions for a product by its barcode, from Open Food Facts (an open product database)."""
-    import urllib.request
+    """Photo suggestions for an existing product, by its saved barcode."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT name, barcode FROM Products WHERE id = %s;", (product_id,))
     r = cur.fetchone(); cur.close(); conn.close()
@@ -1778,8 +1777,21 @@ def image_suggestions(product_id: int, sess: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="מוצר לא נמצא")
     if not r[1]:
         return {"suggestions": [], "reason": "למוצר אין ברקוד שמור. ברקוד נשמר אוטומטית כשהמוצר מופיע בחשבונית עם ברקוד."}
+    return _off_suggestions(r[1])
+
+@app.get("/api/admin/image-suggestions")
+def image_suggestions_by_barcode(barcode: str = "", sess: dict = Depends(require_admin)):
+    """Photo suggestions for a barcode typed in by hand (e.g. while adding a new product)."""
+    digits = "".join(ch for ch in barcode if ch.isdigit())
+    if not (6 <= len(digits) <= 14):
+        return {"suggestions": [], "reason": "מקלידים את הברקוד שעל האריזה (המספר מתחת לפסים)."}
+    return _off_suggestions(digits)
+
+def _off_suggestions(barcode):
+    """Looks a barcode up in Open Food Facts (an open product database)."""
+    import urllib.request
     try:
-        req = urllib.request.Request(OFF_API_URL.format(barcode=r[1]) + "?fields=product_name,brands,image_front_url,image_url",
+        req = urllib.request.Request(OFF_API_URL.format(barcode=barcode) + "?fields=product_name,brands,image_front_url,image_url",
                                      headers={"User-Agent": "BakeParty-Shop/1.0"})
         d = json.loads(urllib.request.urlopen(req, timeout=12).read())
     except Exception as e:
@@ -1850,6 +1862,7 @@ def _serialize_products(rows):
             "sale_price": sale_price,
             "sale_label": sale_label,
             "image_credit": p[14] if len(p) > 14 else None,
+            "barcode": p[15] if len(p) > 15 else None,
         })
     return data
 
@@ -1895,7 +1908,7 @@ def get_products():
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit, p.barcode
         FROM Products p 
         LEFT JOIN Categories c ON p.category_id = c.id 
         WHERE p.category_id IS NOT NULL 
@@ -1913,7 +1926,7 @@ def get_new_products(limit: int = 8):
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url,
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit, p.barcode
         FROM Products p
         LEFT JOIN Categories c ON p.category_id = c.id
         WHERE p.category_id IS NOT NULL
@@ -1938,7 +1951,7 @@ def get_category_products(category_id: int):
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit, p.barcode
         FROM Products p 
         LEFT JOIN Categories c ON p.category_id = c.id 
         WHERE p.category_id IN (SELECT id FROM subtree) 
@@ -1976,8 +1989,9 @@ def admin_list_products(search: str = "", only_unsorted: bool = False,
     conn = get_conn(); cur = conn.cursor()
     conditions, params = [], []
     if search:
-        conditions.append("p.name ILIKE %s")
-        params.append(f"%{search}%")
+        # By name, or by barcode / supplier item code (saved from supplier invoices)
+        conditions.append("(p.name ILIKE %s OR p.barcode LIKE %s OR p.supplier_sku ILIKE %s)")
+        params += [f"%{search}%", f"%{search.strip()}%", f"%{search.strip()}%"]
     if only_unsorted:
         conditions.append("p.category_id IS NULL")
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
@@ -2034,6 +2048,8 @@ class ProductCreateBody(BaseModel):
     weight_grams: Optional[int] = None
     units_per_package: Optional[int] = None
     image_url: Optional[str] = None
+    image_credit: Optional[str] = None
+    barcode: Optional[str] = None
     notes: Optional[str] = None
     is_on_sale: Optional[bool] = False
     sale_label: Optional[str] = None
@@ -2045,11 +2061,12 @@ def admin_create_product(body: ProductCreateBody, sess: dict = Depends(require_a
     
     cur.execute(
         """
-        INSERT INTO Products (name, category_id, price, stock_quantity, weight_grams, units_per_package, image_url, notes, is_on_sale, sale_label)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO Products (name, category_id, price, stock_quantity, weight_grams, units_per_package, image_url, notes, is_on_sale, sale_label, image_credit, barcode)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id;
         """,
-        (body.name.strip(), primary_cat, body.price, body.stock_quantity, body.weight_grams, body.units_per_package, body.image_url, body.notes, body.is_on_sale, body.sale_label)
+        (body.name.strip(), primary_cat, body.price, body.stock_quantity, body.weight_grams, body.units_per_package, body.image_url, body.notes,
+         body.is_on_sale, body.sale_label, body.image_credit, "".join(ch for ch in (body.barcode or "") if ch.isdigit())[:40] or None)
     )
     product_id = cur.fetchone()[0]
 
@@ -2126,7 +2143,7 @@ def get_products_on_sale():
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit, p.barcode
         FROM Products p 
         LEFT JOIN Categories c ON p.category_id = c.id 
         WHERE p.is_on_sale = TRUE AND p.category_id IS NOT NULL
@@ -2143,7 +2160,7 @@ def get_product_detail(product_id: int):
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url,
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit, p.barcode
         FROM Products p LEFT JOIN Categories c ON p.category_id = c.id
         WHERE p.id = %s;
         """,
@@ -4932,10 +4949,19 @@ def list_invoices(sess: dict = Depends(require_admin)):
 def get_invoice(invoice_id: int, sess: dict = Depends(require_admin)):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT data, status FROM invoices WHERE id = %s;", (invoice_id,))
-    r = cur.fetchone(); cur.close(); conn.close()
+    r = cur.fetchone()
     if not r:
+        cur.close(); conn.close()
         raise HTTPException(status_code=404, detail="חשבונית לא נמצאה")
-    return {"id": invoice_id, "status": r[1], **json.loads(r[0])}
+    doc = json.loads(r[0])
+    if r[1] == "draft":
+        # Re-match a draft against the current catalogue (and the current matching rules),
+        # without sending the invoice to the AI again
+        doc["lines"] = _build_invoice_lines({"supplier": doc.get("supplier"), "lines": [ln["invoice"] for ln in doc["lines"]]}, cur)
+        cur.execute("UPDATE invoices SET data = %s WHERE id = %s;", (json.dumps(doc, ensure_ascii=False), invoice_id))
+        conn.commit()
+    cur.close(); conn.close()
+    return {"id": invoice_id, "status": r[1], **doc}
 
 class InvoiceLineDecision(BaseModel):
     index: int
