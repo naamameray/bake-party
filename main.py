@@ -4771,7 +4771,37 @@ def _load_catalog(cur):
                       "tokens": set(_norm_tokens(r[1]))})
     return items
 
-def _match_line(line, catalog, by_barcode, by_sku):
+_STOP_SUPPLIER_WORDS = {"בעמ", "בע", "מ", "בע\"מ", "ltd", "בעמ'", "סחר", "שיווק", "יבוא", "הפצה"}
+
+def _supplier_tokens(supplier):
+    """The distinctive words of the supplier's name ("שף קונדיטור אילת בע\"מ" -> {"שף", "קונדיטור"}),
+    used to spot products whose name includes the supplier's brand. The first two words are enough."""
+    toks = [t for t in _norm_tokens(supplier) if t not in _STOP_SUPPLIER_WORDS]
+    return set(toks[:2])
+
+def _numbers(text):
+    import re
+    return {n for n in re.findall(r"\d+", str(text or "")) if len(n) >= 2}
+
+def _kashrut(text):
+    t = str(text or "")
+    return ("חלבי" in t, "פרווה" in t or "פרוה" in t)
+
+def _adjust_score(score, line_text, product_name, supplier_toks):
+    """Domain rules a person would apply: dairy vs parve never match, a different size is unlikely
+    to match, and a product named after the same supplier is likely the one."""
+    flags = []
+    ld, lp = _kashrut(line_text); pd, pp = _kashrut(product_name)
+    if (ld and pp and not pd) or (lp and pd and not pp):
+        score *= 0.5; flags.append("kashrut_conflict")
+    ln, pn = _numbers(line_text), _numbers(product_name)
+    if ln and pn and not (ln & pn):
+        score *= 0.75; flags.append("size_conflict")
+    if supplier_toks and supplier_toks <= set(_norm_tokens(product_name)):
+        score = min(1.0, score + 0.15); flags.append("same_supplier")
+    return score, flags
+
+def _match_line(line, catalog, by_barcode, by_sku, supplier_toks=frozenset()):
     """Finds the product an invoice line refers to: barcode first, then the supplier's code, then the name.
     Returns (best_match_or_None, method, candidates)."""
     import difflib
@@ -4799,23 +4829,25 @@ def _match_line(line, catalog, by_barcode, by_sku):
             overlap = len(toks & p["tokens"]) / max(len(toks), len(p["tokens"]))
             ratio = difflib.SequenceMatcher(None, n, p["name"].lower()).ratio()
             best = max(best, 0.5 * ratio + 0.5 * overlap)
-        scored.append((best, p))
+        best, flags = _adjust_score(best, " ".join(names), p["name"], supplier_toks)
+        scored.append((best, p, flags))
     scored.sort(key=lambda x: -x[0])
-    cands = [dict(p, score=round(sc, 2)) for sc, p in scored[:4] if sc >= 0.4]
+    cands = [dict(p, score=round(sc, 2), flags=fl) for sc, p, fl in scored[:4] if sc >= 0.4]
     if cands and cands[0]["score"] >= 0.85:
         return cands[0], "name", cands
     return None, None, cands
 
 def _public_product(p):
-    return {k: p.get(k) for k in ("id", "name", "price", "cost", "category", "has_image", "score")}
+    return {k: p.get(k) for k in ("id", "name", "price", "cost", "category", "has_image", "score", "flags")}
 
 def _build_invoice_lines(extracted, cur):
     catalog = _load_catalog(cur)
     by_barcode = {p["barcode"]: p for p in catalog if p["barcode"]}
     by_sku = {p["sku"]: p for p in catalog if p["sku"]}
+    supplier_toks = _supplier_tokens(extracted.get("supplier"))
     out = []
     for i, ln in enumerate(extracted.get("lines") or []):
-        match, method, cands = _match_line(ln, catalog, by_barcode, by_sku)
+        match, method, cands = _match_line(ln, catalog, by_barcode, by_sku, supplier_toks)
         cost = ln.get("unit_cost")
         # Double-check the AI's reading against the printed line total: a misread digit shows up here.
         # The cost is the list price (before discounts), so the line discount is added back for the check.
