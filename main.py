@@ -5086,21 +5086,44 @@ def _wolt_oauth_configured():
 class WoltTokenRejected(Exception):
     """Wolt answered the token request with 4xx: the code/refresh token is dead, the venue must reconnect."""
 
+_wolt_auth_method = None   # "basic" or "post", learned from the first successful call
+
 def _wolt_token_request(fields):
-    """POST to Wolt's token endpoint: form body + HTTP Basic auth with client id and secret."""
+    """POST to Wolt's token endpoint. Wolt's docs say HTTP Basic auth with the client id and secret,
+    but an OAuth server can be set up to expect them in the form body instead ("client_secret_post").
+    So: try Basic first; if Wolt answers 401 invalid_client (client authentication failed, which is
+    checked BEFORE the code or refresh token is looked at, so nothing was used up), try the body
+    method once. The method that works is remembered."""
     import urllib.request, urllib.error, urllib.parse, base64
-    basic = base64.b64encode(f"{WOLT_CLIENT_ID}:{WOLT_CLIENT_SECRET}".encode()).decode()   # no trailing newline
-    req = urllib.request.Request(WOLT_TOKEN_URL, data=urllib.parse.urlencode(fields).encode(),
-                                 headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
-                                          "Authorization": f"Basic {basic}"})
-    try:
-        return json.loads(urllib.request.urlopen(req, timeout=20).read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "replace")[:300]
-        print(f"[WOLT] token endpoint {e.code}: {body}")       # Wolt documents no error codes: the body is the only clue
-        if 400 <= e.code < 500:
-            raise WoltTokenRejected(f"{e.code}: {body}")
-        raise RuntimeError(f"Wolt {e.code}")
+    global _wolt_auth_method
+    methods = [_wolt_auth_method] if _wolt_auth_method else ["basic", "post"]
+    last = None
+    for method in methods:
+        form = dict(fields)
+        headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
+        if method == "basic":
+            # RFC 6749 2.3.1: id and secret are form-encoded, then joined with ":" and base64-encoded (no newline)
+            pair = f"{urllib.parse.quote(WOLT_CLIENT_ID, safe='')}:{urllib.parse.quote(WOLT_CLIENT_SECRET, safe='')}"
+            headers["Authorization"] = "Basic " + base64.b64encode(pair.encode()).decode()
+        else:
+            form.update({"client_id": WOLT_CLIENT_ID, "client_secret": WOLT_CLIENT_SECRET})
+        req = urllib.request.Request(WOLT_TOKEN_URL, data=urllib.parse.urlencode(form).encode(), headers=headers)
+        try:
+            out = json.loads(urllib.request.urlopen(req, timeout=20).read())
+            if _wolt_auth_method != method:
+                _wolt_auth_method = method
+                print(f"[WOLT] token endpoint accepts client auth method: {method}")
+            return out
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")[:300]
+            print(f"[WOLT] token endpoint {e.code} ({method}): {body}")   # Wolt documents no error codes: the body is the only clue
+            last = (e.code, body)
+            if e.code == 401 and "invalid_client" in body and method != methods[-1]:
+                continue                          # client not recognised this way: try the other method
+            if 400 <= e.code < 500:
+                raise WoltTokenRejected(f"{e.code}: {body}")
+            raise RuntimeError(f"Wolt {e.code}")
+    raise WoltTokenRejected(f"{last[0]}: {last[1]}")
 
 def _wolt_jwt_claims(token):
     """Reads the payload of Wolt's access token (we received it directly from Wolt over HTTPS)."""
@@ -5289,14 +5312,39 @@ def wolt_oauth_callback(request: Request, code: str = "", state: str = "", error
         cur.close(); conn.close()
 
 def _wolt_signature_ok(request, raw):
-    """WOLT-SIGNATURE = hex HMAC-SHA256 of the exact raw body, keyed with our webhook secret."""
+    """Default: WOLT-SIGNATURE = hex HMAC-SHA256 of the exact raw body, keyed with our webhook secret.
+    Wolt's documented alternative (opt-in on their side): a static "Authorization: Bearer <secret>"."""
     if not WOLT_WEBHOOK_SECRET:
         return None                                  # no secret configured: accepted, stored as unverified
     sig = (request.headers.get("wolt-signature") or "").strip().lower()
-    if not sig:
-        return False
-    expected = hmac.new(WOLT_WEBHOOK_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig)
+    if sig:
+        expected = hmac.new(WOLT_WEBHOOK_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(expected, sig):
+            return True
+    auth = (request.headers.get("authorization") or "").strip()
+    if auth.lower().startswith("bearer ") and hmac.compare_digest(auth[7:].strip(), WOLT_WEBHOOK_SECRET):
+        return True
+    _log_wolt_signature_failure(request, raw, sig)
+    return False
+
+def _log_wolt_signature_failure(request, raw, sig):
+    """Explains a rejected notification in the log WITHOUT writing any secret: whether a signature
+    came at all, and which key it was made with (ours, the OAuth client secret, or neither)."""
+    try:
+        def hx(key):
+            return hmac.new(key.encode("utf-8"), raw, hashlib.sha256).hexdigest() if key else ""
+        if not sig:
+            what = "no WOLT-SIGNATURE header"
+            if request.headers.get("authorization"):
+                what += ", Authorization header present but not our secret"
+        elif WOLT_CLIENT_SECRET and hmac.compare_digest(hx(WOLT_CLIENT_SECRET), sig):
+            what = "signed with the OAuth client secret instead of the webhook secret"
+        else:
+            what = f"signature does not match our webhook secret (length {len(sig)})"
+        names = sorted(h for h in request.headers.keys() if h.lower().startswith(("wolt", "x-")) or h.lower() == "authorization")
+        print(f"[WOLT] webhook rejected: {what}; headers seen: {names}")
+    except Exception as e:
+        print(f"[WOLT] webhook rejected (could not diagnose: {e})")
 
 @app.post("/api/wolt/webhook/orders")
 async def wolt_order_webhook(request: Request):
