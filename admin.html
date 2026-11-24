@@ -1736,6 +1736,13 @@
                 ${ln.check ? `<div style="font-size:0.85em; color:#c62828; margin-top:2px;">⚠️ ${escHtml(ln.check)}</div>` : ''}
                 ${ln.match_method ? `<div style="font-size:0.8em; color:var(--ok); margin-top:2px;">✓ זוהה לפי ${ {barcode:'ברקוד', sku:'מק"ט של הספק', name:'שם'}[ln.match_method] }</div>` : ''}
                 <select class="inv-action" style="width:100%; margin:8px 0;">${opts.join('')}</select>
+                <div class="inv-rename" style="display:none; margin-bottom:6px;">
+                    <label style="display:flex; gap:6px; align-items:center; font-size:0.85em; margin:0;">
+                        <input type="checkbox" class="inv-rename-on" checked style="width:auto; margin:0;"> לעדכן את השם באתר לשם מהחשבונית
+                    </label>
+                    <input class="inv-rename-name" style="width:100%;">
+                    <div class="inv-rename-old" style="font-size:0.8em; color:var(--muted);"></div>
+                </div>
                 <div class="inv-new" style="display:none;">
                     <label style="font-size:0.85em;">שם באתר</label><input class="inv-name" style="width:100%;">
                     <label style="font-size:0.85em;">קטגוריה</label><select class="inv-cat" style="width:100%;">${catOpts}</select>
@@ -1750,6 +1757,8 @@
             const sel = el.querySelector('.inv-action');
             sel.value = ln.action === 'update' && ln.match ? `u:${ln.match.id}` : ln.action;
             el.querySelector('.inv-name').value = inv.suggested_name || '';
+            el.querySelector('.inv-rename-name').value = inv.suggested_name || '';
+            el.querySelector('.inv-rename-on').addEventListener('change', e => { el.querySelector('.inv-rename-name').disabled = !e.target.checked; });
             el.querySelector('.inv-desc').value = inv.suggested_description || '';
             if (inv.suggested_category_id && invoiceCats.some(c => c.id === inv.suggested_category_id)) el.querySelector('.inv-cat').value = inv.suggested_category_id;
             el.querySelector('.inv-cost').value = ln.cost != null ? Number(ln.cost).toFixed(2) : '';
@@ -1758,6 +1767,10 @@
             const refresh = () => {
                 const a = sel.value, current = a.startsWith('u:') ? all.find(c => c.id === +a.slice(2)) : null;
                 el.querySelector('.inv-new').style.display = a === 'create' ? '' : 'none';
+                // Updating: offer the invoice's name, unless it's already the site name
+                const sameName = current && current.name.trim() === el.querySelector('.inv-rename-name').value.trim();
+                el.querySelector('.inv-rename').style.display = current && !sameName ? '' : 'none';
+                el.querySelector('.inv-rename-old').textContent = current ? 'השם עכשיו באתר: ' + current.name : '';
                 el.querySelector('.inv-prices').style.display = a === 'skip' ? 'none' : 'flex';
                 el.style.opacity = a === 'skip' ? '.55' : '';
                 const price = parseFloat(el.querySelector('.inv-price').value);
@@ -1800,10 +1813,12 @@
                 if (a === 'skip') return { index: base.index, action: 'skip' };
                 if (a === 'create') return { ...base, action: 'create', name: el.querySelector('.inv-name').value.trim(),
                     category_id: +el.querySelector('.inv-cat').value || null, description: el.querySelector('.inv-desc').value.trim() };
-                return { ...base, action: 'update', product_id: +a.slice(2) };
+                const rn = el.querySelector('.inv-rename');
+                const rename = rn.style.display !== 'none' && el.querySelector('.inv-rename-on').checked;
+                return { ...base, action: 'update', product_id: +a.slice(2), rename, name: rename ? el.querySelector('.inv-rename-name').value.trim() : null };
             });
-            const changes = lines.filter(l => l.action !== 'skip').length;
-            if (!confirm(`לשמור ${changes} שורות? מחירים באתר יתעדכנו ומוצרים חדשים ייווספו.`)) return;
+            const changes = lines.filter(l => l.action !== 'skip').length, renames = lines.filter(l => l.rename).length;
+            if (!confirm(`לשמור ${changes} שורות? מחירים באתר יתעדכנו${renames ? `, ${renames} שמות יוחלפו בשם מהחשבונית` : ''} ומוצרים חדשים ייווספו.`)) return;
             btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'שומר...';
             try {
                 const res = await fetch(`${API}/api/admin/invoices/${invoiceDoc.id}/apply`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ lines }) });
@@ -1811,7 +1826,7 @@
                 if (!res.ok) throw new Error(d.detail || 'שגיאה');
                 const wrap = document.getElementById('inv-review');
                 wrap.innerHTML = `<div style="background:#E8F5E9; border-radius:12px; padding:12px; margin-top:10px;">
-                    <b>✓ נשמר.</b> עודכנו ${d.updated} מוצרים (${d.price_changes} שינויי מחיר), נוספו ${d.created} מוצרים חדשים.
+                    <b>✓ נשמר.</b> עודכנו ${d.updated} מוצרים (${d.price_changes} שינויי מחיר${d.renamed ? ', ' + d.renamed + ' שמות עודכנו' : ''}), נוספו ${d.created} מוצרים חדשים.
                     ${d.created_products.length ? '<p style="margin:8px 0 4px;">📷 מוצרים חדשים שצריך לצלם (לחיצה פותחת את המוצר באתר, ושם "החלפת תמונה"):</p><ul class="inv-new-list" style="margin:0;"></ul>' : ''}</div>`;
                 const ul = wrap.querySelector('.inv-new-list');
                 d.created_products.forEach(p => { const li = document.createElement('li'); const a = document.createElement('a');

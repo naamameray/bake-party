@@ -4993,6 +4993,7 @@ class InvoiceLineDecision(BaseModel):
     name: Optional[str] = None
     category_id: Optional[int] = None
     description: Optional[str] = None
+    rename: bool = False             # update: also replace the site name with `name` (the invoice's name)
 
 class InvoiceApplyBody(BaseModel):
     lines: List[InvoiceLineDecision]
@@ -5010,7 +5011,7 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
             raise HTTPException(status_code=409, detail="החשבונית הזו כבר נקלטה")
         doc = json.loads(r[0])
         src = {ln["index"]: ln["invoice"] for ln in doc["lines"]}
-        updated, created, price_changes, created_ids = 0, 0, [], []
+        updated, created, price_changes, created_ids, renamed = 0, 0, [], [], []
         for d in body.lines:
             if d.action == "skip":
                 continue
@@ -5037,6 +5038,10 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
                                    barcode = COALESCE(barcode, %s), supplier_sku = COALESCE(supplier_sku, %s)
                                WHERE id = %s;""", (d.cost, d.cost, d.price, barcode, sku, d.product_id))
                 updated += 1
+                new_name = (d.name or "").strip()[:500]
+                if d.rename and new_name and new_name != p[0]:
+                    cur.execute("UPDATE Products SET name = %s WHERE id = %s;", (new_name, d.product_id))
+                    renamed.append({"id": d.product_id, "from": p[0], "to": new_name})
                 if d.price is not None and round(float(p[1]), 2) != round(d.price, 2):
                     price_changes.append({"id": d.product_id, "name": p[0], "from": float(p[1]), "to": d.price})
             elif d.action == "create":
@@ -5053,7 +5058,7 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
                 created += 1; created_ids.append({"id": pid, "name": name})
             else:
                 raise HTTPException(status_code=400, detail="פעולה לא מוכרת")
-        summary = {"updated": updated, "created": created, "price_changes": len(price_changes)}
+        summary = {"updated": updated, "created": created, "price_changes": len(price_changes), "renamed": len(renamed)}
         cur.execute("UPDATE invoices SET status = 'applied', applied_by = %s, applied_at = NOW(), summary = %s WHERE id = %s;",
                     (sess["user_id"], json.dumps(summary), invoice_id))
         conn.commit()
@@ -5062,7 +5067,7 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
     finally:
         cur.close(); conn.close()
     _audit(sess, "invoice_apply", "invoice", invoice_id, {**summary, "supplier": doc.get("supplier"), "number": doc.get("invoice_number")})
-    return {"ok": True, **summary, "price_change_list": price_changes, "created_products": created_ids}
+    return {"ok": True, **summary, "price_change_list": price_changes, "created_products": created_ids, "renamed_list": renamed}
 
 
 # --- Wolt API (OAuth connection + order webhook) ---
