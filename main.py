@@ -5546,6 +5546,131 @@ def wolt_sync_status(sess: dict = Depends(require_admin)):
             "last_count": state.get("last_count"), "last_error": state.get("last_error"),
             "next_send": datetime.fromtimestamp(nxt, timezone.utc).isoformat() if nxt > time_module.time() else None}
 
+def build_wolt_sku_rows(df, cur):
+    """Pairs each Wolt item (from Wolt's Excel export, 'offers' sheet) with a site product, whose id is the SKU.
+    Order of trust: same barcode (GTIN); same name (for repeated names, paired one-to-one by the closest
+    price, since site prices were set from Wolt's price / 1.3); otherwise a near-certain name match, marked
+    for checking; otherwise no match. Returns (rows, summary)."""
+    import difflib
+    cur.execute("SELECT id, name, price, barcode FROM Products;")
+    products = [{"id": r[0], "name": r[1], "price": float(r[2]), "barcode": r[3]} for r in cur.fetchall()]
+    by_barcode = {p["barcode"]: p for p in products if p["barcode"]}
+    by_name = defaultdict(list)
+    for p in products:
+        by_name[_norm_name(p["name"])].append(p)
+    used = set()
+    rows = []
+    offers = []
+    for _, r in df.iterrows():
+        name = str(r.get("name") or "").strip()
+        if not name or name.lower() == "nan":
+            continue
+        gtin = str(r.get("gtin") or "").strip()
+        gtin = "" if gtin.lower() == "nan" else gtin.split(".")[0]
+        try:
+            price = float(r.get("price"))
+        except (TypeError, ValueError):
+            price = None
+        offers.append({"wolt_id": str(r.get("id") or "").strip(), "name": name, "gtin": gtin, "price": price})
+
+    def take(offer, product, how):
+        used.add(product["id"])
+        rows.append({**offer, "sku": product["id"], "site_name": product["name"], "site_price": product["price"], "match": how})
+
+    pending = []
+    for o in offers:                                     # 1. barcode
+        p = by_barcode.get(o["gtin"]) if o["gtin"] else None
+        if p and p["id"] not in used:
+            take(o, p, "barcode")
+        else:
+            pending.append(o)
+    rest = []
+    groups = defaultdict(list)
+    for o in pending:
+        groups[_norm_name(o["name"])].append(o)
+    for key, group in groups.items():                    # 2. exact name, paired by closest price
+        cands = [p for p in by_name.get(key, []) if p["id"] not in used]
+        pairs = []
+        for o in group:
+            for p in cands:
+                # Site prices may equal Wolt's or be Wolt's / 1.3, depending on how they were imported: use whichever fits
+                diff = (min(abs(p["price"] - o["price"]), abs(p["price"] * 1.3 - o["price"])) / max(o["price"], 0.01)
+                        if o["price"] is not None else 0)
+                pairs.append((diff, o["wolt_id"], o, p))
+        pairs.sort(key=lambda x: (x[0], x[1]))
+        done = set()
+        for _, _, o, p in pairs:
+            if o["wolt_id"] in done or p["id"] in used:
+                continue
+            take(o, p, "name"); done.add(o["wolt_id"])
+        rest += [o for o in group if o["wolt_id"] not in done]
+    free = [p for p in products if p["id"] not in used]
+    for o in rest:                                       # 3. near-certain fuzzy match, to be checked
+        best, best_p = 0.0, None
+        n = o["name"].lower()
+        for p in free:
+            if p["id"] in used:
+                continue
+            sc = difflib.SequenceMatcher(None, n, p["name"].lower()).ratio()
+            if sc > best:
+                best, best_p = sc, p
+        if best_p is not None and best >= 0.9:
+            take(o, best_p, "similar")
+        else:
+            rows.append({**o, "sku": None, "site_name": None, "site_price": None, "match": "none"})
+    summary = {"total": len(rows), "barcode": sum(r["match"] == "barcode" for r in rows),
+               "name": sum(r["match"] == "name" for r in rows), "similar": sum(r["match"] == "similar" for r in rows),
+               "none": sum(r["match"] == "none" for r in rows)}
+    return rows, summary
+
+@app.post("/api/admin/wolt/sku-file")
+async def wolt_sku_file(file: UploadFile = File(...), sess: dict = Depends(require_admin)):
+    """Builds an Excel file for Wolt: each Wolt item id with the SKU (= site product id) to set on it."""
+    import io, pandas as pd
+    from fastapi.responses import Response
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    data = await file.read(15 * 1024 * 1024 + 1)
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="הקובץ גדול מדי")
+    try:
+        df = pd.read_excel(io.BytesIO(data), sheet_name="offers")
+    except Exception:
+        raise HTTPException(status_code=400, detail="צריך את קובץ הייצוא של וולט עם גיליון 'offers' (אותו קובץ שממנו ייבאנו את המוצרים)")
+    if "id" not in df.columns or "name" not in df.columns:
+        raise HTTPException(status_code=400, detail="בקובץ חסרות העמודות id / name של וולט")
+    conn = get_conn(); cur = conn.cursor()
+    rows, summary = build_wolt_sku_rows(df, cur)
+    cur.close(); conn.close()
+
+    wb = Workbook()
+    ws = wb.active; ws.title = "sku_for_wolt"
+    ws.append(["wolt_item_id", "item_name", "gtin", "sku"])
+    for r in rows:
+        if r["sku"] is not None and r["match"] in ("barcode", "name"):
+            ws.append([r["wolt_id"], r["name"], r["gtin"] or None, str(r["sku"])])
+    ws2 = wb.create_sheet("לבדיקה")
+    ws2.append(["wolt_item_id", "שם בוולט", "מחיר בוולט", "SKU מוצע", "שם באתר", "מחיר באתר", "מצב"])
+    label = {"similar": "שם דומה – לבדוק", "none": "לא נמצא באתר"}
+    fill = {"similar": PatternFill("solid", fgColor="FFF3CD"), "none": PatternFill("solid", fgColor="F8D7DA")}
+    for r in rows:
+        if r["match"] in ("similar", "none"):
+            ws2.append([r["wolt_id"], r["name"], r["price"], str(r["sku"]) if r["sku"] else None, r["site_name"], r["site_price"], label[r["match"]]])
+            for c in ws2[ws2.max_row]:
+                c.fill = fill[r["match"]]
+    for sheet in (ws, ws2):
+        for c in sheet[1]:
+            c.font = Font(bold=True)
+        for col in sheet.columns:
+            sheet.column_dimensions[col[0].column_letter].width = min(60, max(12, max(len(str(c.value or "")) for c in col) + 2))
+    if ws2.max_row == 1:
+        wb.remove(ws2)
+    buf = io.BytesIO(); wb.save(buf)
+    _audit(sess, "wolt_sku_file", "wolt", None, summary)
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="bake-party-sku-for-wolt.xlsx"',
+                             "X-Summary": json.dumps(summary), "Access-Control-Expose-Headers": "X-Summary", "Cache-Control": "no-store"})
+
 @app.post("/api/admin/wolt/sync-all")
 def wolt_sync_all(sess: dict = Depends(require_admin)):
     """Queues every product, for a full price/stock refresh on Wolt (sent in batches as the rate limit allows)."""
