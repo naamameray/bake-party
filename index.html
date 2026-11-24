@@ -435,7 +435,9 @@
         .ef-link { font-size: .82em; color: var(--muted); text-align: center; }
         @media (max-width: 760px) {
             .detail-modal.editing .detail-grid { grid-template-columns: 1fr; }
-            .detail-modal.editing .detail-img-wrap { flex-direction: row; align-items: center; padding: 12px 16px; }
+            .detail-modal.editing .detail-img-wrap { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px; }
+            .detail-modal.editing .detail-img-wrap .ef-img-btn { flex: 1 1 auto; padding: 8px 10px; }
+            .detail-modal.editing .detail-img-wrap .ef-img-status { flex-basis: 100%; order: 5; }
             .detail-modal.editing .detail-img-wrap img { width: 90px; height: 90px; max-height: 90px; }
             .ef-row3 { grid-template-columns: 1fr 1fr 1fr; }
             .ef-row2 { grid-template-columns: 1fr; }
@@ -979,10 +981,15 @@
                 <label>תמונה</label>
                 <div id="add-p-img-mount"></div>
                 <img id="add-p-preview" alt="" style="display:none; width:120px; height:120px; object-fit:contain; border-radius:12px; border:1px solid var(--line, #eee); background:#fff; margin-bottom:6px;">
+                <div id="add-p-img-status" style="font-size:0.85em; color:var(--muted); margin-bottom:4px;"></div>
                 <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+                    <button type="button" class="btn btn-ghost" id="add-p-camera-btn" style="padding:6px 12px;">📸 צילום</button>
+                    <button type="button" class="btn btn-ghost" id="add-p-gallery-btn" style="padding:6px 12px;">🖼️ מהגלריה</button>
                     <button type="button" class="btn btn-ghost" id="add-p-suggest" style="padding:6px 12px;">🔍 הצעות תמונה</button>
+                    <button type="button" class="btn btn-ghost" id="add-p-orig" style="padding:6px 12px; display:none;">להשתמש בתמונה המקורית</button>
                 </div>
-                <input type="file" id="add-p-file" accept="image/*">
+                <input type="file" id="add-p-file" accept="image/*" hidden>
+                <input type="file" id="add-p-camera" accept="image/*" capture="environment" hidden>
                 <label style="display:flex; gap:8px; align-items:center; font-weight:400; font-size:0.9em; margin:6px 0 0;">
                     <input type="checkbox" id="add-p-studio" checked style="width:auto; margin:0;"> ✨ סידור אוטומטי של התמונה (רקע לבן, מרכוז ויישור)
                 </label>
@@ -1405,21 +1412,48 @@
         function catOptions(selected) {
             return '<option value="">ללא קטגוריה</option>' + adminSubcategories.map(c => `<option value="${c.id}"${String(c.id) === String(selected) ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
         }
-        let addPendingImage = null, addPendingCredit = null;   // a suggested/linked photo chosen in the add-product window
+        // Photo in the add-product window: taken, picked from the gallery or suggested. A taken/picked photo is
+        // cleaned up right away (when the box is ticked) and shown, so it can be checked before saving.
+        let addPendingImage = null, addPendingCredit = null, addPendingFile = null;
+        function addShowPhoto(src, status) {
+            const pv = document.getElementById('add-p-preview');
+            pv.src = src || ''; pv.style.display = src ? 'block' : 'none';
+            document.getElementById('add-p-img-status').textContent = status || '';
+        }
+        async function addOnPhoto(e) {
+            const f = e.target.files[0]; if (!f) return;
+            e.target.value = '';
+            addPendingFile = f; addPendingImage = null; addPendingCredit = null;
+            document.getElementById('add-p-orig').style.display = 'none';
+            if (!document.getElementById('add-p-studio').checked) { addShowPhoto(URL.createObjectURL(f), 'תמונה נבחרה'); return; }
+            addShowPhoto(URL.createObjectURL(f), '✨ מסדר את התמונה...');
+            try {
+                addPendingImage = await uploadImage(f, true);
+                addShowPhoto(addPendingImage, '✓ התמונה סודרה');
+                document.getElementById('add-p-orig').style.display = '';
+            } catch (err) { addShowPhoto(URL.createObjectURL(f), 'תמונה מקורית (הסידור האוטומטי לא הצליח)'); alert(err.message); }
+        }
         window.openAddProductModal = function() {
             closeSidebar();
             document.getElementById('add-product-form').reset();
-            addPendingImage = null; addPendingCredit = null;
-            document.getElementById('add-p-preview').style.display = 'none';
+            addPendingImage = null; addPendingCredit = null; addPendingFile = null;
+            addShowPhoto(null, '');
+            document.getElementById('add-p-orig').style.display = 'none';
             document.getElementById('img-sug')?.remove();
+            document.getElementById('add-p-camera-btn').onclick = () => document.getElementById('add-p-camera').click();
+            document.getElementById('add-p-gallery-btn').onclick = () => document.getElementById('add-p-file').click();
+            document.getElementById('add-p-file').onchange = addOnPhoto;
+            document.getElementById('add-p-camera').onchange = addOnPhoto;
+            document.getElementById('add-p-orig').onclick = () => {
+                addPendingImage = null; document.getElementById('add-p-orig').style.display = 'none';
+                addShowPhoto(URL.createObjectURL(addPendingFile), 'תמונה מקורית נבחרה');
+            };
             document.getElementById('add-p-suggest').onclick = () => openImageSuggestions({
                 suggestUrl: `${API}/api/admin/image-suggestions?barcode=${encodeURIComponent(document.getElementById('add-p-barcode').value)}`,
                 mount: document.getElementById('add-p-img-mount'),
-                onChosen: (url, credit) => { addPendingImage = url; addPendingCredit = credit;
-                    const pv = document.getElementById('add-p-preview'); pv.src = url; pv.style.display = 'block';
-                    document.getElementById('add-p-file').value = ''; } });
-            document.getElementById('add-p-file').onchange = () => { addPendingImage = null; addPendingCredit = null;
-                document.getElementById('add-p-preview').style.display = 'none'; };
+                onChosen: (url, credit) => { addPendingImage = url; addPendingCredit = credit; addPendingFile = null;
+                    document.getElementById('add-p-orig').style.display = 'none';
+                    addShowPhoto(url, '✓ תמונה נבחרה'); } });
             document.getElementById('add-p-cat-1').innerHTML = catOptions('');
             document.getElementById('add-p-cat-2').innerHTML = catOptions('');
             document.getElementById('add-sale-opts').style.display = 'none';
@@ -1442,25 +1476,15 @@
             const btn = e.target.querySelector('button[type="submit"]');
             btn.textContent = 'שומר...'; btn.disabled = true;
             try {
-                const fileInput = document.getElementById('add-p-file');
                 let imageUrl = addPendingImage;
-                if (!imageUrl && fileInput.files.length) {
-                    const studio = document.getElementById('add-p-studio').checked;
-                    if (studio) btn.textContent = '✨ מסדר את התמונה...';
-                    try { imageUrl = await uploadImage(fileInput.files[0], studio); }
-                    catch (err) {
-                        if (!studio || !confirm(err.message + '\n\nלהעלות את התמונה המקורית במקום?')) throw err;
-                        imageUrl = await uploadImage(fileInput.files[0], false);
-                    }
-                    btn.textContent = 'שומר...';
-                }
+                if (!imageUrl && addPendingFile) imageUrl = await uploadImage(addPendingFile, false);   // the original, as chosen
                 const cat1 = document.getElementById('add-p-cat-1').value, cat2 = document.getElementById('add-p-cat-2').value;
                 const category_ids = []; if (cat1) category_ids.push(parseInt(cat1)); if (cat2 && cat2 !== cat1) category_ids.push(parseInt(cat2));
                 const weight = document.getElementById('add-p-weight').value, units = document.getElementById('add-p-units').value;
                 const notes = document.getElementById('add-p-notes').value.trim(), saleLabel = document.getElementById('add-p-sale-label').value.trim();
                 const res = await fetch(`${API}/api/admin/products`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({
                     name: document.getElementById('add-p-name').value.trim(), price: parseFloat(document.getElementById('add-p-price').value),
-                    category_ids, image_url: imageUrl, image_credit: addPendingImage ? addPendingCredit : null,
+                    category_ids, image_url: imageUrl, image_credit: imageUrl === addPendingImage ? addPendingCredit : null,
                     barcode: document.getElementById('add-p-barcode').value.trim() || null, weight_grams: weight ? parseInt(weight) : null, units_per_package: units ? parseInt(units) : null,
                     notes: notes || null, is_on_sale: document.getElementById('add-p-sale').checked, sale_label: saleLabel || null }) });
                 if (!res.ok) throw new Error('שגיאה בהוספת המוצר');
@@ -1784,6 +1808,7 @@
                         </div>
                         <label class="ef-field"><span>הערות / תיאור</span><textarea id="edit-detail-notes" rows="2" placeholder="לא חובה">${esc(p.notes || '')}</textarea></label>
                         <input type="file" id="edit-detail-file" accept="image/*" hidden>
+                        <input type="file" id="edit-detail-camera" accept="image/*" capture="environment" hidden>
                         <div class="ef-actions">
                             <button class="btn" type="submit" id="ef-save">💾 שמירה</button>
                             <button class="btn btn-ghost ef-icon" type="button" onclick="duplicateProduct(${p.id})" title="שכפול מוצר">📋 שכפול</button>
@@ -1798,42 +1823,55 @@
                 // Image change: a button under the image, with a preview
                 const wrap = document.querySelector('#detail-modal .detail-img-wrap');
                 wrap.querySelectorAll('.ef-img-btn').forEach(x => x.remove());
-                const imgBtn = document.createElement('button');
-                imgBtn.type = 'button'; imgBtn.className = 'ef-img-btn'; imgBtn.textContent = '📷 החלפת תמונה';
-                imgBtn.onclick = () => document.getElementById('edit-detail-file').click();
+                // Status line for the photo, then the three ways to get one: camera, gallery, suggestions
+                const imgBtn = document.createElement('div');
+                imgBtn.className = 'ef-img-btn ef-img-status'; imgBtn.style.cssText = 'cursor:default; border-style:solid; display:none;';
                 wrap.appendChild(imgBtn);
+                const camBtn = document.createElement('button');
+                camBtn.type = 'button'; camBtn.className = 'ef-img-btn'; camBtn.textContent = '📸 צילום';
+                camBtn.onclick = () => document.getElementById('edit-detail-camera').click();
+                wrap.appendChild(camBtn);
+                const galBtn = document.createElement('button');
+                galBtn.type = 'button'; galBtn.className = 'ef-img-btn'; galBtn.textContent = '🖼️ מהגלריה';
+                galBtn.onclick = () => document.getElementById('edit-detail-file').click();
+                wrap.appendChild(galBtn);
+                const setStatus = t => { imgBtn.textContent = t; imgBtn.style.display = t ? '' : 'none'; };
                 // Photo suggestions: by barcode from an open database, or from a pasted link. Approve with one click.
                 const sugBtn = document.createElement('button');
                 sugBtn.type = 'button'; sugBtn.className = 'ef-img-btn'; sugBtn.textContent = '🔍 הצעות תמונה';
                 sugBtn.onclick = () => openImageSuggestions({ suggestUrl: `${API}/api/admin/products/${p.id}/image-suggestions`,
                     mount: document.getElementById('edit-form'),
-                    onChosen: (url, credit) => { editPendingImage = url; editPendingCredit = credit; img.src = url;
-                        imgBtn.textContent = '✓ תמונה נבחרה (תישמר בלחיצה על שמירה) · 📷 החלפה'; } });
+                    onChosen: (url, credit) => { editPendingImage = url; editPendingCredit = credit; editPendingFile = null; img.src = url;
+                        wrap.querySelectorAll('.ef-img-orig').forEach(x => x.remove());
+                        setStatus('✓ נבחרה, תישמר בשמירה'); } });
                 wrap.appendChild(sugBtn);
-                // A new photo is cleaned up right away so the result can be checked before saving
-                editPendingImage = null; editPendingCredit = null;
-                document.getElementById('edit-detail-file').onchange = async e => {
+                // A new photo (camera or gallery) is cleaned up right away so the result can be checked before saving
+                editPendingImage = null; editPendingCredit = null; editPendingFile = null;
+                const onPhoto = async e => {
                     const f = e.target.files[0]; if (!f) return;
+                    e.target.value = '';
                     wrap.querySelectorAll('.ef-img-orig').forEach(x => x.remove());
+                    editPendingFile = f; editPendingImage = null; editPendingCredit = null;
                     img.src = URL.createObjectURL(f);
-                    imgBtn.textContent = '✨ מסדר את התמונה...'; imgBtn.disabled = true;
+                    setStatus('✨ מסדר את התמונה...');
                     try {
-                        editPendingImage = await uploadImage(f, true); editPendingCredit = null;
+                        editPendingImage = await uploadImage(f, true);
                         img.src = editPendingImage;
-                        imgBtn.textContent = '✓ התמונה סודרה (תישמר בלחיצה על שמירה) · 📷 החלפה';
+                        setStatus('✓ סודרה, תישמר בשמירה');
                         const orig = document.createElement('button');
                         orig.type = 'button'; orig.className = 'ef-img-btn ef-img-orig';
-                        orig.textContent = 'להשתמש בתמונה המקורית';
+                        orig.textContent = '↩️ למקורית';
                         orig.onclick = () => { editPendingImage = null; img.src = URL.createObjectURL(f); orig.remove();
-                            imgBtn.textContent = '📷 תמונה מקורית נבחרה (תישמר בלחיצה על שמירה)'; };
+                            setStatus('מקורית, תישמר בשמירה'); };
                         wrap.appendChild(orig);
                     } catch (err) {
                         editPendingImage = null;
-                        imgBtn.textContent = '📷 תמונה מקורית נבחרה (הסידור האוטומטי לא הצליח)';
+                        setStatus('הסידור לא הצליח, תישמר המקורית');
                         alert(err.message);
                     }
-                    imgBtn.disabled = false;
                 };
+                document.getElementById('edit-detail-file').onchange = onPhoto;
+                document.getElementById('edit-detail-camera').onchange = onPhoto;
             } else {
                 document.querySelectorAll('#detail-modal .ef-img-btn').forEach(x => x.remove());
                 document.getElementById('detail-name').textContent = p.name;
@@ -1856,6 +1894,7 @@
 
         let editPendingImage = null;   // url of an already-processed photo waiting for "save"
         let editPendingCredit = null;  // credit line required by the photo's licence (open databases)
+        let editPendingFile = null;    // the photo as taken, used if the automatic clean-up is declined or fails
         // opts: { suggestUrl, mount (element the panel goes into), onChosen(url, credit) }
         async function openImageSuggestions(opts) {
             let panel = document.getElementById('img-sug');
@@ -1952,9 +1991,8 @@
                     category_ids, notes: v('edit-detail-notes').trim() || null,
                     is_on_sale: v('edit-detail-sale') === '1', sale_label: v('edit-detail-sale-label').trim() || null,
                     stock_quantity: document.getElementById('edit-detail-stock').checked ? 100 : 0 };
-                const f = document.getElementById('edit-detail-file');
                 if (editPendingImage) { body.image_url = editPendingImage; body.image_credit = editPendingCredit; }
-                else if (f.files.length) { body.image_url = await uploadImage(f.files[0], false); body.image_credit = null; }
+                else if (editPendingFile) { body.image_url = await uploadImage(editPendingFile, false); body.image_credit = null; }
                 const res = await fetch(`${API}/api/admin/products/${id}`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify(body) });
                 if (!res.ok) throw new Error('שגיאה בעדכון המוצר');
                 closeDetail();
