@@ -5312,14 +5312,39 @@ def wolt_oauth_callback(request: Request, code: str = "", state: str = "", error
         cur.close(); conn.close()
 
 def _wolt_signature_ok(request, raw):
-    """WOLT-SIGNATURE = hex HMAC-SHA256 of the exact raw body, keyed with our webhook secret."""
+    """Default: WOLT-SIGNATURE = hex HMAC-SHA256 of the exact raw body, keyed with our webhook secret.
+    Wolt's documented alternative (opt-in on their side): a static "Authorization: Bearer <secret>"."""
     if not WOLT_WEBHOOK_SECRET:
         return None                                  # no secret configured: accepted, stored as unverified
     sig = (request.headers.get("wolt-signature") or "").strip().lower()
-    if not sig:
-        return False
-    expected = hmac.new(WOLT_WEBHOOK_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig)
+    if sig:
+        expected = hmac.new(WOLT_WEBHOOK_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(expected, sig):
+            return True
+    auth = (request.headers.get("authorization") or "").strip()
+    if auth.lower().startswith("bearer ") and hmac.compare_digest(auth[7:].strip(), WOLT_WEBHOOK_SECRET):
+        return True
+    _log_wolt_signature_failure(request, raw, sig)
+    return False
+
+def _log_wolt_signature_failure(request, raw, sig):
+    """Explains a rejected notification in the log WITHOUT writing any secret: whether a signature
+    came at all, and which key it was made with (ours, the OAuth client secret, or neither)."""
+    try:
+        def hx(key):
+            return hmac.new(key.encode("utf-8"), raw, hashlib.sha256).hexdigest() if key else ""
+        if not sig:
+            what = "no WOLT-SIGNATURE header"
+            if request.headers.get("authorization"):
+                what += ", Authorization header present but not our secret"
+        elif WOLT_CLIENT_SECRET and hmac.compare_digest(hx(WOLT_CLIENT_SECRET), sig):
+            what = "signed with the OAuth client secret instead of the webhook secret"
+        else:
+            what = f"signature does not match our webhook secret (length {len(sig)})"
+        names = sorted(h for h in request.headers.keys() if h.lower().startswith(("wolt", "x-")) or h.lower() == "authorization")
+        print(f"[WOLT] webhook rejected: {what}; headers seen: {names}")
+    except Exception as e:
+        print(f"[WOLT] webhook rejected (could not diagnose: {e})")
 
 @app.post("/api/wolt/webhook/orders")
 async def wolt_order_webhook(request: Request):
