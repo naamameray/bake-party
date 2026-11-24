@@ -1852,6 +1852,7 @@
                 const fmt = t => t ? new Date(t).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '–';
                 let html = '';
                 if (st.environment === 'development') html += '<p style="font-size:0.85em; color:#c77700;">🧪 סביבת בדיקות של וולט</p>';
+                if (st.last_error && !st.venues.some(v => v.status === 'active')) html += `<p style="font-size:0.85em; color:#c62828;">ניסיון החיבור האחרון נכשל (${fmt(st.last_error.at)}): <span class="w-err"></span></p>`;
                 if (st.venues.some(v => v.status === 'reconnect')) html += '<p><b style="color:#c62828;">⚠️ החיבור לוולט פג. לוחצים "חיבור מחדש לוולט" ומאשרים שוב.</b></p>';
                 else if (st.venues.length) html += `<p><b style="color:var(--ok);">✓ מחובר</b> · מאז ${fmt(st.venues[0].connected_at)}</p>`;
                 else if (st.configured) html += `<p><b>עוד לא מחובר.</b> לוחצים על הכפתור, מתחברים לוולט ומאשרים.</p>`;
@@ -1860,6 +1861,7 @@
                 html += `<details style="font-size:0.85em;"><summary style="cursor:pointer;">הכתובות למסירה לוולט</summary>
                     <p style="direction:ltr; text-align:left; word-break:break-all;">Redirect URL: <code class="w-r"></code><br>Webhook: <code class="w-w"></code></p></details>`;
                 wrap.innerHTML = html;
+                if (wrap.querySelector('.w-err')) wrap.querySelector('.w-err').textContent = st.last_error.reason;
                 wrap.querySelector('.w-r').textContent = st.redirect_url;
                 wrap.querySelector('.w-w').textContent = st.webhook_url;
                 if (st.configured) {

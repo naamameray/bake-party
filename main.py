@@ -5052,7 +5052,7 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
 #      The Wolt venue id is inside the access token (JWT claim integration.venue_id).
 #   4. Orders arrive as small notifications on /api/wolt/webhook/orders, signed with HMAC-SHA256
 #      of the raw body (header WOLT-SIGNATURE, hex) using the webhook secret we gave Wolt.
-WOLT_ENV = os.environ.get("WOLT_ENV", "production").strip().lower()   # "development" for Wolt's sandbox
+WOLT_ENV = (os.environ.get("WOLT_ENV", "production").strip().strip('"').strip("'").lower() or "production")   # "development" for Wolt's sandbox
 _WOLT_HOSTS = {
     "development": {"integrate": "https://developer.development.dev.woltapi.com/integrate",
                     "token": "https://integrations-authentication-service.development.dev.woltapi.com/oauth2/token",
@@ -5062,12 +5062,16 @@ _WOLT_HOSTS = {
                    "api": "https://pos-integration-service.wolt.com"},
 }
 _WOLT = _WOLT_HOSTS.get(WOLT_ENV, _WOLT_HOSTS["production"])
-WOLT_CLIENT_ID = os.environ.get("WOLT_CLIENT_ID", "")
-WOLT_CLIENT_SECRET = os.environ.get("WOLT_CLIENT_SECRET", "")
+def _env_clean(name):
+    """Env value without stray spaces, line breaks or quotes (easy to paste by mistake into Railway)."""
+    return os.environ.get(name, "").strip().strip('"').strip("'").strip()
+
+WOLT_CLIENT_ID = _env_clean("WOLT_CLIENT_ID")
+WOLT_CLIENT_SECRET = _env_clean("WOLT_CLIENT_SECRET")
 WOLT_TOKEN_URL = os.environ.get("WOLT_TOKEN_URL", _WOLT["token"])          # override only for tests
 WOLT_INTEGRATE_URL = os.environ.get("WOLT_INTEGRATE_URL", _WOLT["integrate"])
 WOLT_API_BASE = os.environ.get("WOLT_API_BASE", _WOLT["api"])
-WOLT_WEBHOOK_SECRET = os.environ.get("WOLT_WEBHOOK_SECRET", "")
+WOLT_WEBHOOK_SECRET = _env_clean("WOLT_WEBHOOK_SECRET")
 WOLT_REDIRECT_PATH = "/api/wolt/oauth/callback"
 WOLT_REFRESH_EVERY_DAYS = 7      # refresh tokens die after 30 idle days; refreshing weekly keeps them alive
 _wolt_webhook_hits = defaultdict(list)
@@ -5205,8 +5209,12 @@ def wolt_status(sess: dict = Depends(require_admin)):
                "refreshed_at": r[5].isoformat() if r[5] else None} for r in cur.fetchall()]
     cur.execute("SELECT COUNT(*), MAX(received_at) FROM wolt_events;")
     n, last = cur.fetchone()
+    try:
+        last_error = json.loads(_setting_get(cur, "wolt_last_error") or "null")
+    except ValueError:
+        last_error = None
     cur.close(); conn.close()
-    return {"configured": _wolt_oauth_configured(), "environment": WOLT_ENV, "venues": venues,
+    return {"configured": _wolt_oauth_configured(), "environment": WOLT_ENV, "venues": venues, "last_error": last_error,
             "redirect_url": _wolt_redirect_uri(), "webhook_url": SITE_URL.rstrip("/") + "/api/wolt/webhook/orders",
             "webhook_secret_set": bool(WOLT_WEBHOOK_SECRET), "events": n, "last_event": last.isoformat() if last else None}
 
@@ -5225,6 +5233,20 @@ def wolt_connect(sess: dict = Depends(require_admin)):
     q = {"client_id": WOLT_CLIENT_ID, "redirect_url": _wolt_redirect_uri(), "state": state,
          "venue_name": SITE_NAME, "venue_address": contact.get("address") or ""}
     return {"url": WOLT_INTEGRATE_URL + "?" + urllib.parse.urlencode(q)}
+
+def _wolt_explain_error(raw):
+    """Turns the token endpoint's answer into a hint the shop can act on. Wolt documents no error
+    codes, so this goes by the standard OAuth error names that usually appear in the body."""
+    r = raw.lower()
+    if "invalid_client" in r or r.startswith("401"):
+        return "פרטי החיבור (WOLT_CLIENT_ID או WOLT_CLIENT_SECRET) לא נכונים. בודקים ב-Railway שהם הועתקו בדיוק, בלי רווחים."
+    if "redirect" in r:
+        return "כתובת החזרה לא תואמת למה שנרשם אצל וולט."
+    if "invalid_grant" in r or "expired" in r:
+        return "קוד החיבור פג או כבר נוצל. לוחצים שוב על \"חיבור לוולט\" בפאנל."
+    if "timed out" in r or "urlopen error" in r or "name or service" in r:
+        return "לא הצלחנו להגיע לשרת של וולט. בודקים ש-WOLT_ENV מוגדר נכון ומנסים שוב."
+    return "פרטים טכניים: " + raw[:160]
 
 def _wolt_result_page(ok, text):
     color = "#2e7d32" if ok else "#c62828"
@@ -5253,9 +5275,13 @@ def wolt_oauth_callback(request: Request, code: str = "", state: str = "", error
             tok = _wolt_token_request({"grant_type": "authorization_code", "code": code, "redirect_uri": _wolt_redirect_uri()})
         except Exception as e:
             print(f"[WOLT] code exchange failed: {e}")
-            return _wolt_result_page(False, "וולט לא אישרו את החיבור. נסו שוב מהכפתור בפאנל.")
+            reason = _wolt_explain_error(str(e))
+            _setting_set(cur, "wolt_last_error", json.dumps({"at": datetime.now(timezone.utc).isoformat(), "reason": reason, "raw": str(e)[:300]}, ensure_ascii=False))
+            conn.commit()
+            return _wolt_result_page(False, "וולט לא אישרו את החיבור. " + reason)
         extra = {k: v for k, v in request.query_params.items() if k not in ("code", "state")}
         venue = _wolt_save_tokens(cur, tok, None, extra or None)
+        _setting_set(cur, "wolt_last_error", "")
         conn.commit()
         _audit({"user_id": saved.get("by"), "name": None}, "wolt_connected", "wolt", None, {"venue": venue})
         return _wolt_result_page(True, "החנות חוברה לוולט בהצלחה")
