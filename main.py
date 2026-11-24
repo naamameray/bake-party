@@ -120,6 +120,30 @@ try:
     # are not all marked as new. Only products added from now on get a date.
     init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP;")
     init_cur.execute("ALTER TABLE Products ALTER COLUMN created_at SET DEFAULT NOW();")
+    # Purchase data from supplier invoices: cost, barcode and the supplier's item code
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS cost_price NUMERIC(10,2);")
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS cost_updated_at TIMESTAMP;")
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS barcode VARCHAR(40);")
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS supplier_sku VARCHAR(60);")
+    # Credit line for a photo taken from an open source (e.g. Open Food Facts, CC BY-SA)
+    init_cur.execute("ALTER TABLE Products ADD COLUMN IF NOT EXISTS image_credit TEXT;")
+    init_cur.execute("CREATE INDEX IF NOT EXISTS idx_products_barcode ON Products(barcode);")
+    init_cur.execute("""
+        CREATE TABLE IF NOT EXISTS invoices (
+            id             SERIAL PRIMARY KEY,
+            supplier       TEXT,
+            invoice_number TEXT,
+            invoice_date   TEXT,
+            file_name      TEXT,
+            data           TEXT NOT NULL,
+            status         VARCHAR(20) NOT NULL DEFAULT 'draft',
+            created_by     INTEGER,
+            created_at     TIMESTAMPTZ DEFAULT NOW(),
+            applied_by     INTEGER,
+            applied_at     TIMESTAMPTZ,
+            summary        TEXT
+        );
+    """)
 
     init_cur.execute("""
         CREATE TABLE IF NOT EXISTS weekly_hours (
@@ -478,6 +502,13 @@ try:
             received_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
+    init_cur.execute("ALTER TABLE wolt_connection ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';")
+    init_cur.execute("ALTER TABLE wolt_connection ADD COLUMN IF NOT EXISTS last_error TEXT;")
+    init_cur.execute("ALTER TABLE wolt_connection ADD COLUMN IF NOT EXISTS refreshed_at TIMESTAMPTZ;")
+    # Notification id (top-level "id" in Wolt's webhook): unique per notification and stable across retries
+    init_cur.execute("ALTER TABLE wolt_events ADD COLUMN IF NOT EXISTS notification_id TEXT;")
+    init_cur.execute("ALTER TABLE wolt_events ADD COLUMN IF NOT EXISTS event_type TEXT;")
+    init_cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wolt_events_notification ON wolt_events(notification_id);")
     init_cur.execute("CREATE INDEX IF NOT EXISTS idx_wolt_events_id ON wolt_events(id DESC);")
     init_cur.execute("DELETE FROM wolt_events WHERE received_at < NOW() - INTERVAL '90 days';")
 
@@ -1626,13 +1657,13 @@ def admin_set_override(body: OverrideBody, sess: dict = Depends(require_admin)):
     conn.commit(); cur.close(); conn.close()
     return {"ok": True}
 
-@app.get("/api/admin/subcategories-flat")
-def admin_get_subcategories_flat(sess: dict = Depends(require_admin)):
+def _flat_categories():
+    """[(id, "parent > child")] for every category a product can belong to."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute(
         """
-        -- תתי-קטגוריות, וגם קטגוריות ראשיות שאין להן תתי-קטגוריות (אחרת מוצר ששויך אליהן
-        -- מאבד את הקטגוריה בעריכה ונעלם מהאתר)
+        -- Subcategories, plus top-level categories that have no subcategories (otherwise a product
+        -- assigned to one would lose its category on edit and disappear from the site)
         SELECT id, full_name FROM (
             SELECT sub.id, p.name || ' > ' || sub.name AS full_name, p.name AS k1, sub.name AS k2
             FROM Categories sub JOIN Categories p ON sub.parent_id = p.id
@@ -1644,13 +1675,19 @@ def admin_get_subcategories_flat(sess: dict = Depends(require_admin)):
         """
     )
     rows = cur.fetchall(); cur.close(); conn.close()
-    return [{"id": r[0], "name": r[1]} for r in rows]
+    return rows
+
+@app.get("/api/admin/subcategories-flat")
+def admin_get_subcategories_flat(sess: dict = Depends(require_admin)):
+    return [{"id": r[0], "name": r[1]} for r in _flat_categories()]
 
 ALLOWED_IMAGE_EXT = {"jpg", "jpeg", "png", "webp", "gif"}
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 @app.post("/api/admin/upload-image")
-async def upload_image(file: UploadFile = File(...), sess: dict = Depends(require_admin)):
+async def upload_image(file: UploadFile = File(...), studio: bool = False, sess: dict = Depends(require_admin)):
+    """studio=1: the photo is cleaned up automatically (white background, centred, straightened).
+    Besides the square site image, a 16:9 copy is saved next to it ("-wide") for Wolt."""
     # Images only, up to 8MB. Any other file (e.g. HTML) would be served from our own origin and could be used for an attack.
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ALLOWED_IMAGE_EXT:
@@ -1661,6 +1698,21 @@ async def upload_image(file: UploadFile = File(...), sess: dict = Depends(requir
     if not _image_kind(data):
         # The extension alone isn't enough: check the file really is an image
         raise HTTPException(status_code=400, detail="הקובץ לא נראה כמו תמונה תקינה")
+    if studio:
+        import asyncio, photo_studio
+        if not photo_studio.available():
+            raise HTTPException(status_code=503, detail="סידור התמונות האוטומטי לא מותקן בשרת")
+        try:
+            out = await asyncio.to_thread(photo_studio.process, data)
+        except Exception as e:
+            print(f"[PHOTO] processing failed: {e}")
+            raise HTTPException(status_code=422, detail="לא הצלחתי לזהות את המוצר בתמונה. אפשר לצלם שוב (מוצר אחד, ברור, מקרוב) או להעלות את המקורית.")
+        base = uuid.uuid4().hex
+        with open(os.path.join(IMAGES_DIR, f"{base}.jpg"), "wb") as f:
+            f.write(out["square"])
+        with open(os.path.join(IMAGES_DIR, f"{base}-wide.jpg"), "wb") as f:
+            f.write(out["wide"])
+        return {"url": f"/images/{base}.jpg", "wide_url": f"/images/{base}-wide.jpg"}
     try:
         filename = f"{uuid.uuid4().hex}.{ext}"
         with open(os.path.join(IMAGES_DIR, filename), "wb") as f:
@@ -1668,6 +1720,113 @@ async def upload_image(file: UploadFile = File(...), sess: dict = Depends(requir
         return {"url": f"/images/{filename}"}
     except Exception:
         raise HTTPException(status_code=400, detail="שגיאה בהעלאת התמונה")
+
+# --- Product photo suggestions (by barcode, or from a link) ---
+OFF_API_URL = os.environ.get("OFF_API_URL", "https://world.openfoodfacts.org/api/v2/product/{barcode}.json")
+OFF_CREDIT = "תמונה: Open Food Facts, ברישיון CC BY-SA"
+_img_fetch_hits = defaultdict(list)
+
+def _public_host_ok(host):
+    """Only fetch from public internet addresses (never the server's own network)."""
+    import socket, ipaddress
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            return False
+    return True
+
+def _fetch_image(url, max_bytes=MAX_IMAGE_BYTES):
+    """Downloads an image from a link the admin pasted. Redirects are followed by hand so every hop is checked."""
+    import urllib.request, urllib.error, urllib.parse
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    opener = urllib.request.build_opener(NoRedirect)
+    for _ in range(4):
+        u = urllib.parse.urlparse(url)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            raise ValueError("קישור לא תקין")
+        if os.environ.get("IMAGE_FETCH_ALLOW_LOCAL") != "1" and not _public_host_ok(u.hostname):
+            raise ValueError("אי אפשר להוריד מהכתובת הזו")
+        req = urllib.request.Request(url, headers={"User-Agent": "BakeParty-Shop/1.0", "Accept": "image/*"})
+        try:
+            resp = opener.open(req, timeout=15)
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308) and e.headers.get("Location"):
+                url = urllib.parse.urljoin(url, e.headers["Location"]); continue
+            raise ValueError(f"השרת החזיר שגיאה {e.code}")
+        data = resp.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise ValueError("התמונה גדולה מדי")
+        if not _image_kind(data):
+            raise ValueError("הקישור לא מוביל לתמונה (צריך קישור ישיר לקובץ התמונה)")
+        return data
+    raise ValueError("יותר מדי הפניות בקישור")
+
+@app.get("/api/admin/products/{product_id}/image-suggestions")
+def image_suggestions(product_id: int, sess: dict = Depends(require_admin)):
+    """Photo suggestions for a product by its barcode, from Open Food Facts (an open product database)."""
+    import urllib.request
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT name, barcode FROM Products WHERE id = %s;", (product_id,))
+    r = cur.fetchone(); cur.close(); conn.close()
+    if not r:
+        raise HTTPException(status_code=404, detail="מוצר לא נמצא")
+    if not r[1]:
+        return {"suggestions": [], "reason": "למוצר אין ברקוד שמור. ברקוד נשמר אוטומטית כשהמוצר מופיע בחשבונית עם ברקוד."}
+    try:
+        req = urllib.request.Request(OFF_API_URL.format(barcode=r[1]) + "?fields=product_name,brands,image_front_url,image_url",
+                                     headers={"User-Agent": "BakeParty-Shop/1.0"})
+        d = json.loads(urllib.request.urlopen(req, timeout=12).read())
+    except Exception as e:
+        print(f"[IMG] Open Food Facts lookup failed: {e}")
+        return {"suggestions": [], "reason": "מאגר התמונות לא זמין כרגע. נסו שוב מאוחר יותר."}
+    prod = d.get("product") or {}
+    urls = [u for u in (prod.get("image_front_url"), prod.get("image_url")) if u]
+    if d.get("status") != 1 or not urls:
+        return {"suggestions": [], "reason": "לא נמצאה תמונה במאגר עבור הברקוד הזה."}
+    title = " ".join(x for x in (prod.get("brands"), prod.get("product_name")) if x)
+    seen, out = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u); out.append({"url": u, "title": title, "source": "Open Food Facts", "credit": OFF_CREDIT})
+    return {"suggestions": out}
+
+class ImageFromUrlBody(BaseModel):
+    url: str
+    studio: bool = True
+
+@app.post("/api/admin/image-from-url")
+async def image_from_url(body: ImageFromUrlBody, sess: dict = Depends(require_admin)):
+    """Downloads an image (a suggestion, or a link pasted by the admin), optionally cleans it up,
+    and returns its new address. Nothing is attached to a product until the product is saved."""
+    import asyncio, photo_studio
+    _simple_rate_limit(_img_fetch_hits, str(sess["user_id"]), 60, 3600, "יותר מדי הורדות תמונה. נסו שוב מאוחר יותר.")
+    try:
+        data = await asyncio.to_thread(_fetch_image, body.url.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=400, detail="לא הצלחתי להוריד את התמונה מהקישור")
+    base = uuid.uuid4().hex
+    if body.studio and photo_studio.available():
+        try:
+            out = await asyncio.to_thread(photo_studio.process, data)
+            with open(os.path.join(IMAGES_DIR, f"{base}.jpg"), "wb") as f:
+                f.write(out["square"])
+            with open(os.path.join(IMAGES_DIR, f"{base}-wide.jpg"), "wb") as f:
+                f.write(out["wide"])
+            return {"url": f"/images/{base}.jpg", "wide_url": f"/images/{base}-wide.jpg"}
+        except Exception as e:
+            print(f"[PHOTO] processing a downloaded image failed: {e}")
+    ext = _image_kind(data)
+    with open(os.path.join(IMAGES_DIR, f"{base}.{ext}"), "wb") as f:
+        f.write(data)
+    return {"url": f"/images/{base}.{ext}"}
 
 # --- Products & Categories ---
 
@@ -1690,6 +1849,7 @@ def _serialize_products(rows):
             "is_on_sale": bool(is_on_sale),
             "sale_price": sale_price,
             "sale_label": sale_label,
+            "image_credit": p[14] if len(p) > 14 else None,
         })
     return data
 
@@ -1735,7 +1895,7 @@ def get_products():
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
         FROM Products p 
         LEFT JOIN Categories c ON p.category_id = c.id 
         WHERE p.category_id IS NOT NULL 
@@ -1753,7 +1913,7 @@ def get_new_products(limit: int = 8):
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url,
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
         FROM Products p
         LEFT JOIN Categories c ON p.category_id = c.id
         WHERE p.category_id IS NOT NULL
@@ -1778,7 +1938,7 @@ def get_category_products(category_id: int):
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
         FROM Products p 
         LEFT JOIN Categories c ON p.category_id = c.id 
         WHERE p.category_id IN (SELECT id FROM subtree) 
@@ -1801,6 +1961,7 @@ class ProductUpdateBody(BaseModel):
     weight_grams: Optional[int] = None
     units_per_package: Optional[int] = None
     image_url: Optional[str] = None
+    image_credit: Optional[str] = None
     notes: Optional[str] = None
     is_on_sale: Optional[bool] = None
     sale_label: Optional[str] = None
@@ -1965,7 +2126,7 @@ def get_products_on_sale():
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url, 
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
         FROM Products p 
         LEFT JOIN Categories c ON p.category_id = c.id 
         WHERE p.is_on_sale = TRUE AND p.category_id IS NOT NULL
@@ -1982,7 +2143,7 @@ def get_product_detail(product_id: int):
         SELECT p.id, p.name, p.price, p.stock_quantity, c.name, p.image_url,
                p.category_id, p.weight_grams, p.units_per_package, p.notes,
                (SELECT array_agg(category_id) FROM product_categories WHERE product_id = p.id),
-               p.is_on_sale, p.sale_price, p.sale_label
+               p.is_on_sale, p.sale_price, p.sale_label, p.image_credit
         FROM Products p LEFT JOIN Categories c ON p.category_id = c.id
         WHERE p.id = %s;
         """,
@@ -2469,6 +2630,7 @@ async def _start_background_jobs():
     import asyncio
     asyncio.create_task(_digest_loop())
     asyncio.create_task(_backup_loop())
+    asyncio.create_task(_wolt_maintenance_loop())
 
 class PushSubBody(BaseModel):
     endpoint: str
@@ -3854,12 +4016,12 @@ def product_seo_page(product_id: int):
     """Crawlable product page: title, description, price, stock and structured data (schema.org)."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT p.id, p.name, p.price, p.stock_quantity, p.category_id, p.image_url, p.notes, "
-                "p.weight_grams, p.units_per_package FROM Products p WHERE p.id = %s;", (product_id,))
+                "p.weight_grams, p.units_per_package, p.image_credit FROM Products p WHERE p.id = %s;", (product_id,))
     p = cur.fetchone()
     if not p:
         cur.close(); conn.close()
         raise HTTPException(status_code=404, detail="מוצר לא נמצא")
-    pid, name, price, stock, cat_id, image, notes, weight, units = p
+    pid, name, price, stock, cat_id, image, notes, weight, units, image_credit = p
     price = float(price); in_stock = (stock or 0) > 0
     chain = _category_chain(cur, cat_id)
     related = []
@@ -3911,6 +4073,7 @@ def product_seo_page(product_id: int):
     <span class="stock{'' if in_stock else ' out'}">{'במלאי בחנות' if in_stock else 'אזל מהמלאי'}</span>
     {f'<p class="desc">{_e(desc_text)}</p>' if desc_text else ''}
     {f'<p class="desc">{_e(" · ".join(meta))}</p>' if meta else ''}
+    {f'<p class="desc" style="font-size:.75em">{_e(image_credit)}</p>' if image_credit else ''}
     <p class="desc" style="font-size:.9em"><a href="/returns">{'🔄 ניתן להחלפה בחנות תוך ' + str(RETURN_DAYS) + ' ימים, עם קבלה' if returnable else 'מוצר זה אינו ניתן להחזרה או להחלפה'}</a></p>
     <div class="actions">
       <a class="pill" href="/#p={pid}">לצפייה בחנות האונליין</a>
@@ -4589,96 +4752,419 @@ def ai_chat(body: AiChatBody, sess: dict = Depends(require_auth)):
         return {"reply": fallback, "ok": False, "reason": "api_error"}
 
 
+# --- Supplier invoices: read with AI, match to products, approve, apply ---
+import invoice_ai
+_invoice_hits = defaultdict(list)
+
+def _norm_tokens(text):
+    import re
+    t = re.sub(r"[^\w\s]", " ", str(text or "").lower())
+    return [w for w in t.split() if len(w) > 1]
+
+def _load_catalog(cur):
+    cur.execute("""SELECT p.id, p.name, p.price, p.cost_price, p.barcode, p.supplier_sku, p.image_url, c.name
+                   FROM Products p LEFT JOIN Categories c ON c.id = p.category_id;""")
+    items = []
+    for r in cur.fetchall():
+        items.append({"id": r[0], "name": r[1], "price": float(r[2]), "cost": float(r[3]) if r[3] is not None else None,
+                      "barcode": r[4], "sku": r[5], "has_image": bool(r[6]), "category": r[7],
+                      "tokens": set(_norm_tokens(r[1]))})
+    return items
+
+def _match_line(line, catalog, by_barcode, by_sku):
+    """Finds the product an invoice line refers to: barcode first, then the supplier's code, then the name.
+    Returns (best_match_or_None, method, candidates)."""
+    import difflib
+    bc = "".join(ch for ch in str(line.get("barcode") or "") if ch.isdigit())
+    if bc and bc in by_barcode:
+        return by_barcode[bc], "barcode", [by_barcode[bc]]
+    sku = str(line.get("supplier_sku") or "").strip()
+    if sku and sku in by_sku:
+        return by_sku[sku], "sku", [by_sku[sku]]
+    # By name. Word overlap is measured against the LONGER of the two names, so a short catalogue
+    # name ("נרות יום הולדת") doesn't look like a perfect match for a longer, different product
+    # ("נר זיקוק יום הולדת זהב"). Only a near-certain match is pre-selected; anything less is
+    # offered as a suggestion and the line defaults to "new product" for a person to decide.
+    names = [n for n in (line.get("suggested_name"), line.get("description")) if n]
+    name_toks = [(n.lower(), set(_norm_tokens(n))) for n in names]
+    all_toks = set().union(*[t for _, t in name_toks]) if name_toks else set()
+    scored = []
+    for p in catalog:
+        if not (all_toks & p["tokens"]):
+            continue
+        best = 0.0
+        for n, toks in name_toks:
+            if not toks:
+                continue
+            overlap = len(toks & p["tokens"]) / max(len(toks), len(p["tokens"]))
+            ratio = difflib.SequenceMatcher(None, n, p["name"].lower()).ratio()
+            best = max(best, 0.5 * ratio + 0.5 * overlap)
+        scored.append((best, p))
+    scored.sort(key=lambda x: -x[0])
+    cands = [dict(p, score=round(sc, 2)) for sc, p in scored[:4] if sc >= 0.4]
+    if cands and cands[0]["score"] >= 0.85:
+        return cands[0], "name", cands
+    return None, None, cands
+
+def _public_product(p):
+    return {k: p.get(k) for k in ("id", "name", "price", "cost", "category", "has_image", "score")}
+
+def _build_invoice_lines(extracted, cur):
+    catalog = _load_catalog(cur)
+    by_barcode = {p["barcode"]: p for p in catalog if p["barcode"]}
+    by_sku = {p["sku"]: p for p in catalog if p["sku"]}
+    out = []
+    inv_disc = extracted.get("invoice_discount_percent") or 0
+    for i, ln in enumerate(extracted.get("lines") or []):
+        match, method, cands = _match_line(ln, catalog, by_barcode, by_sku)
+        cost = ln.get("unit_cost")
+        # Double-check the AI's arithmetic against the printed line total: a misread digit shows up here
+        check = None
+        qty, total = ln.get("quantity"), ln.get("line_total")
+        if cost and qty and total and qty > 0:
+            expected = total / qty * (1 - float(inv_disc) / 100)
+            if expected > 0 and abs(cost - expected) / expected > 0.03:
+                check = f"העלות ({cost:.2f}) לא מתאימה לסה\"כ השורה ({total:.2f} ÷ {qty:g} = {expected:.2f}). כדאי לבדוק מול החשבונית."
+        new_price = invoice_ai.site_price_from_cost(cost) if cost and cost > 0 else None
+        out.append({
+            "index": i, "invoice": ln,
+            "match": _public_product(match) if match else None, "match_method": method,
+            "candidates": [_public_product(c) for c in cands],
+            "action": "update" if match else ("create" if cost else "skip"),
+            "cost": cost, "price": new_price, "check": check,
+            "wolt_price": invoice_ai.wolt_price_from_site(new_price) if new_price else None,
+        })
+    return out
+
+def _invoice_kind(data, filename):
+    if data[:5] == b"%PDF-":
+        return "pdf"
+    if _image_kind(data):
+        return "image"
+    return None
+
+@app.post("/api/admin/invoices")
+async def upload_invoice(file: UploadFile = File(...), sess: dict = Depends(require_admin)):
+    """Reads an invoice with AI and returns its lines matched to products. Nothing in the catalogue
+    changes here: the result is saved as a draft and applied only after approval."""
+    import asyncio
+    _simple_rate_limit(_invoice_hits, str(sess["user_id"]), 30, 3600, "יותר מדי חשבוניות בשעה. נסו שוב מאוחר יותר.")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="כדי לקרוא חשבוניות צריך להגדיר ANTHROPIC_API_KEY ב-Railway")
+    data = await file.read(invoice_ai.MAX_INVOICE_BYTES + 1)
+    if len(data) > invoice_ai.MAX_INVOICE_BYTES:
+        raise HTTPException(status_code=400, detail="הקובץ גדול מדי (עד 20MB)")
+    kind = _invoice_kind(data, file.filename)
+    if not kind:
+        raise HTTPException(status_code=400, detail="אפשר להעלות PDF או תמונה (צילום של החשבונית)")
+    try:
+        extracted = await asyncio.to_thread(invoice_ai.extract_invoice, data, kind, _flat_categories(), api_key)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    conn = get_conn(); cur = conn.cursor()
+    lines = _build_invoice_lines(extracted, cur)
+    doc = {"supplier": extracted.get("supplier"), "invoice_number": extracted.get("invoice_number"),
+           "invoice_date": extracted.get("invoice_date"), "invoice_discount_percent": extracted.get("invoice_discount_percent"),
+           "lines": lines}
+    cur.execute("""INSERT INTO invoices (supplier, invoice_number, invoice_date, file_name, data, created_by)
+                   VALUES (%s,%s,%s,%s,%s,%s) RETURNING id;""",
+                (doc["supplier"], doc["invoice_number"], doc["invoice_date"], (file.filename or "")[:200],
+                 json.dumps(doc, ensure_ascii=False), sess["user_id"]))
+    inv_id = cur.fetchone()[0]
+    # Warn if the same supplier invoice number was already applied
+    dup = None
+    if doc["invoice_number"]:
+        cur.execute("SELECT id, applied_at FROM invoices WHERE invoice_number = %s AND COALESCE(supplier,'') = COALESCE(%s,'') "
+                    "AND status = 'applied' AND id <> %s ORDER BY id DESC LIMIT 1;", (doc["invoice_number"], doc["supplier"], inv_id))
+        r = cur.fetchone()
+        if r:
+            dup = {"id": r[0], "applied_at": r[1].isoformat() if r[1] else None}
+    conn.commit(); cur.close(); conn.close()
+    return {"id": inv_id, **doc, "duplicate_of": dup}
+
+@app.get("/api/admin/invoices")
+def list_invoices(sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, supplier, invoice_number, invoice_date, status, created_at, applied_at, summary "
+                "FROM invoices ORDER BY id DESC LIMIT 30;")
+    rows = [{"id": r[0], "supplier": r[1], "invoice_number": r[2], "invoice_date": r[3], "status": r[4],
+             "created_at": r[5].isoformat() if r[5] else None, "applied_at": r[6].isoformat() if r[6] else None,
+             "summary": json.loads(r[7]) if r[7] else None} for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return rows
+
+@app.get("/api/admin/invoices/{invoice_id}")
+def get_invoice(invoice_id: int, sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT data, status FROM invoices WHERE id = %s;", (invoice_id,))
+    r = cur.fetchone(); cur.close(); conn.close()
+    if not r:
+        raise HTTPException(status_code=404, detail="חשבונית לא נמצאה")
+    return {"id": invoice_id, "status": r[1], **json.loads(r[0])}
+
+class InvoiceLineDecision(BaseModel):
+    index: int
+    action: str                      # update | create | skip
+    product_id: Optional[int] = None
+    cost: Optional[float] = None
+    price: Optional[float] = None
+    name: Optional[str] = None
+    category_id: Optional[int] = None
+    description: Optional[str] = None
+
+class InvoiceApplyBody(BaseModel):
+    lines: List[InvoiceLineDecision]
+
+@app.post("/api/admin/invoices/{invoice_id}/apply")
+def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(require_admin)):
+    """Applies the approved decisions in one transaction: all of them, or none."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT data, status FROM invoices WHERE id = %s FOR UPDATE;", (invoice_id,))
+        r = cur.fetchone()
+        if not r:
+            raise HTTPException(status_code=404, detail="חשבונית לא נמצאה")
+        if r[1] == "applied":
+            raise HTTPException(status_code=409, detail="החשבונית הזו כבר נקלטה")
+        doc = json.loads(r[0])
+        src = {ln["index"]: ln["invoice"] for ln in doc["lines"]}
+        updated, created, price_changes, created_ids = 0, 0, [], []
+        for d in body.lines:
+            if d.action == "skip":
+                continue
+            inv = src.get(d.index)
+            if inv is None:
+                raise HTTPException(status_code=400, detail=f"שורה {d.index + 1} לא קיימת בחשבונית")
+            if d.cost is not None and not (0 < d.cost < 100000):
+                raise HTTPException(status_code=400, detail=f"שורה {d.index + 1}: עלות לא תקינה")
+            if d.price is not None and not (0 < d.price < 100000):
+                raise HTTPException(status_code=400, detail=f"שורה {d.index + 1}: מחיר לא תקין")
+            barcode = "".join(ch for ch in str(inv.get("barcode") or "") if ch.isdigit())[:40] or None
+            sku = (str(inv.get("supplier_sku") or "").strip()[:60]) or None
+            if d.action == "update":
+                if not d.product_id:
+                    raise HTTPException(status_code=400, detail=f"שורה {d.index + 1}: לא נבחר מוצר לעדכון")
+                cur.execute("SELECT name, price FROM Products WHERE id = %s FOR UPDATE;", (d.product_id,))
+                p = cur.fetchone()
+                if not p:
+                    raise HTTPException(status_code=400, detail=f"שורה {d.index + 1}: המוצר לא נמצא")
+                cur.execute("""UPDATE Products SET
+                                   cost_price = COALESCE(%s, cost_price),
+                                   cost_updated_at = CASE WHEN %s IS NULL THEN cost_updated_at ELSE NOW() END,
+                                   price = COALESCE(%s, price),
+                                   barcode = COALESCE(barcode, %s), supplier_sku = COALESCE(supplier_sku, %s)
+                               WHERE id = %s;""", (d.cost, d.cost, d.price, barcode, sku, d.product_id))
+                updated += 1
+                if d.price is not None and round(float(p[1]), 2) != round(d.price, 2):
+                    price_changes.append({"id": d.product_id, "name": p[0], "from": float(p[1]), "to": d.price})
+            elif d.action == "create":
+                name = (d.name or inv.get("suggested_name") or "").strip()[:500]
+                if not name or d.price is None:
+                    raise HTTPException(status_code=400, detail=f"שורה {d.index + 1}: למוצר חדש צריך שם ומחיר")
+                if not d.category_id:
+                    raise HTTPException(status_code=400, detail=f"שורה {d.index + 1} ({name}): צריך לבחור קטגוריה, אחרת המוצר לא יוצג באתר")
+                cur.execute("""INSERT INTO Products (name, category_id, price, stock_quantity, notes, cost_price, cost_updated_at, barcode, supplier_sku)
+                               VALUES (%s,%s,%s,100,%s,%s,NOW(),%s,%s) RETURNING id;""",
+                            (name, d.category_id, d.price, (d.description or "").strip()[:2000] or None, d.cost, barcode, sku))
+                pid = cur.fetchone()[0]
+                cur.execute("INSERT INTO product_categories (product_id, category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING;", (pid, d.category_id))
+                created += 1; created_ids.append({"id": pid, "name": name})
+            else:
+                raise HTTPException(status_code=400, detail="פעולה לא מוכרת")
+        summary = {"updated": updated, "created": created, "price_changes": len(price_changes)}
+        cur.execute("UPDATE invoices SET status = 'applied', applied_by = %s, applied_at = NOW(), summary = %s WHERE id = %s;",
+                    (sess["user_id"], json.dumps(summary), invoice_id))
+        conn.commit()
+    except Exception:
+        conn.rollback(); raise
+    finally:
+        cur.close(); conn.close()
+    _audit(sess, "invoice_apply", "invoice", invoice_id, {**summary, "supplier": doc.get("supplier"), "number": doc.get("invoice_number")})
+    return {"ok": True, **summary, "price_change_list": price_changes, "created_products": created_ids}
+
+
 # --- Wolt API (OAuth connection + order webhook) ---
-# Flow (per Wolt): the shop clicks "connect" -> Wolt's authorization page -> Wolt redirects back to
-# /api/wolt/oauth/callback with a one-time code -> we exchange it for an access token (~1 hour)
-# and a refresh token (~1 month, single use). Orders arrive as a small "ping" on /api/wolt/webhook/orders
-# with the order id; the full order is then fetched from Wolt's API.
-# The URLs of Wolt's own endpoints come from their documentation, so they are configured by env vars.
+# Follows Wolt's Marketplace API documentation (self-service integration onboarding, "SSIO"):
+#   1. The shop opens our activation link -> Wolt -> picks the venue and approves.
+#   2. Wolt redirects to /api/wolt/oauth/callback with a one-time code (valid 1 hour).
+#   3. We exchange it for an access token (1 hour) and a refresh token (30 days, SINGLE USE, rotates).
+#      The Wolt venue id is inside the access token (JWT claim integration.venue_id).
+#   4. Orders arrive as small notifications on /api/wolt/webhook/orders, signed with HMAC-SHA256
+#      of the raw body (header WOLT-SIGNATURE, hex) using the webhook secret we gave Wolt.
+WOLT_ENV = os.environ.get("WOLT_ENV", "production").strip().lower()   # "development" for Wolt's sandbox
+_WOLT_HOSTS = {
+    "development": {"integrate": "https://developer.development.dev.woltapi.com/integrate",
+                    "token": "https://integrations-authentication-service.development.dev.woltapi.com/oauth2/token",
+                    "api": "https://pos-integration-service.development.dev.woltapi.com"},
+    "production": {"integrate": "https://developer.wolt.com/integrate",
+                   "token": "https://integrations-authentication-service.wolt.com/oauth2/token",
+                   "api": "https://pos-integration-service.wolt.com"},
+}
+_WOLT = _WOLT_HOSTS.get(WOLT_ENV, _WOLT_HOSTS["production"])
 WOLT_CLIENT_ID = os.environ.get("WOLT_CLIENT_ID", "")
 WOLT_CLIENT_SECRET = os.environ.get("WOLT_CLIENT_SECRET", "")
-WOLT_AUTHORIZE_URL = os.environ.get("WOLT_AUTHORIZE_URL", "")
-WOLT_TOKEN_URL = os.environ.get("WOLT_TOKEN_URL", "")
-WOLT_SCOPE = os.environ.get("WOLT_SCOPE", "")
+WOLT_TOKEN_URL = os.environ.get("WOLT_TOKEN_URL", _WOLT["token"])          # override only for tests
+WOLT_INTEGRATE_URL = os.environ.get("WOLT_INTEGRATE_URL", _WOLT["integrate"])
+WOLT_API_BASE = os.environ.get("WOLT_API_BASE", _WOLT["api"])
 WOLT_WEBHOOK_SECRET = os.environ.get("WOLT_WEBHOOK_SECRET", "")
 WOLT_REDIRECT_PATH = "/api/wolt/oauth/callback"
+WOLT_REFRESH_EVERY_DAYS = 7      # refresh tokens die after 30 idle days; refreshing weekly keeps them alive
 _wolt_webhook_hits = defaultdict(list)
+_wolt_refresh_lock = threading.Lock()
 
 def _wolt_redirect_uri():
     return SITE_URL.rstrip("/") + WOLT_REDIRECT_PATH
 
 def _wolt_oauth_configured():
-    return bool(WOLT_CLIENT_ID and WOLT_CLIENT_SECRET and WOLT_AUTHORIZE_URL and WOLT_TOKEN_URL)
+    return bool(WOLT_CLIENT_ID and WOLT_CLIENT_SECRET)
+
+class WoltTokenRejected(Exception):
+    """Wolt answered the token request with 4xx: the code/refresh token is dead, the venue must reconnect."""
 
 def _wolt_token_request(fields):
-    """POST to Wolt's token endpoint (standard OAuth 2.0 form body). Returns the JSON reply."""
-    import urllib.request, urllib.error, urllib.parse
-    data = urllib.parse.urlencode({**fields, "client_id": WOLT_CLIENT_ID, "client_secret": WOLT_CLIENT_SECRET}).encode()
-    req = urllib.request.Request(WOLT_TOKEN_URL, data=data, headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+    """POST to Wolt's token endpoint: form body + HTTP Basic auth with client id and secret."""
+    import urllib.request, urllib.error, urllib.parse, base64
+    basic = base64.b64encode(f"{WOLT_CLIENT_ID}:{WOLT_CLIENT_SECRET}".encode()).decode()   # no trailing newline
+    req = urllib.request.Request(WOLT_TOKEN_URL, data=urllib.parse.urlencode(fields).encode(),
+                                 headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
+                                          "Authorization": f"Basic {basic}"})
     try:
         return json.loads(urllib.request.urlopen(req, timeout=20).read())
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Wolt {e.code}: {e.read().decode('utf-8', 'replace')[:200]}")
+        body = e.read().decode("utf-8", "replace")[:300]
+        print(f"[WOLT] token endpoint {e.code}: {body}")       # Wolt documents no error codes: the body is the only clue
+        if 400 <= e.code < 500:
+            raise WoltTokenRejected(f"{e.code}: {body}")
+        raise RuntimeError(f"Wolt {e.code}")
+
+def _wolt_jwt_claims(token):
+    """Reads the payload of Wolt's access token (we received it directly from Wolt over HTTPS)."""
+    import base64
+    try:
+        part = token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    except Exception:
+        return {}
 
 def _wolt_save_tokens(cur, tok, venue_id=None, extra=None):
     expires = datetime.now(timezone.utc) + timedelta(seconds=int(tok.get("expires_in") or 3600))
-    venue = venue_id or tok.get("venue_id") or "default"
-    cur.execute("""INSERT INTO wolt_connection (venue_id, access_token, refresh_token, expires_at, extra)
-                   VALUES (%s,%s,%s,%s,%s)
+    venue = venue_id or (_wolt_jwt_claims(tok.get("access_token", "")).get("integration") or {}).get("venue_id") or "default"
+    cur.execute("""INSERT INTO wolt_connection (venue_id, access_token, refresh_token, expires_at, extra, status, last_error, refreshed_at)
+                   VALUES (%s,%s,%s,%s,%s,'active',NULL,NOW())
                    ON CONFLICT (venue_id) DO UPDATE SET access_token = EXCLUDED.access_token,
-                       refresh_token = COALESCE(EXCLUDED.refresh_token, wolt_connection.refresh_token),
-                       expires_at = EXCLUDED.expires_at, extra = COALESCE(EXCLUDED.extra, wolt_connection.extra),
-                       updated_at = NOW();""",
+                       refresh_token = EXCLUDED.refresh_token, expires_at = EXCLUDED.expires_at,
+                       extra = COALESCE(EXCLUDED.extra, wolt_connection.extra), status = 'active', last_error = NULL,
+                       refreshed_at = NOW(), updated_at = NOW();""",
                 (venue, tok.get("access_token"), tok.get("refresh_token"), expires, json.dumps(extra) if extra else None))
+    return venue
 
-def wolt_access_token(venue_id="default"):
-    """A valid access token, refreshed when it is about to expire. The refresh token is single use,
-    so the row is locked while refreshing: two parallel requests never spend the same refresh token."""
+def _wolt_refresh(cur, conn, venue_id, refresh_token):
+    """One refresh exchange, following Wolt's rules: the old refresh token is consumed by Wolt as soon as it
+    sees the request, and re-sending a consumed token REVOKES the new pair. So:
+      - 4xx: the token is dead -> mark the venue for reconnection, never retry.
+      - network error / 5xx: unknown whether Wolt processed it -> retry once after a pause, then stop.
+    The new pair is committed before anything else uses it."""
+    import time as _t
+    for attempt in (1, 2):
+        try:
+            tok = _wolt_token_request({"grant_type": "refresh_token", "refresh_token": refresh_token})
+            _wolt_save_tokens(cur, tok, venue_id)
+            conn.commit()
+            return tok["access_token"]
+        except WoltTokenRejected as e:
+            cur.execute("UPDATE wolt_connection SET status = 'reconnect', last_error = %s, updated_at = NOW() WHERE venue_id = %s;",
+                        (str(e)[:300], venue_id))
+            conn.commit()
+            raise RuntimeError("החיבור לוולט פג. צריך לחבר מחדש מהפאנל (מוצרים ← חיבור לוולט).")
+        except Exception as e:
+            if attempt == 2:
+                cur.execute("UPDATE wolt_connection SET last_error = %s, updated_at = NOW() WHERE venue_id = %s;", (str(e)[:300], venue_id))
+                conn.commit()
+                raise RuntimeError("וולט לא ענו לחידוש החיבור. ננסה שוב מאוחר יותר.")
+            _t.sleep(3)
+
+def wolt_access_token(venue_id):
+    """A valid access token for the venue, refreshed when it is about to expire.
+    Refreshes are serialised (process lock + row lock) so a refresh token is never sent twice."""
+    with _wolt_refresh_lock:
+        conn = get_conn(); cur = conn.cursor()
+        try:
+            cur.execute("SELECT access_token, refresh_token, expires_at, status FROM wolt_connection WHERE venue_id = %s FOR UPDATE;", (venue_id,))
+            row = cur.fetchone()
+            if not row:
+                raise RuntimeError("החנות עוד לא מחוברת לוולט")
+            access, refresh, expires, status = row
+            if status != "active":
+                raise RuntimeError("החיבור לוולט פג. צריך לחבר מחדש מהפאנל.")
+            if access and expires and expires - datetime.now(timezone.utc) > timedelta(minutes=5):
+                return access
+            return _wolt_refresh(cur, conn, venue_id, refresh)
+        finally:
+            conn.rollback(); cur.close(); conn.close()
+
+def run_wolt_token_maintenance():
+    """Weekly refresh of every connected venue, so a quiet venue never reaches the 30-day expiry."""
+    if not _wolt_oauth_configured():
+        return
     conn = get_conn(); cur = conn.cursor()
-    try:
-        cur.execute("SELECT access_token, refresh_token, expires_at FROM wolt_connection WHERE venue_id = %s FOR UPDATE;", (venue_id,))
-        row = cur.fetchone()
-        if not row:
-            raise RuntimeError("החנות עוד לא מחוברת לוולט")
-        access, refresh, expires = row
-        if access and expires and expires - datetime.now(timezone.utc) > timedelta(minutes=5):
-            return access
-        tok = _wolt_token_request({"grant_type": "refresh_token", "refresh_token": refresh})
-        _wolt_save_tokens(cur, tok, venue_id)
-        conn.commit()
-        return tok["access_token"]
-    finally:
-        conn.rollback(); cur.close(); conn.close()
+    cur.execute("SELECT venue_id FROM wolt_connection WHERE status = 'active' AND "
+                "COALESCE(refreshed_at, connected_at) < NOW() - make_interval(days => %s);", (WOLT_REFRESH_EVERY_DAYS,))
+    venues = [r[0] for r in cur.fetchall()]
+    cur.close(); conn.close()
+    for v in venues:
+        with _wolt_refresh_lock:
+            conn = get_conn(); cur = conn.cursor()
+            try:
+                cur.execute("SELECT refresh_token, status FROM wolt_connection WHERE venue_id = %s FOR UPDATE;", (v,))
+                r = cur.fetchone()
+                if r and r[1] == "active":
+                    _wolt_refresh(cur, conn, v, r[0])
+                    print(f"[WOLT] scheduled refresh ok for venue {v}")
+            except Exception as e:
+                print(f"[WOLT] scheduled refresh failed for venue {v}: {e}")
+            finally:
+                conn.rollback(); cur.close(); conn.close()
+
+async def _wolt_maintenance_loop():
+    import asyncio
+    await asyncio.sleep(180)
+    while True:
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, run_wolt_token_maintenance)
+        except Exception as e:
+            print(f"[WOLT] maintenance error: {e}")
+        await asyncio.sleep(6 * 3600)
 
 @app.get("/api/admin/wolt/status")
 def wolt_status(sess: dict = Depends(require_admin)):
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT venue_id, expires_at, connected_at, updated_at FROM wolt_connection ORDER BY id;")
+    cur.execute("SELECT venue_id, expires_at, connected_at, status, last_error, refreshed_at FROM wolt_connection ORDER BY id;")
     venues = [{"venue_id": r[0], "token_expires": r[1].isoformat() if r[1] else None,
-               "connected_at": r[2].isoformat() if r[2] else None} for r in cur.fetchall()]
+               "connected_at": r[2].isoformat() if r[2] else None, "status": r[3], "last_error": r[4],
+               "refreshed_at": r[5].isoformat() if r[5] else None} for r in cur.fetchall()]
     cur.execute("SELECT COUNT(*), MAX(received_at) FROM wolt_events;")
     n, last = cur.fetchone()
     cur.close(); conn.close()
-    return {"configured": _wolt_oauth_configured(), "venues": venues,
+    return {"configured": _wolt_oauth_configured(), "environment": WOLT_ENV, "venues": venues,
             "redirect_url": _wolt_redirect_uri(), "webhook_url": SITE_URL.rstrip("/") + "/api/wolt/webhook/orders",
             "webhook_secret_set": bool(WOLT_WEBHOOK_SECRET), "events": n, "last_event": last.isoformat() if last else None}
 
 @app.post("/api/admin/wolt/connect")
 def wolt_connect(sess: dict = Depends(require_admin)):
-    """Builds the link to Wolt's authorization page. 'state' ties the answer to this request (CSRF protection)."""
+    """Builds the activation link. 'state' is random, single use and checked on the way back (CSRF protection)."""
     import urllib.parse
     if not _wolt_oauth_configured():
-        raise HTTPException(status_code=400, detail="חסרים פרטי החיבור מוולט (WOLT_CLIENT_ID וכו') ב-Railway")
+        raise HTTPException(status_code=400, detail="חסרים WOLT_CLIENT_ID ו-WOLT_CLIENT_SECRET ב-Railway")
     state = secrets.token_urlsafe(24)
     conn = get_conn(); cur = conn.cursor()
     _setting_set(cur, "wolt_oauth_state", json.dumps({"h": hashlib.sha256(state.encode()).hexdigest(),
                                                       "t": time_module.time(), "by": sess["user_id"]}))
     conn.commit(); cur.close(); conn.close()
-    q = {"response_type": "code", "client_id": WOLT_CLIENT_ID, "redirect_uri": _wolt_redirect_uri(), "state": state}
-    if WOLT_SCOPE:
-        q["scope"] = WOLT_SCOPE
-    sep = "&" if "?" in WOLT_AUTHORIZE_URL else "?"
-    return {"url": WOLT_AUTHORIZE_URL + sep + urllib.parse.urlencode(q)}
+    contact = _get_contact()
+    q = {"client_id": WOLT_CLIENT_ID, "redirect_url": _wolt_redirect_uri(), "state": state,
+         "venue_name": SITE_NAME, "venue_address": contact.get("address") or ""}
+    return {"url": WOLT_INTEGRATE_URL + "?" + urllib.parse.urlencode(q)}
 
 def _wolt_result_page(ok, text):
     color = "#2e7d32" if ok else "#c62828"
@@ -4697,44 +5183,39 @@ def wolt_oauth_callback(request: Request, code: str = "", state: str = "", error
     try:
         saved = json.loads(_setting_get(cur, "wolt_oauth_state") or "{}")
         good_state = (state and saved.get("h") and hmac.compare_digest(saved["h"], hashlib.sha256(state.encode()).hexdigest())
-                      and time_module.time() - saved.get("t", 0) < 900)
+                      and time_module.time() - saved.get("t", 0) < 3600)
         if not good_state or not code:
             return _wolt_result_page(False, "הקישור לא תקף או שפג תוקפו. מתחילים שוב מהכפתור בפאנל הניהול.")
         _setting_set(cur, "wolt_oauth_state", "")          # the state works once
         conn.commit()
         try:
+            # Exchange straight away: the code is single use and expires after an hour
             tok = _wolt_token_request({"grant_type": "authorization_code", "code": code, "redirect_uri": _wolt_redirect_uri()})
         except Exception as e:
-            print(f"[WOLT] token exchange failed: {e}")
-            return _wolt_result_page(False, "וולט לא אישרו את החיבור. נסו שוב בעוד כמה דקות.")
+            print(f"[WOLT] code exchange failed: {e}")
+            return _wolt_result_page(False, "וולט לא אישרו את החיבור. נסו שוב מהכפתור בפאנל.")
         extra = {k: v for k, v in request.query_params.items() if k not in ("code", "state")}
-        venue = request.query_params.get("venue_id") or tok.get("venue_id")
-        _wolt_save_tokens(cur, tok, venue, extra or None)
+        venue = _wolt_save_tokens(cur, tok, None, extra or None)
         conn.commit()
-        _audit({"user_id": saved.get("by"), "name": None}, "wolt_connected", "wolt", None, {"venue": venue or "default"})
+        _audit({"user_id": saved.get("by"), "name": None}, "wolt_connected", "wolt", None, {"venue": venue})
         return _wolt_result_page(True, "החנות חוברה לוולט בהצלחה")
     finally:
         cur.close(); conn.close()
 
 def _wolt_signature_ok(request, raw):
-    """Wolt may sign webhook calls with the secret we give them. Until their docs confirm the exact header,
-    accept an HMAC-SHA256 of the body (hex or base64, any header) or the secret itself in a header."""
+    """WOLT-SIGNATURE = hex HMAC-SHA256 of the exact raw body, keyed with our webhook secret."""
     if not WOLT_WEBHOOK_SECRET:
-        return None                                  # no secret configured: accepted, marked unverified
-    import base64
-    mac = hmac.new(WOLT_WEBHOOK_SECRET.encode(), raw, hashlib.sha256).digest()
-    wanted = {mac.hex(), "sha256=" + mac.hex(), base64.b64encode(mac).decode(), WOLT_WEBHOOK_SECRET}
-    for name, val in request.headers.items():
-        if name.lower() in ("content-type", "content-length", "host", "user-agent", "accept", "accept-encoding", "connection"):
-            continue
-        for part in [val.strip()] + [p.strip() for p in val.replace(";", ",").split(",")]:
-            if any(hmac.compare_digest(part, w) for w in wanted):
-                return True
-    return False
+        return None                                  # no secret configured: accepted, stored as unverified
+    sig = (request.headers.get("wolt-signature") or "").strip().lower()
+    if not sig:
+        return False
+    expected = hmac.new(WOLT_WEBHOOK_SECRET.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
 
 @app.post("/api/wolt/webhook/orders")
 async def wolt_order_webhook(request: Request):
-    """Order notifications from Wolt (statuses chosen with Wolt). Stored right away and answered fast."""
+    """Order notifications from Wolt. Verified, stored, answered 200 right away (Wolt retries only
+    3 times in ~15 seconds, then the notification is lost). Duplicates are dropped by notification id."""
     ip = request.client.host if request.client else "?"
     _simple_rate_limit(_wolt_webhook_hits, ip, 600, 60, "Too many requests")
     raw = await request.body()
@@ -4747,28 +5228,22 @@ async def wolt_order_webhook(request: Request):
         body = json.loads(raw or b"{}")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
-    def pick(d, *keys):
-        for k in keys:
-            cur_v = d
-            for part in k.split("."):
-                cur_v = cur_v.get(part) if isinstance(cur_v, dict) else None
-            if cur_v not in (None, ""):
-                return str(cur_v)[:120]
-        return None
-    order_id = pick(body, "order.id", "order_id", "id", "resource_id", "body.order.id")
-    status = pick(body, "order.status", "status", "type", "event", "body.order.status")
-    venue = pick(body, "order.venue_id", "venue_id", "venue.id", "body.order.venue_id")
+    order = body.get("order") if isinstance(body.get("order"), dict) else {}
+    s = lambda v: str(v)[:120] if v not in (None, "") else None
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("INSERT INTO wolt_events (order_id, status, venue_id, payload, verified) VALUES (%s,%s,%s,%s,%s);",
-                (order_id, status, venue, raw.decode("utf-8", "replace")[:100_000], bool(verified)))
+    cur.execute("""INSERT INTO wolt_events (notification_id, event_type, order_id, status, venue_id, payload, verified)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (notification_id) DO NOTHING;""",
+                (s(body.get("id")), s(body.get("type")), s(order.get("id")), s(order.get("status")), s(order.get("venue_id")),
+                 raw.decode("utf-8", "replace")[:100_000], bool(verified)))
     conn.commit(); cur.close(); conn.close()
     return {"ok": True}
 
 @app.get("/api/admin/wolt/events")
 def wolt_events(limit: int = 50, sess: dict = Depends(require_admin)):
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, order_id, status, venue_id, verified, received_at FROM wolt_events ORDER BY id DESC LIMIT %s;", (max(1, min(limit, 200)),))
-    rows = [{"id": r[0], "order_id": r[1], "status": r[2], "venue_id": r[3], "verified": r[4], "at": r[5].isoformat()} for r in cur.fetchall()]
+    cur.execute("SELECT id, event_type, order_id, status, venue_id, verified, received_at FROM wolt_events ORDER BY id DESC LIMIT %s;", (max(1, min(limit, 200)),))
+    rows = [{"id": r[0], "type": r[1], "order_id": r[2], "status": r[3], "venue_id": r[4], "verified": r[5], "at": r[6].isoformat()}
+            for r in cur.fetchall()]
     cur.close(); conn.close()
     return rows
 

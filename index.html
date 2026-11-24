@@ -976,6 +976,9 @@
                 <select id="add-p-cat-2" class="cat-combo"><option value="">ללא</option></select>
                 <label>תמונה (העלאת קובץ)</label>
                 <input type="file" id="add-p-file" accept="image/*">
+                <label style="display:flex; gap:8px; align-items:center; font-weight:400; font-size:0.9em; margin:6px 0 0;">
+                    <input type="checkbox" id="add-p-studio" checked style="width:auto; margin:0;"> ✨ סידור אוטומטי של התמונה (רקע לבן, מרכוז ויישור)
+                </label>
                 <div style="display:flex; gap:10px; margin-top:5px;">
                     <div style="flex:1;"><label>משקל (גרם)</label><input type="number" id="add-p-weight"></div>
                     <div style="flex:1;"><label>יחידות</label><input type="number" id="add-p-units"></div>
@@ -1397,9 +1400,10 @@
             document.getElementById('add-sale-opts').style.display = 'none';
             document.getElementById('add-product-modal').classList.add('open');
         };
-        async function uploadImage(file) {
+        // studio = true: the server cleans the photo up (white background, centred, straightened)
+        async function uploadImage(file, studio) {
             const fd = new FormData(); fd.append('file', file);
-            const res = await fetch(`${API}/api/admin/upload-image`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token() }, body: fd });
+            const res = await fetch(`${API}/api/admin/upload-image${studio ? '?studio=1' : ''}`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token() }, body: fd });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(d.detail || 'שגיאה בהעלאת התמונה');
             return d.url;
@@ -1414,7 +1418,17 @@
             btn.textContent = 'שומר...'; btn.disabled = true;
             try {
                 const fileInput = document.getElementById('add-p-file');
-                const imageUrl = fileInput.files.length ? await uploadImage(fileInput.files[0]) : null;
+                let imageUrl = null;
+                if (fileInput.files.length) {
+                    const studio = document.getElementById('add-p-studio').checked;
+                    if (studio) btn.textContent = '✨ מסדר את התמונה...';
+                    try { imageUrl = await uploadImage(fileInput.files[0], studio); }
+                    catch (err) {
+                        if (!studio || !confirm(err.message + '\n\nלהעלות את התמונה המקורית במקום?')) throw err;
+                        imageUrl = await uploadImage(fileInput.files[0], false);
+                    }
+                    btn.textContent = 'שומר...';
+                }
                 const cat1 = document.getElementById('add-p-cat-1').value, cat2 = document.getElementById('add-p-cat-2').value;
                 const category_ids = []; if (cat1) category_ids.push(parseInt(cat1)); if (cat2 && cat2 !== cat1) category_ids.push(parseInt(cat2));
                 const weight = document.getElementById('add-p-weight').value, units = document.getElementById('add-p-units').value;
@@ -1762,9 +1776,34 @@
                 imgBtn.type = 'button'; imgBtn.className = 'ef-img-btn'; imgBtn.textContent = '📷 החלפת תמונה';
                 imgBtn.onclick = () => document.getElementById('edit-detail-file').click();
                 wrap.appendChild(imgBtn);
-                document.getElementById('edit-detail-file').onchange = e => {
+                // Photo suggestions: by barcode from an open database, or from a pasted link. Approve with one click.
+                const sugBtn = document.createElement('button');
+                sugBtn.type = 'button'; sugBtn.className = 'ef-img-btn'; sugBtn.textContent = '🔍 הצעות תמונה';
+                sugBtn.onclick = () => openImageSuggestions(p.id, img, imgBtn);
+                wrap.appendChild(sugBtn);
+                // A new photo is cleaned up right away so the result can be checked before saving
+                editPendingImage = null; editPendingCredit = null;
+                document.getElementById('edit-detail-file').onchange = async e => {
                     const f = e.target.files[0]; if (!f) return;
-                    img.src = URL.createObjectURL(f); imgBtn.textContent = '📷 תמונה חדשה נבחרה (תישמר בלחיצה על שמירה)';
+                    wrap.querySelectorAll('.ef-img-orig').forEach(x => x.remove());
+                    img.src = URL.createObjectURL(f);
+                    imgBtn.textContent = '✨ מסדר את התמונה...'; imgBtn.disabled = true;
+                    try {
+                        editPendingImage = await uploadImage(f, true); editPendingCredit = null;
+                        img.src = editPendingImage;
+                        imgBtn.textContent = '✓ התמונה סודרה (תישמר בלחיצה על שמירה) · 📷 החלפה';
+                        const orig = document.createElement('button');
+                        orig.type = 'button'; orig.className = 'ef-img-btn ef-img-orig';
+                        orig.textContent = 'להשתמש בתמונה המקורית';
+                        orig.onclick = () => { editPendingImage = null; img.src = URL.createObjectURL(f); orig.remove();
+                            imgBtn.textContent = '📷 תמונה מקורית נבחרה (תישמר בלחיצה על שמירה)'; };
+                        wrap.appendChild(orig);
+                    } catch (err) {
+                        editPendingImage = null;
+                        imgBtn.textContent = '📷 תמונה מקורית נבחרה (הסידור האוטומטי לא הצליח)';
+                        alert(err.message);
+                    }
+                    imgBtn.disabled = false;
                 };
             } else {
                 document.querySelectorAll('#detail-modal .ef-img-btn').forEach(x => x.remove());
@@ -1777,6 +1816,7 @@
                 if (p.weight_grams) meta += `<li><span>משקל</span><span>${esc(p.weight_grams)} גרם</span></li>`;
                 if (p.units_per_package) meta += `<li><span>יחידות באריזה</span><span>${esc(p.units_per_package)}</span></li>`;
                 if (p.notes) meta += `<li style="flex-direction:column; align-items:start; gap:4px;"><span>פרטים</span><span style="color:var(--ink); white-space:pre-line;">${esc(p.notes)}</span></li>`;
+                if (p.image_credit) meta += `<li style="font-size:.75em; color:var(--muted);"><span>${esc(p.image_credit)}</span></li>`;
                 document.getElementById('detail-meta').innerHTML = meta;
                 document.getElementById('detail-action').innerHTML = `<div id="detail-buy"></div><div class="detail-cta">
                     <a class="btn btn-ghost" target="_blank" rel="noopener" href="${esc(waLink('שלום, יש לי שאלה על: ' + p.name))}">שאלה בוואטסאפ</a>
@@ -1785,6 +1825,58 @@
             }
         }
 
+        let editPendingImage = null;   // url of an already-processed photo waiting for "save"
+        let editPendingCredit = null;  // credit line required by the photo's licence (open databases)
+        async function openImageSuggestions(productId, img, imgBtn) {
+            let panel = document.getElementById('img-sug');
+            if (panel) { panel.remove(); return; }
+            panel = document.createElement('div');
+            panel.id = 'img-sug';
+            panel.style.cssText = 'border:1.5px dashed var(--brand-2); border-radius:14px; padding:10px; margin:8px 0; background:#FFF6F8;';
+            panel.innerHTML = `<div class="sug-list" style="font-size:.9em; color:var(--muted);">מחפש תמונות לפי הברקוד...</div>
+                <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
+                  <input class="sug-url" type="url" dir="ltr" placeholder="או הדבקת קישור לתמונה (למשל מאתר הספק)" style="flex:1; min-width:180px; margin:0;">
+                  <button type="button" class="btn btn-ghost sug-go" style="padding:6px 12px;">שימוש בקישור</button>
+                </div>
+                <label style="display:flex; gap:6px; align-items:center; font-size:.85em; margin-top:6px;"><input type="checkbox" class="sug-studio" checked style="width:auto; margin:0;"> ✨ לסדר את התמונה (רקע לבן ומרכוז)</label>
+                <p class="sug-msg" style="font-size:.85em; margin:6px 0 0; color:#c62828;"></p>`;
+            document.getElementById('edit-form').prepend(panel);
+            const msg = panel.querySelector('.sug-msg');
+            const choose = async (url, credit) => {
+                msg.style.color = 'var(--muted)'; msg.textContent = '✨ מוריד ומסדר את התמונה...';
+                try {
+                    const res = await fetch(`${API}/api/admin/image-from-url`, { method: 'POST', headers: authHeaders(),
+                        body: JSON.stringify({ url, studio: panel.querySelector('.sug-studio').checked }) });
+                    const d = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                    editPendingImage = d.url; editPendingCredit = credit || null; img.src = d.url;
+                    imgBtn.textContent = '✓ תמונה נבחרה (תישמר בלחיצה על שמירה) · 📷 החלפה';
+                    panel.remove();
+                } catch (e) { msg.style.color = '#c62828'; msg.textContent = e.message; }
+            };
+            panel.querySelector('.sug-go').onclick = () => {
+                const u = panel.querySelector('.sug-url').value.trim();
+                if (!/^https?:\/\//.test(u)) { msg.textContent = 'צריך קישור שמתחיל ב-https://'; return; }
+                choose(u, null);
+            };
+            try {
+                const res = await fetch(`${API}/api/admin/products/${productId}/image-suggestions`, { headers: authHeaders() });
+                const d = await res.json();
+                const list = panel.querySelector('.sug-list');
+                if (!d.suggestions || !d.suggestions.length) { list.textContent = d.reason || 'לא נמצאו הצעות.'; return; }
+                list.innerHTML = '<div style="margin-bottom:6px;">נמצאו תמונות לפי הברקוד. לחיצה על "בחירה" מורידה ומסדרת אותה:</div><div class="sug-grid" style="display:flex; gap:8px; flex-wrap:wrap;"></div>';
+                d.suggestions.forEach(sg => {
+                    const card = document.createElement('div');
+                    card.style.cssText = 'width:120px; text-align:center; background:#fff; border-radius:10px; padding:6px; border:1px solid var(--line, #eee);';
+                    const im = document.createElement('img'); im.src = sg.url; im.alt = sg.title || ''; im.loading = 'lazy';
+                    im.style.cssText = 'width:100%; height:100px; object-fit:contain;';
+                    const cap = document.createElement('div'); cap.style.cssText = 'font-size:.7em; color:var(--muted); margin:2px 0;'; cap.textContent = sg.source;
+                    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.style.cssText = 'padding:4px 10px; font-size:.85em;';
+                    b.textContent = 'בחירה'; b.onclick = () => choose(sg.url, sg.credit);
+                    card.append(im, cap, b); list.querySelector('.sug-grid').appendChild(card);
+                });
+            } catch (e) { panel.querySelector('.sug-list').textContent = 'לא הצלחתי לחפש הצעות.'; }
+        }
         function openProductDetail(id, fromRoute) {
             const local = (currentFilteredProducts || []).find(x => x.id === id) || allProducts.find(x => x.id === id);
             if (local) fillDetail(local);
@@ -1832,7 +1924,8 @@
                     is_on_sale: v('edit-detail-sale') === '1', sale_label: v('edit-detail-sale-label').trim() || null,
                     stock_quantity: document.getElementById('edit-detail-stock').checked ? 100 : 0 };
                 const f = document.getElementById('edit-detail-file');
-                if (f.files.length) body.image_url = await uploadImage(f.files[0]);
+                if (editPendingImage) { body.image_url = editPendingImage; body.image_credit = editPendingCredit; }
+                else if (f.files.length) { body.image_url = await uploadImage(f.files[0], false); body.image_credit = null; }
                 const res = await fetch(`${API}/api/admin/products/${id}`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify(body) });
                 if (!res.ok) throw new Error('שגיאה בעדכון המוצר');
                 closeDetail();
