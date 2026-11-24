@@ -291,6 +291,23 @@
 
             <div class="tab-page" id="tab-page-products">
 
+                <!-- Supplier invoice import -->
+                <div class="card" id="inv-card">
+                    <h2>🧾 קליטת חשבונית מספק</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        מעלים חשבונית (PDF, סריקה או צילום מהטלפון). ה-AI קורא את השורות, מוצא כל מוצר באתר, ומציע מחיר:
+                        <b>מחיר הספק × 2 + 1.90</b>, מעוגל למעלה ל-.00 / .50 / .90. ההנחות שהספק נותן לא יורדות מהחישוב. מוצר שלא קיים מוצע כמוצר חדש.
+                        <b>שום דבר לא משתנה עד שמאשרים.</b>
+                    </p>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                        <input type="file" id="inv-file" accept="application/pdf,image/*" style="max-width:100%;">
+                        <button class="btn" type="button" id="inv-read" onclick="readInvoice()">קריאת החשבונית</button>
+                    </div>
+                    <p id="inv-msg" style="font-weight:bold; margin:8px 0 0;"></p>
+                    <div id="inv-review"></div>
+                    <details style="margin-top:10px; font-size:0.9em;"><summary style="cursor:pointer;">חשבוניות אחרונות</summary><div id="inv-history">טוען...</div></details>
+                </div>
+
                 <!-- Wolt API connection -->
                 <div class="card" id="wolt-api-card">
                     <h2>🔗 חיבור ישיר לוולט (API)</h2>
@@ -768,7 +785,7 @@
             
             document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
-            if (name === 'products') loadWoltApi();
+            if (name === 'products') { loadWoltApi(); loadInvoiceHistory(); }
             document.getElementById('tab-page-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-page-faq').classList.toggle('active', name === 'faq');
             document.getElementById('tab-btn-reviews').classList.toggle('active', name === 'reviews');
@@ -1535,7 +1552,7 @@
 
         // ===================== Staff and users =====================
         const ROLE_LABELS = { admin: 'מנהל', employee: 'עובד', customer: 'לקוח' };
-        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט', '2fa_enabled': 'הפעלת אימות דו-שלבי', '2fa_disabled': 'כיבוי אימות דו-שלבי', '2fa_backup_code_used': 'כניסה עם קוד גיבוי', password_reset_by_email: 'איפוס סיסמה במייל', backup_download: 'הורדת גיבוי' };
+        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט', '2fa_enabled': 'הפעלת אימות דו-שלבי', '2fa_disabled': 'כיבוי אימות דו-שלבי', '2fa_backup_code_used': 'כניסה עם קוד גיבוי', password_reset_by_email: 'איפוס סיסמה במייל', backup_download: 'הורדת גיבוי', invoice_apply: 'קליטת חשבונית' };
 
         async function loadStaffTab() {
             const list = document.getElementById('st-list');
@@ -1664,6 +1681,166 @@
             } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
         };
 
+        // ----- Supplier invoices -----
+        // Same rules as the server (invoice_ai.py): cost x 2 + 1.90, then round UP to .00 / .50 / .90; Wolt = site + 30%
+        function niceRoundUp(v) {
+            v = Math.round(v * 10000) / 10000; const n = Math.floor(v + 1e-9);
+            for (const c of [n, n + 0.5, n + 0.9, n + 1]) if (c >= v - 1e-9) return Math.round(c * 100) / 100;
+            return n + 1;
+        }
+        const sitePrice = cost => niceRoundUp(cost * 2 + 1.9);
+        const woltPrice = price => niceRoundUp(price * 1.3);
+        const shekel = v => v == null || isNaN(v) ? '–' : '₪' + Number(v).toFixed(2);
+        let invoiceDoc = null, invoiceCats = null;
+
+        async function loadInvoiceCats() {
+            if (invoiceCats) return invoiceCats;
+            const r = await fetch(`${API}/api/admin/subcategories-flat`, { headers: authHeaders() });
+            invoiceCats = r.ok ? await r.json() : [];
+            return invoiceCats;
+        }
+        window.readInvoice = async function() {
+            const f = document.getElementById('inv-file').files[0];
+            const msg = document.getElementById('inv-msg'), btn = document.getElementById('inv-read');
+            if (!f) { msg.style.color = '#d9534f'; msg.textContent = 'בחרי קובץ של חשבונית'; return; }
+            btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = '🤖 קורא את החשבונית... (עד דקה)';
+            document.getElementById('inv-review').innerHTML = '';
+            try {
+                const fd = new FormData(); fd.append('file', f);
+                const res = await fetch(`${API}/api/admin/invoices`, { method: 'POST', headers: { 'Authorization': authHeaders()['Authorization'] }, body: fd });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                await loadInvoiceCats();
+                invoiceDoc = d; msg.textContent = '';
+                renderInvoice();
+            } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
+            btn.disabled = false;
+        };
+        function invLineCard(ln) {
+            const inv = ln.invoice, el = document.createElement('div');
+            el.className = 'inv-line'; el.dataset.index = ln.index;
+            el.style.cssText = 'border:1px solid var(--pink-light); border-radius:14px; padding:10px 12px; margin:8px 0; background:#fff;';
+            const conf = inv.confidence === 'low' ? '<span style="color:#d9534f;">⚠️ לבדוק</span>' : inv.confidence === 'medium' ? '<span style="color:#c77700;">בדיקה מומלצת</span>' : '';
+            const opts = [];
+            if (ln.match) opts.push(`<option value="u:${ln.match.id}">עדכון: ${escHtml(ln.match.name)} (${shekel(ln.match.price)})</option>`);
+            ln.candidates.filter(c => !ln.match || c.id !== ln.match.id).forEach(c =>
+                opts.push(`<option value="u:${c.id}">עדכון: ${escHtml(c.name)} (${shekel(c.price)}) · דמיון ${Math.round(c.score * 100)}%</option>`));
+            opts.push('<option value="create">➕ מוצר חדש באתר</option>', '<option value="skip">דילוג על השורה</option>');
+            const catOpts = '<option value="">בחירת קטגוריה...</option>' + invoiceCats.map(c => `<option value="${c.id}">${escHtml(c.name)}</option>`).join('');
+            el.innerHTML = `
+                <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; font-size:0.85em; color:var(--muted);">
+                    <span>שורה ${ln.index + 1}: ${escHtml(inv.description)}${inv.quantity != null ? ' · כמות ' + escHtml(String(inv.quantity)) : ''}${inv.line_discount_percent ? ' · הנחת ספק ' + escHtml(String(inv.line_discount_percent)) + '%' : ''}</span>${conf}
+                </div>
+                ${inv.note ? `<div style="font-size:0.85em; color:#c77700; margin-top:2px;">📝 ${escHtml(inv.note)}</div>` : ''}
+                ${ln.check ? `<div style="font-size:0.85em; color:#c62828; margin-top:2px;">⚠️ ${escHtml(ln.check)}</div>` : ''}
+                ${ln.match_method ? `<div style="font-size:0.8em; color:var(--ok); margin-top:2px;">✓ זוהה לפי ${ {barcode:'ברקוד', sku:'מק"ט של הספק', name:'שם'}[ln.match_method] }</div>` : ''}
+                <select class="inv-action" style="width:100%; margin:8px 0;">${opts.join('')}</select>
+                <div class="inv-new" style="display:none;">
+                    <label style="font-size:0.85em;">שם באתר</label><input class="inv-name" style="width:100%;">
+                    <label style="font-size:0.85em;">קטגוריה</label><select class="inv-cat" style="width:100%;">${catOpts}</select>
+                    <label style="font-size:0.85em;">תיאור</label><textarea class="inv-desc" rows="2" style="width:100%;"></textarea>
+                </div>
+                <div class="inv-prices" style="display:flex; gap:10px; flex-wrap:wrap; align-items:end; font-size:0.9em;">
+                    <label>מחיר ספק ליחידה<br><input class="inv-cost" type="number" step="0.01" min="0" style="width:95px;"></label>
+                    <label>מחיר באתר<br><input class="inv-price" type="number" step="0.01" min="0" style="width:95px;"></label>
+                    <span>בוולט: <b class="inv-wolt">–</b></span>
+                    <span class="inv-change"></span>
+                </div>`;
+            const sel = el.querySelector('.inv-action');
+            sel.value = ln.action === 'update' && ln.match ? `u:${ln.match.id}` : ln.action;
+            el.querySelector('.inv-name').value = inv.suggested_name || '';
+            el.querySelector('.inv-desc').value = inv.suggested_description || '';
+            if (inv.suggested_category_id && invoiceCats.some(c => c.id === inv.suggested_category_id)) el.querySelector('.inv-cat').value = inv.suggested_category_id;
+            el.querySelector('.inv-cost').value = ln.cost ?? '';
+            el.querySelector('.inv-price').value = ln.price ?? '';
+            const all = [ln.match, ...ln.candidates].filter(Boolean);
+            const refresh = () => {
+                const a = sel.value, current = a.startsWith('u:') ? all.find(c => c.id === +a.slice(2)) : null;
+                el.querySelector('.inv-new').style.display = a === 'create' ? '' : 'none';
+                el.querySelector('.inv-prices').style.display = a === 'skip' ? 'none' : 'flex';
+                el.style.opacity = a === 'skip' ? '.55' : '';
+                const price = parseFloat(el.querySelector('.inv-price').value);
+                el.querySelector('.inv-wolt').textContent = price > 0 ? shekel(woltPrice(price)) : '–';
+                const ch = el.querySelector('.inv-change');
+                if (current && price > 0 && Math.abs(current.price - price) >= 0.005) {
+                    const up = price > current.price;
+                    ch.innerHTML = `<b style="color:${up ? '#c62828' : 'var(--ok)'};">${up ? '▲' : '▼'} ${shekel(current.price)} ← ${shekel(price)}</b>`;
+                } else ch.textContent = current ? 'המחיר לא משתנה' : '';
+            };
+            el.querySelector('.inv-cost').addEventListener('input', e => {
+                const c = parseFloat(e.target.value); if (c > 0) el.querySelector('.inv-price').value = sitePrice(c).toFixed(2); refresh();
+            });
+            el.querySelector('.inv-price').addEventListener('input', refresh);
+            sel.addEventListener('change', refresh);
+            refresh();
+            return el;
+        }
+        function renderInvoice() {
+            const d = invoiceDoc, wrap = document.getElementById('inv-review');
+            wrap.innerHTML = `<div style="background:var(--pink-light); border-radius:12px; padding:10px 12px; margin-top:10px;">
+                <b>${escHtml(d.supplier || 'ספק לא מזוהה')}</b>${d.invoice_number ? ' · חשבונית ' + escHtml(d.invoice_number) : ''}${d.invoice_date ? ' · ' + escHtml(d.invoice_date) : ''}
+                · ${d.lines.length} שורות${d.invoice_discount_percent ? ' · הנחה כללית ' + escHtml(String(d.invoice_discount_percent)) + '% (לא יורדת מהמחיר)' : ''}</div>
+                ${d.duplicate_of ? '<p style="color:#c62828; font-weight:bold;">⚠️ חשבונית עם אותו מספר כבר נקלטה בעבר. כדאי לבדוק שזו לא כפילות.</p>' : ''}
+                <div id="inv-lines"></div>
+                <div style="position:sticky; bottom:0; background:#fff; padding:10px 0; border-top:1px solid var(--pink-light); display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                    <button class="btn" type="button" id="inv-apply">✓ אישור ושמירה</button>
+                    <button class="btn" type="button" style="background:#999;" onclick="document.getElementById('inv-review').innerHTML=''; invoiceDoc=null;">ביטול</button>
+                    <span id="inv-apply-msg" style="font-weight:bold;"></span>
+                </div>`;
+            const list = wrap.querySelector('#inv-lines');
+            d.lines.forEach(ln => list.appendChild(invLineCard(ln)));
+            wrap.querySelector('#inv-apply').onclick = applyInvoice;
+        }
+        async function applyInvoice() {
+            const msg = document.getElementById('inv-apply-msg'), btn = document.getElementById('inv-apply');
+            const lines = [...document.querySelectorAll('#inv-lines .inv-line')].map(el => {
+                const a = el.querySelector('.inv-action').value, num = c => { const v = parseFloat(el.querySelector(c).value); return v > 0 ? v : null; };
+                const base = { index: +el.dataset.index, cost: num('.inv-cost'), price: num('.inv-price') };
+                if (a === 'skip') return { index: base.index, action: 'skip' };
+                if (a === 'create') return { ...base, action: 'create', name: el.querySelector('.inv-name').value.trim(),
+                    category_id: +el.querySelector('.inv-cat').value || null, description: el.querySelector('.inv-desc').value.trim() };
+                return { ...base, action: 'update', product_id: +a.slice(2) };
+            });
+            const changes = lines.filter(l => l.action !== 'skip').length;
+            if (!confirm(`לשמור ${changes} שורות? מחירים באתר יתעדכנו ומוצרים חדשים ייווספו.`)) return;
+            btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'שומר...';
+            try {
+                const res = await fetch(`${API}/api/admin/invoices/${invoiceDoc.id}/apply`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ lines }) });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                const wrap = document.getElementById('inv-review');
+                wrap.innerHTML = `<div style="background:#E8F5E9; border-radius:12px; padding:12px; margin-top:10px;">
+                    <b>✓ נשמר.</b> עודכנו ${d.updated} מוצרים (${d.price_changes} שינויי מחיר), נוספו ${d.created} מוצרים חדשים.
+                    ${d.created_products.length ? '<p style="margin:8px 0 4px;">📷 מוצרים חדשים שצריך לצלם (לחיצה פותחת את המוצר באתר, ושם "החלפת תמונה"):</p><ul class="inv-new-list" style="margin:0;"></ul>' : ''}</div>`;
+                const ul = wrap.querySelector('.inv-new-list');
+                d.created_products.forEach(p => { const li = document.createElement('li'); const a = document.createElement('a');
+                    a.href = `/#p=${p.id}`; a.target = '_blank'; a.textContent = p.name; li.appendChild(a); ul.appendChild(li); });
+                invoiceDoc = null; document.getElementById('inv-file').value = '';
+                loadInvoiceHistory(); loadAuditLog();
+            } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; btn.disabled = false; }
+        }
+        async function loadInvoiceHistory() {
+            const wrap = document.getElementById('inv-history');
+            try {
+                const r = await fetch(`${API}/api/admin/invoices`, { headers: authHeaders() });
+                const items = await r.json();
+                if (!items.length) { wrap.innerHTML = '<p style="color:var(--muted);">עוד לא נקלטו חשבוניות.</p>'; return; }
+                wrap.innerHTML = '';
+                items.forEach(it => {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'padding:6px 0; border-bottom:1px solid var(--pink-light); display:flex; gap:8px; justify-content:space-between; flex-wrap:wrap;';
+                    const t = document.createElement('span');
+                    t.textContent = `${it.supplier || 'ספק לא מזוהה'}${it.invoice_number ? ' · ' + it.invoice_number : ''} · ${new Date(it.created_at).toLocaleDateString('he-IL')}`;
+                    const st = document.createElement('span');
+                    if (it.status === 'applied') st.textContent = `✓ נקלטה (${it.summary ? it.summary.updated + ' עודכנו, ' + it.summary.created + ' חדשים' : ''})`;
+                    else { st.innerHTML = '<a href="#">טיוטה, להמשך אישור</a>'; st.querySelector('a').onclick = async ev => { ev.preventDefault();
+                        const rr = await fetch(`${API}/api/admin/invoices/${it.id}`, { headers: authHeaders() }); if (!rr.ok) return;
+                        await loadInvoiceCats(); invoiceDoc = await rr.json(); renderInvoice(); document.getElementById('inv-card').scrollIntoView({ behavior: 'smooth' }); }; }
+                    row.append(t, st); wrap.appendChild(row);
+                });
+            } catch (e) { wrap.textContent = 'שגיאה בטעינה'; }
+        }
+
         // ----- Wolt API connection -----
         async function loadWoltApi() {
             const wrap = document.getElementById('wolt-api-state');
@@ -1673,7 +1850,9 @@
                 if (!res.ok) throw new Error(st.detail || 'שגיאה');
                 const fmt = t => t ? new Date(t).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '–';
                 let html = '';
-                if (st.venues.length) html += `<p><b style="color:var(--ok);">✓ מחובר</b> · מאז ${fmt(st.venues[0].connected_at)}</p>`;
+                if (st.environment === 'development') html += '<p style="font-size:0.85em; color:#c77700;">🧪 סביבת בדיקות של וולט</p>';
+                if (st.venues.some(v => v.status === 'reconnect')) html += '<p><b style="color:#c62828;">⚠️ החיבור לוולט פג. לוחצים "חיבור מחדש לוולט" ומאשרים שוב.</b></p>';
+                else if (st.venues.length) html += `<p><b style="color:var(--ok);">✓ מחובר</b> · מאז ${fmt(st.venues[0].connected_at)}</p>`;
                 else if (st.configured) html += `<p><b>עוד לא מחובר.</b> לוחצים על הכפתור, מתחברים לוולט ומאשרים.</p>`;
                 else html += `<p><b>ממתין לפרטים מוולט.</b> אחרי שוולט ישלחו Client ID ו-Secret, מכניסים אותם ב-Railway ואז יופיע כאן כפתור חיבור.</p>`;
                 html += `<p style="font-size:0.85em; color:var(--muted);">הודעות הזמנה שהתקבלו מוולט: ${st.events}${st.last_event ? ' · אחרונה ' + fmt(st.last_event) : ''}</p>`;

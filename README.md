@@ -32,7 +32,9 @@ Customers browse 2,000+ products, order for in-store pickup, track their order l
 
 **For the owner**
 - Admin panel: products, categories, deals, opening hours, staff and roles, pay, reviews, FAQ, customer messaging
-- Wolt integration: import products from a Wolt export (with price conversion) and a two-way stock comparison
+- **Supplier invoice import:** upload a PDF or phone photo; Claude reads the lines (structured JSON output), lines are matched to products by barcode / supplier code / name, prices are proposed by the shop's formula and nothing changes until approved
+- **Photo studio:** phone photos are cut out (on-device ML model), straightened, centred on white, with a 16:9 copy for Wolt; photo suggestions by barcode from Open Food Facts
+- Wolt integration: OAuth 2.0 (self-service onboarding) with rotating single-use refresh tokens, HMAC-verified order webhook, plus import from a Wolt export and stock comparison
 - Notification log showing every email and push, and why any failed
 - Audit log of sensitive actions
 
@@ -45,7 +47,8 @@ Customers browse 2,000+ products, order for in-store pickup, track their order l
 | Backend | Python, FastAPI, psycopg2 |
 | Database | PostgreSQL |
 | Frontend | HTML, CSS and vanilla JavaScript (no build step), Progressive Web App |
-| Integrations | Anthropic Claude API, Google Identity Services, Web Push (VAPID), Brevo email API |
+| Integrations | Anthropic Claude API (chat, invoice reading), Google Identity Services, Web Push (VAPID), Brevo email API, Wolt Marketplace API |
+| Imaging | Pillow, rembg (ONNX background removal), OpenCV |
 | Hosting | Railway (auto-deploy from `main`), persistent volume for uploaded images |
 
 ## Architecture
@@ -82,6 +85,8 @@ flowchart LR
 ├── index.html               Customer storefront (single page, hash routing)
 ├── staff.html               Staff app: order board and time clock
 ├── admin.html               Owner's admin panel
+├── invoice_ai.py            Reads supplier invoices with Claude; pricing rules
+├── photo_studio.py          Product photo clean-up: cut-out, straighten, white background
 ├── ui-inputs.js             Typeable date/time inputs for the admin and staff screens
 ├── sw.js                    Service worker: push notifications and offline page
 ├── manifest*.webmanifest    PWA manifests (store app and staff app)
@@ -112,7 +117,8 @@ All configuration is done through environment variables; see [docs/OPERATIONS.he
 - [x] Reviews with Google sign-in
 - [ ] Delivery orders with distance-based pricing
 - [ ] Online payment
-- [ ] Automatic stock sync with Wolt (pending API access)
+- [x] Supplier invoice import with AI, automatic product photos
+- [ ] Price and stock sync from the site to Wolt (Wolt sandbox connected)
 
 ---
 
