@@ -5438,12 +5438,32 @@ async def wolt_order_webhook(request: Request):
                          daemon=True).start()
     return {"ok": True}
 
+# --- SKU format for Wolt ---
+# Wolt asked for SKUs more distinctive than bare numbers: "BP-" + the site product id padded to 6 digits.
+# Bare numbers (the first format, used on the test venue) are still understood when reading.
+WOLT_SKU_PREFIX = "BP-"
+
+def wolt_sku(pid):
+    return f"{WOLT_SKU_PREFIX}{int(pid):06d}"
+
+def _pid_from_sku(sku):
+    s = str(sku or "").strip().upper()
+    if s.startswith(WOLT_SKU_PREFIX) and s[len(WOLT_SKU_PREFIX):].isdigit():
+        return int(s[len(WOLT_SKU_PREFIX):])
+    if s.isdigit():
+        return int(s)
+    return None
+
 # --- Price and stock: site -> Wolt ---
 # Wolt price = site price + 30%, rounded up to .00/.50/.90. Items are matched by SKU = our product id.
 # Wolt allows one item update per venue per interval (default 15 minutes), so changes are queued
 # (see the trigger on Products) and sent together; within the queue, only the latest state counts.
-WOLT_ITEMS_BATCH = 500
+WOLT_ITEMS_BATCH = 1000
 WOLT_DEFAULT_ITEM_INTERVAL_MIN = 15
+# Wolt may allow several calls per window, but asked us to bundle as many changes as possible per call:
+# never send more often than this, even when the venue's limit would allow it.
+WOLT_MIN_SYNC_MINUTES = float(os.environ.get("WOLT_MIN_SYNC_MINUTES", "5"))
+WOLT_DAILY_FULL_HOUR = 4          # Israel time: once a day, the price and availability of every product is resent
 
 def _wolt_item_interval(cur, venue_id):
     """Minutes between item updates for this venue, read from Wolt's venue status (cached for an hour)."""
@@ -5485,7 +5505,7 @@ def run_wolt_item_sync(force=False):
         result = None
         for venue in venues:
             state = json.loads(_setting_get(cur, f"wolt_items_state_{venue}") or "{}")
-            interval = _wolt_item_interval(cur, venue)
+            interval = max(_wolt_item_interval(cur, venue), WOLT_MIN_SYNC_MINUTES)
             conn.commit()
             next_ok = max(state.get("last_sent", 0) + interval * 60, state.get("retry_after", 0))
             if not force and time_module.time() < next_ok:
@@ -5497,9 +5517,10 @@ def run_wolt_item_sync(force=False):
             removed = cur.fetchall()
             if not rows and not removed:
                 continue
-            data = [{"sku": sku, "enabled": False, **({"in_stock": False} if kind == "retail" else {})} for sku, _ in removed]
+            data = [{"sku": wolt_sku(sku) if str(sku).isdigit() else sku, "enabled": False,
+                     **({"in_stock": False} if kind == "retail" else {})} for sku, _ in removed]
             for pid, _, price, stock in rows:
-                item = {"sku": str(pid)}
+                item = {"sku": wolt_sku(pid)}
                 if price and float(price) > 0:
                     item["price"] = int(round(invoice_ai.wolt_price_from_site(float(price)) * 100))
                 if kind == "retail":
@@ -5533,11 +5554,33 @@ def run_wolt_item_sync(force=False):
     finally:
         cur.close(); conn.close()
 
+def _wolt_daily_full_refresh():
+    """Once a day (early morning, Israel time) queue every product, so Wolt gets a full availability update."""
+    now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+    if now.hour < WOLT_DAILY_FULL_HOUR or not _wolt_oauth_configured():
+        return
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM wolt_connection WHERE status = 'active';")
+        if cur.fetchone()[0] == 0 or _setting_get(cur, "wolt_daily_full") == now.date().isoformat():
+            return
+        # Only once the site is the agreed source of truth (after availability was imported from Wolt, or the
+        # admin sent everything): otherwise a full refresh would overwrite Wolt's up-to-date stock with old data.
+        if _setting_get(cur, "wolt_site_is_source") != "1":
+            return
+        _setting_set(cur, "wolt_daily_full", now.date().isoformat())
+        cur.execute("INSERT INTO wolt_sync_queue (product_id) SELECT id FROM Products ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();")
+        conn.commit()
+        print(f"[WOLT] daily full refresh queued {cur.rowcount} products")
+    finally:
+        cur.close(); conn.close()
+
 async def _wolt_items_loop():
     import asyncio
     await asyncio.sleep(90)
     while True:
         try:
+            await asyncio.get_event_loop().run_in_executor(None, _wolt_daily_full_refresh)
             await asyncio.get_event_loop().run_in_executor(None, run_wolt_item_sync)
         except Exception as e:
             print(f"[WOLT] item sync error: {e}")
@@ -5557,9 +5600,11 @@ def wolt_sync_status(sess: dict = Depends(require_admin)):
         if cached:
             interval = cached["minutes"]
     kind = _wolt_venue_kind(cur)
+    site_is_source = _setting_get(cur, "wolt_site_is_source") == "1"
     cur.close(); conn.close()
+    interval = max(interval, WOLT_MIN_SYNC_MINUTES)
     nxt = max(state.get("last_sent", 0) + interval * 60, state.get("retry_after", 0))
-    return {"queued": queued, "interval_minutes": interval, "venue_kind": kind or None,
+    return {"queued": queued, "interval_minutes": interval, "venue_kind": kind or None, "site_is_source": site_is_source,
             "last_sent": datetime.fromtimestamp(state["last_sent"], timezone.utc).isoformat() if state.get("last_sent") else None,
             "last_count": state.get("last_count"), "last_error": state.get("last_error"),
             "next_send": datetime.fromtimestamp(nxt, timezone.utc).isoformat() if nxt > time_module.time() else None}
@@ -5646,7 +5691,7 @@ def build_wolt_sku_rows(df, cur, exclude_ids=()):
             left = [p for p in cands if p["id"] not in used]
             for o in group:
                 if o["wolt_id"] not in done_ids:
-                    rows.append({**o, "sku": None, "site_name": " / ".join(f'{p["name"]} (#{p["id"]}, ₪{p["price"]:.2f})' for p in left) or None,
+                    rows.append({**o, "sku": None, "site_name": " / ".join(f'{p["name"]} ({wolt_sku(p["id"])}, ₪{p["price"]:.2f})' for p in left) or None,
                                  "site_price": None, "match": "ambiguous" if left else "none"})
             continue
         pairs = []
@@ -5714,7 +5759,7 @@ async def wolt_sku_file(file: UploadFile = File(...), sess: dict = Depends(requi
     ws.append(["wolt_item_id", "item_name", "gtin", "sku"])
     for r in rows:
         if r["sku"] is not None and r["match"] in ("barcode", "name"):
-            ws.append([r["wolt_id"], r["name"], r["gtin"] or None, str(r["sku"])])
+            ws.append([r["wolt_id"], r["name"], r["gtin"] or None, wolt_sku(r["sku"])])
     ws2 = wb.create_sheet("לבדיקה")
     ws2.append(["wolt_item_id", "שם בוולט", "מחיר בוולט", "SKU מוצע", "מוצר באתר (או אפשרויות)", "מחיר באתר", "מצב"])
     label = {"similar": "שם דומה – לבדוק", "none": "לא נמצא באתר",
@@ -5723,7 +5768,7 @@ async def wolt_sku_file(file: UploadFile = File(...), sess: dict = Depends(requi
             "ambiguous": PatternFill("solid", fgColor="DCEBFF")}
     for r in rows:
         if r["match"] in ("similar", "none", "ambiguous"):
-            ws2.append([r["wolt_id"], r["name"], r["price"], str(r["sku"]) if r["sku"] else None, r["site_name"], r["site_price"], label[r["match"]]])
+            ws2.append([r["wolt_id"], r["name"], r["price"], wolt_sku(r["sku"]) if r["sku"] else None, r["site_name"], r["site_price"], label[r["match"]]])
             for c in ws2[ws2.max_row]:
                 c.fill = fill[r["match"]]
     for sheet in (ws, ws2):
@@ -5795,11 +5840,14 @@ def analyze_wolt_menu(menu, cur):
                 missing.append({"id": it.get("id"), "name": name, "price": price, "gtin": prod.get("gtin") or "", "category_id": c or ""})
             continue
         problems = []
-        p = site.get(int(sku)) if sku.isdigit() else None
+        pid = _pid_from_sku(sku)
+        p = site.get(pid) if pid is not None else None
         if not p:
             problems.append("ה-SKU לא קיים באתר")
         else:
-            linked.add(int(sku))
+            linked.add(pid)
+            if not sku.upper().startswith(WOLT_SKU_PREFIX):
+                problems.append(f"פורמט ישן, צריך להיות {wolt_sku(pid)}")
             sim = difflib.SequenceMatcher(None, name.lower(), p["name"].lower()).ratio()
             if sim < 0.6:
                 problems.append(f"שם שונה ({round(sim * 100)}% דמיון)")
@@ -5828,10 +5876,18 @@ def _wolt_menu_job_run(venue_id, user_id):
         skus, names = set(), set()
         for it in menu.get("items") or []:
             prod = it.get("product") or {}
-            if str(prod.get("sku") or "").strip():
-                skus.add(str(prod["sku"]).strip())
+            if _pid_from_sku(prod.get("sku")) is not None:
+                skus.add(_pid_from_sku(prod.get("sku")))
             names.add(_name_key(_wolt_text(prod.get("name"))))
-        _wolt_menu_job.update({"wolt_skus": skus, "wolt_names": names})
+        # Availability on Wolt for every item linked by SKU (for "import availability from Wolt")
+        avail = {}
+        for it in menu.get("items") or []:
+            pid = _pid_from_sku((it.get("product") or {}).get("sku"))
+            if pid is not None:
+                en = it.get("enabled")
+                enabled = en.get("enabled", True) if isinstance(en, dict) else (en is not False)
+                avail[pid] = bool(enabled) and str(it.get("inventory_mode") or "") != "forced_out_of_stock"
+        _wolt_menu_job.update({"wolt_skus": skus, "wolt_names": names, "wolt_avail": avail})
         _wolt_menu_job.update({"state": "ready", "checks": checks, "completion": completion, "summary": summary,
                                "at": time_module.time()})
         _audit({"user_id": user_id, "name": None}, "wolt_menu_check", "wolt", None, summary)
@@ -5877,13 +5933,13 @@ def wolt_menu_check_file(sess: dict = Depends(require_admin)):
     ws.append(["wolt_item_id", "item_name", "gtin", "sku"])
     for r in j["completion"]:
         if r["sku"] is not None and r["match"] in ("barcode", "name"):
-            ws.append([r["wolt_id"], r["name"], r["gtin"] or None, str(r["sku"])])
+            ws.append([r["wolt_id"], r["name"], r["gtin"] or None, wolt_sku(r["sku"])])
     ws2 = wb.create_sheet("לבדיקה")
     ws2.append(["wolt_item_id", "שם בוולט", "מחיר בוולט", "SKU מוצע", "מוצר באתר (או אפשרויות)", "מחיר באתר", "מצב"])
     label = {"similar": "שם דומה – לבדוק", "none": "לא נמצא באתר", "ambiguous": "כמה מוצרים באותו שם – לבחור SKU"}
     for r in j["completion"]:
         if r["match"] in label:
-            ws2.append([r["wolt_id"], r["name"], r["price"], str(r["sku"]) if r["sku"] else None, r["site_name"], r["site_price"], label[r["match"]]])
+            ws2.append([r["wolt_id"], r["name"], r["price"], wolt_sku(r["sku"]) if r["sku"] else None, r["site_name"], r["site_price"], label[r["match"]]])
     ws3 = wb.create_sheet("SKU חשודים")
     ws3.append(["wolt_item_id", "שם בוולט", "מחיר בוולט", "SKU בוולט", "המוצר באתר", "מחיר באתר", "מה חשוד"])
     red = PatternFill("solid", fgColor="F8D7DA")
@@ -5928,7 +5984,7 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
                 wolt_names |= {_name_key(v) for v in d[cols["name"]].dropna()}
                 for k in ("sku", "merchant_sku"):
                     if k in cols:
-                        wolt_skus |= {str(v).split(".")[0].strip() for v in d[cols[k]].dropna()}
+                        wolt_skus |= {pid for pid in (_pid_from_sku(str(v).split(".")[0]) for v in d[cols[k]].dropna()) if pid is not None}
         if not found:
             raise HTTPException(status_code=400, detail="בקובץ אין עמודה name עם שמות המוצרים בוולט")
     elif _wolt_menu_job.get("state") == "ready" and "wolt_names" in _wolt_menu_job:
@@ -5943,11 +5999,11 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
     chains = {}
     rows = []
     for pid, name, price, stock, notes, barcode, weight, units, image, cat_id, created in products:
-        if str(pid) in wolt_skus or _name_key(name) in wolt_names:
+        if pid in wolt_skus or _name_key(name) in wolt_names:
             continue                                   # already on Wolt
         if cat_id not in chains:
             chains[cat_id] = " > ".join(n for _, n in _category_chain(cur, cat_id)) if cat_id else ""
-        rows.append({"sku": str(pid), "name": name, "price": float(price), "in_stock": (stock or 0) > 0, "notes": notes,
+        rows.append({"sku": wolt_sku(pid), "name": name, "price": float(price), "in_stock": (stock or 0) > 0, "notes": notes,
                      "barcode": barcode, "weight": weight, "units": units, "image": image, "category": chains[cat_id],
                      "created": created})
     cur.close(); conn.close()
@@ -5987,12 +6043,46 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
                     headers={"Content-Disposition": 'attachment; filename="bake-party-new-products-for-wolt.zip"',
                              "X-Summary": json.dumps(summary), "Access-Control-Expose-Headers": "X-Summary", "Cache-Control": "no-store"})
 
+@app.post("/api/admin/wolt/import-availability")
+def wolt_import_availability(sess: dict = Depends(require_admin)):
+    """Copies in-stock / sold-out from Wolt to the site, for every product linked by SKU, using the last
+    menu check. Meant for going live, while Wolt holds the up-to-date stock. Afterwards the site leads."""
+    j = _wolt_menu_job
+    if j.get("state") != "ready" or "wolt_avail" not in j:
+        raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")
+    avail = j["wolt_avail"]
+    if not avail:
+        raise HTTPException(status_code=400, detail="לאף מוצר בוולט עוד אין SKU, אז אין מה להעתיק")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, stock_quantity FROM Products WHERE id = ANY(%s);", (list(avail.keys()),))
+    to_in, to_out = [], []
+    for pid, stock in cur.fetchall():
+        on_site = (stock or 0) > 0
+        if avail[pid] and not on_site:
+            to_in.append(pid)
+        elif not avail[pid] and on_site:
+            to_out.append(pid)
+    if to_in:
+        cur.execute("UPDATE Products SET stock_quantity = 100 WHERE id = ANY(%s);", (to_in,))
+    if to_out:
+        cur.execute("UPDATE Products SET stock_quantity = 0 WHERE id = ANY(%s);", (to_out,))
+    changed = to_in + to_out
+    if changed:
+        # These now match Wolt already: no need to send them back
+        cur.execute("DELETE FROM wolt_sync_queue WHERE product_id = ANY(%s);", (changed,))
+    _setting_set(cur, "wolt_site_is_source", "1")
+    conn.commit(); cur.close(); conn.close()
+    summary = {"linked": len(avail), "back_in_stock": len(to_in), "sold_out": len(to_out)}
+    _audit(sess, "wolt_import_availability", "wolt", None, summary)
+    return summary
+
 @app.post("/api/admin/wolt/sync-all")
 def wolt_sync_all(sess: dict = Depends(require_admin)):
     """Queues every product, for a full price/stock refresh on Wolt (sent in batches as the rate limit allows)."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("INSERT INTO wolt_sync_queue (product_id) SELECT id FROM Products ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();")
     n = cur.rowcount
+    _setting_set(cur, "wolt_site_is_source", "1")       # from now on the site leads (daily full refresh on)
     conn.commit(); cur.close(); conn.close()
     _audit(sess, "wolt_sync_all", "wolt", None, {"products": n})
     return {"queued": n}
@@ -6068,7 +6158,7 @@ def _wolt_sync_order(order_id, venue_id, status_hint=None, fetch=None):
         cur.execute("SELECT id, name, barcode FROM Products;")
         by_id, by_barcode = {}, {}
         for pid, name, bc in cur.fetchall():
-            by_id[str(pid)] = (pid, name)
+            by_id[pid] = (pid, name)
             if bc:
                 by_barcode[bc] = (pid, name)
         item_types = {str(it.get("item_type") or "") for it in o.get("items") or []}
@@ -6076,7 +6166,7 @@ def _wolt_sync_order(order_id, venue_id, status_hint=None, fetch=None):
             _setting_set(cur, "wolt_venue_kind", "retail" if any("retail" in t for t in item_types) else "restaurant")
         for it in o.get("items") or []:
             price = it.get("item_price") or {}
-            prod = by_id.get(str(it.get("sku") or "").strip()) or by_barcode.get(str(it.get("gtin") or "").strip())
+            prod = by_id.get(_pid_from_sku(it.get("sku"))) or by_barcode.get(str(it.get("gtin") or "").strip())
             items.append({"name": it.get("name"), "count": it.get("count"), "sku": it.get("sku"), "gtin": it.get("gtin"),
                           "unit_cents": _cents(price.get("unit_price")), "total_cents": _cents(price.get("total")),
                           "product_id": prod[0] if prod else None, "product_name": prod[1] if prod else None})
