@@ -1900,6 +1900,10 @@
                 else html += `<p><b>ממתין לפרטים מוולט.</b> אחרי שוולט ישלחו Client ID ו-Secret, מכניסים אותם ב-Railway ואז יופיע כאן כפתור חיבור.</p>`;
                 html += `<p style="font-size:0.85em; color:var(--muted);">הודעות הזמנה שהתקבלו מוולט: ${st.events}${st.last_event ? ' · אחרונה ' + fmt(st.last_event) : ''}</p>`;
                 if (st.venues.some(v => v.status === 'active')) html += `<div class="w-sync" style="background:var(--pink-light); border-radius:12px; padding:8px 12px; margin:8px 0; font-size:0.9em;">טוען מצב עדכונים...</div>`;
+                if (st.venues.some(v => v.status === 'active')) html += `<details style="font-size:0.9em; margin:8px 0;"><summary style="cursor:pointer; font-weight:bold;">🔎 בדיקת התפריט בוולט (SKU חסרים וחשודים)</summary>
+                    <p style="color:var(--muted); margin:6px 0;">האתר קורא את התפריט מוולט, בודק שכל SKU שהוגדר שם מצביע על המוצר הנכון באתר (שם ומחיר), ומכין קובץ השלמה למוצרים שעוד אין להם SKU. וולט מאפשרים קריאה כזו בערך פעם ברבע שעה.</p>
+                    <button class="btn w-menu-btn" type="button" style="padding:6px 12px;">בדיקת התפריט</button>
+                    <div class="w-menu-res" style="margin-top:6px;"></div></details>`;
                 html += `<details style="font-size:0.9em; margin:8px 0;"><summary style="cursor:pointer; font-weight:bold;">📄 קובץ SKU לוולט (לפני מעבר לחנות האמיתית)</summary>
                     <p style="color:var(--muted); margin:6px 0;">מעלים קובץ אקסל שהורד מוולט עם רשימת המוצרים (צריכות להיות בו העמודות id ו-name). יורד קובץ שבו לכל מוצר בוולט מופיע ה-SKU שלו, כלומר מספר המוצר באתר, לשליחה לוולט.</p>
                     <input type="file" class="w-sku-file" accept=".xlsx" style="max-width:100%;">
@@ -1911,6 +1915,38 @@
                 if (wrap.querySelector('.w-err')) wrap.querySelector('.w-err').textContent = st.last_error.reason;
                 wrap.querySelector('.w-r').textContent = st.redirect_url;
                 if (wrap.querySelector('.w-sync')) loadWoltSync(wrap.querySelector('.w-sync'), fmt);
+                if (wrap.querySelector('.w-menu-btn')) {
+                    const res = wrap.querySelector('.w-menu-res');
+                    const show = d => {
+                        if (d.state === 'running') { res.innerHTML = '<span style="color:var(--muted);">⏳ קורא את התפריט מוולט... (עד כמה דקות)</span>'; return false; }
+                        if (d.state === 'error') { res.innerHTML = '<span style="color:#c62828;"></span>'; res.firstChild.textContent = d.error; return true; }
+                        if (d.state !== 'ready') { res.innerHTML = ''; return true; }
+                        const s = d.summary;
+                        res.innerHTML = `<div style="background:var(--pink-light); border-radius:12px; padding:8px 12px;">
+                            ${s.items} מוצרים בוולט · ${s.with_sku} עם SKU${s.suspicious ? ` · <b style="color:#c62828;">${s.suspicious} חשודים</b>` : ' · ✓ אין חשודים'}<br>
+                            ${s.without_sku} בלי SKU: ${s.completable} אפשר להשלים אוטומטית${s.to_check ? `, ${s.to_check} לבדיקה ידנית` : ''}<br>
+                            <a href="#" class="w-menu-dl">⬇️ הורדת הקובץ (השלמה לוולט + בדיקה + חשודים)</a></div>`;
+                        res.querySelector('.w-menu-dl').onclick = async ev => {
+                            ev.preventDefault();
+                            const r = await fetch(`${API}/api/admin/wolt/menu-check/file`, { headers: authHeaders() });
+                            if (!r.ok) { alert('שגיאה בהורדה'); return; }
+                            const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
+                            a.download = 'bake-party-wolt-menu-check.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+                        };
+                        return true;
+                    };
+                    const poll = async () => {
+                        const r = await fetch(`${API}/api/admin/wolt/menu-check`, { headers: authHeaders() });
+                        const d = await r.json(); if (!show(d)) setTimeout(poll, 3000);
+                    };
+                    poll();
+                    wrap.querySelector('.w-menu-btn').onclick = async () => {
+                        const r = await fetch(`${API}/api/admin/wolt/menu-check`, { method: 'POST', headers: authHeaders() });
+                        const d = await r.json().catch(() => ({}));
+                        if (!r.ok) { res.textContent = d.detail || 'שגיאה'; return; }
+                        poll();
+                    };
+                }
                 wrap.querySelector('.w-sku-btn').onclick = async () => {
                     const f = wrap.querySelector('.w-sku-file').files[0], msg = wrap.querySelector('.w-sku-msg');
                     if (!f) { msg.style.color = '#c62828'; msg.textContent = 'בחרי את קובץ הייצוא של וולט'; return; }
