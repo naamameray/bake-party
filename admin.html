@@ -1938,8 +1938,8 @@
                         if (d.state !== 'ready') { res.innerHTML = ''; return true; }
                         const s = d.summary;
                         res.innerHTML = `<div style="background:var(--pink-light); border-radius:12px; padding:8px 12px;">
-                            ${s.items} מוצרים בוולט · ${s.with_sku} עם SKU${s.suspicious ? ` · <b style="color:#c62828;">${s.suspicious} חשודים</b>` : ' · ✓ אין חשודים'}<br>
-                            ${s.without_sku} בלי SKU: ${s.completable} אפשר להשלים אוטומטית${s.to_check ? `, ${s.to_check} לבדיקה ידנית` : ''}<br>
+                            ${s.items} מוצרים בוולט · ${s.with_sku} מקושרים לאתר (SKU בפורמט BP-)${s.with_sku ? (s.suspicious ? ` · <b style="color:#c62828;">${s.suspicious} חשודים</b>` : ' · ✓ אין חשודים') : ''}<br>
+                            ${s.without_sku} עוד לא מקושרים${s.foreign_sku ? ` (מהם ${s.foreign_sku} עם SKU אחר שוולט יחליפו)` : ''}: ${s.completable} אפשר להשלים אוטומטית${s.to_check ? `, ${s.to_check} לבדיקה ידנית` : ''}<br>
                             <a href="#" class="w-menu-dl">⬇️ הורדת הקובץ (השלמה לוולט + בדיקה + חשודים)</a></div>`;
                         res.querySelector('.w-menu-dl').onclick = async ev => {
                             ev.preventDefault();

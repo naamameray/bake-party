@@ -5460,7 +5460,8 @@ async def wolt_order_webhook(request: Request):
 
 # --- SKU format for Wolt ---
 # Wolt asked for SKUs more distinctive than bare numbers: "BP-" + the site product id padded to 6 digits.
-# Bare numbers (the first format, used on the test venue) are still understood when reading.
+# ONLY this format links a Wolt item to a site product. The real Wolt menu already carries bare-number SKUs
+# from elsewhere (one number on dozens of unrelated items), so a bare number must never be read as our id.
 WOLT_SKU_PREFIX = "BP-"
 
 def wolt_sku(pid):
@@ -5470,8 +5471,6 @@ def _pid_from_sku(sku):
     s = str(sku or "").strip().upper()
     if s.startswith(WOLT_SKU_PREFIX) and s[len(WOLT_SKU_PREFIX):].isdigit():
         return int(s[len(WOLT_SKU_PREFIX):])
-    if s.isdigit():
-        return int(s)
     return None
 
 # --- Price and stock: site -> Wolt ---
@@ -5689,6 +5688,17 @@ def build_wolt_sku_rows(df, cur, exclude_ids=()):
             take(o, p, "barcode")
         else:
             pending.append(o)
+    # Which price scale does this site use: the same as Wolt's, or Wolt's / 1.3? Decide once, from products
+    # whose name is unique on both sides, rather than per product (35 x 1.3 = 45.50 made two different
+    # products look equally right).
+    same = scaled = 0
+    for o in pending:
+        c = by_name.get(key(o["name"]), [])
+        if o["price"] and len(c) == 1:
+            sp = c[0]["price"]
+            same += abs(sp - o["price"]) < 0.05
+            scaled += abs(sp * 1.3 - o["price"]) / o["price"] < 0.05
+    factor = 1.3 if scaled > same else 1.0
     rest = []
     groups = defaultdict(list)
     for o in pending:
@@ -5718,8 +5728,7 @@ def build_wolt_sku_rows(df, cur, exclude_ids=()):
         for o in group:
             for p in cands:
                 # Site prices may equal Wolt's or be Wolt's / 1.3, depending on how they were imported: use whichever fits
-                diff = (min(abs(p["price"] - o["price"]), abs(p["price"] * 1.3 - o["price"])) / max(o["price"], 0.01)
-                        if o["price"] is not None else 0)
+                diff = abs(p["price"] * factor - o["price"]) / max(o["price"], 0.01) if o["price"] is not None else 0
                 pairs.append((diff, o["wolt_id"], o, p))
         pairs.sort(key=lambda x: (x[0], x[1]))
         done = set()
@@ -5863,25 +5872,26 @@ def analyze_wolt_menu(menu, cur):
     for c in menu.get("categories") or []:
         for b in c.get("item_bindings") or []:
             cat_names.setdefault(b.get("item_id"), []).append(f'{_wolt_text(c.get("name"))}::{c.get("id")}')
-    checks, missing, linked = [], [], set()
+    checks, missing, linked, foreign_skus = [], [], set(), {}
     for it in menu.get("items") or []:
         prod = it.get("product") or {}
         name = _wolt_text(prod.get("name")).strip()
         price = (it.get("price") or 0) / 100 if it.get("price") is not None else None
         sku = str(prod.get("sku") or "").strip()
-        if not sku:
+        if _pid_from_sku(sku) is None:
+            # No SKU, or someone else's (e.g. a bare number already on Wolt): needs one of ours, BP-...
+            if sku:
+                foreign_skus[it.get("id")] = sku
             for c in cat_names.get(it.get("id"), [None]):
                 missing.append({"id": it.get("id"), "name": name, "price": price, "gtin": prod.get("gtin") or "", "category_id": c or ""})
             continue
         problems = []
         pid = _pid_from_sku(sku)
-        p = site.get(pid) if pid is not None else None
+        p = site.get(pid)
         if not p:
             problems.append("ה-SKU לא קיים באתר")
         else:
             linked.add(pid)
-            if not sku.upper().startswith(WOLT_SKU_PREFIX):
-                problems.append(f"פורמט ישן, צריך להיות {wolt_sku(pid)}")
             sim = difflib.SequenceMatcher(None, name.lower(), p["name"].lower()).ratio()
             if sim < 0.6:
                 problems.append(f"שם שונה ({round(sim * 100)}% דמיון)")
@@ -5894,7 +5904,9 @@ def analyze_wolt_menu(menu, cur):
     completion, comp_summary = [], {}
     if missing:
         completion, comp_summary = build_wolt_sku_rows(pd.DataFrame(missing), cur, exclude_ids=linked)
-    summary = {"items": len(menu.get("items") or []), "with_sku": len(checks),
+    for r in completion:
+        r["foreign_sku"] = foreign_skus.get(r.get("wolt_id"))
+    summary = {"items": len(menu.get("items") or []), "with_sku": len(checks), "foreign_sku": len(foreign_skus),
                "suspicious": sum(1 for c in checks if c["problems"]), "without_sku": comp_summary.get("total", 0),
                "completable": comp_summary.get("barcode", 0) + comp_summary.get("name", 0),
                "to_check": comp_summary.get("similar", 0) + comp_summary.get("ambiguous", 0) + comp_summary.get("none", 0)}
@@ -5964,10 +5976,10 @@ def wolt_menu_check_file(sess: dict = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="קודם מריצים בדיקת תפריט")
     wb = Workbook()
     ws = wb.active; ws.title = "sku_for_wolt"
-    ws.append(["wolt_item_id", "item_name", "gtin", "sku"])
+    ws.append(["wolt_item_id", "item_name", "gtin", "sku", "current_sku_to_replace"])
     for r in j["completion"]:
         if r["sku"] is not None and r["match"] in ("barcode", "name"):
-            ws.append([r["wolt_id"], r["name"], r["gtin"] or None, wolt_sku(r["sku"])])
+            ws.append([r["wolt_id"], r["name"], r["gtin"] or None, wolt_sku(r["sku"]), r.get("foreign_sku")])
     ws2 = wb.create_sheet("לבדיקה")
     ws2.append(["wolt_item_id", "שם בוולט", "מחיר בוולט", "SKU מוצע", "מוצר באתר (או אפשרויות)", "מחיר באתר", "מצב"])
     label = {"similar": "שם דומה – לבדוק", "none": "לא נמצא באתר", "ambiguous": "כמה מוצרים באותו שם – לבחור SKU"}
