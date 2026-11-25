@@ -1940,7 +1940,29 @@
                         res.innerHTML = `<div style="background:var(--pink-light); border-radius:12px; padding:8px 12px;">
                             ${s.items} מוצרים בוולט · ${s.with_sku} מקושרים לאתר (SKU בפורמט BP-)${s.with_sku ? (s.suspicious ? ` · <b style="color:#c62828;">${s.suspicious} חשודים</b>` : ' · ✓ אין חשודים') : ''}<br>
                             ${s.without_sku} עוד לא מקושרים${s.foreign_sku ? ` (מהם ${s.foreign_sku} עם SKU אחר שוולט יחליפו)` : ''}: ${s.completable} אפשר להשלים אוטומטית${s.to_check ? `, ${s.to_check} לבדיקה ידנית` : ''}<br>
-                            <a href="#" class="w-menu-dl">⬇️ הורדת הקובץ (השלמה לוולט + בדיקה + חשודים)</a></div>`;
+                            <a href="#" class="w-menu-dl">⬇️ הורדת הקובץ (השלמה לוולט + בדיקה + חשודים)</a>
+                            ${s.not_on_site ? `<br><button class="btn w-import-missing" type="button" style="margin-top:6px; padding:6px 12px;">קליטת ${s.not_on_site} מוצרים שיש בוולט ואין באתר</button><div class="w-import-missing-res" style="margin-top:6px;"></div>` : ''}</div>`;
+                        const imp = res.querySelector('.w-import-missing');
+                        if (imp) imp.onclick = async () => {
+                            if (!confirm(`להוסיף לאתר ${s.not_on_site} מוצרים מוולט? (שם, תיאור, תמונה, מלאי, ומחיר = מחיר בוולט ÷ 1.3). בוולט שום דבר לא משתנה.`)) return;
+                            imp.disabled = true;
+                            const out = res.querySelector('.w-import-missing-res');
+                            try {
+                                const r = await fetch(`${API}/api/admin/wolt/import-missing-products`, { method: 'POST', headers: authHeaders() });
+                                const d = await r.json().catch(() => ({}));
+                                if (!r.ok) throw new Error(d.detail || 'שגיאה');
+                                out.innerHTML = `<b style="color:var(--ok);">✓ נוספו ${d.created} מוצרים לאתר.</b> אחרי "בדיקת התפריט" הבאה הם ייכנסו לקובץ ה-SKU.`;
+                                if (d.no_category.length) {
+                                    const p = document.createElement('div');
+                                    p.innerHTML = `<b style="color:#c77700;">⚠️ ל-${d.no_category.length} לא נמצאה קטגוריה באתר, ולכן הם לא מוצגים עד שבוחרים להם קטגוריה:</b>`;
+                                    const ul = document.createElement('ul'); ul.style.margin = '4px 0';
+                                    d.no_category.forEach(x => { const li = document.createElement('li'); const a = document.createElement('a');
+                                        a.href = '/#p=' + x.id; a.target = '_blank'; a.textContent = x.name; li.appendChild(a); ul.appendChild(li); });
+                                    p.appendChild(ul); out.appendChild(p);
+                                }
+                                imp.remove();
+                            } catch (e) { out.textContent = e.message; imp.disabled = false; }
+                        };
                         res.querySelector('.w-menu-dl').onclick = async ev => {
                             ev.preventDefault();
                             const r = await fetch(`${API}/api/admin/wolt/menu-check/file`, { headers: authHeaders() });
