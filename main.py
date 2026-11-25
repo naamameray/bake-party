@@ -5552,30 +5552,52 @@ def build_wolt_sku_rows(df, cur):
     price, since site prices were set from Wolt's price / 1.3); otherwise a near-certain name match, marked
     for checking; otherwise no match. Returns (rows, summary)."""
     import difflib
+    import re
+    def key(n):
+        # Same name for matching: ignore emojis, punctuation and spacing ("😍 מגנום" == "מגנום")
+        return " ".join(re.sub(r"[^\w\s]", " ", str(n)).lower().split())
     cur.execute("SELECT id, name, price, barcode FROM Products;")
     products = [{"id": r[0], "name": r[1], "price": float(r[2]), "barcode": r[3]} for r in cur.fetchall()]
     by_barcode = {p["barcode"]: p for p in products if p["barcode"]}
     by_name = defaultdict(list)
     for p in products:
-        by_name[_norm_name(p["name"])].append(p)
+        by_name[key(p["name"])].append(p)
     used = set()
     rows = []
-    offers = []
+    def cat_key(c):
+        return key(str(c).split("::")[0].replace("_", " "))
+    item_cats = defaultdict(set)
+    if "category_id" in df.columns:
+        for _, r in df.iterrows():
+            c = str(r.get("category_id") or "")
+            if c and c.lower() != "nan":
+                item_cats[str(r.get("id") or "").strip()].add(cat_key(c))
+    cur.execute("""SELECT p.id, c.name FROM Products p JOIN Categories c ON c.id = p.category_id
+                   UNION SELECT pc.product_id, c.name FROM product_categories pc JOIN Categories c ON c.id = pc.category_id;""")
+    site_cats = defaultdict(set)
+    for pid, cname in cur.fetchall():
+        site_cats[pid].add(key(cname))
+    offers, seen_ids = [], set()
     for _, r in df.iterrows():
         name = str(r.get("name") or "").strip()
         if not name or name.lower() == "nan":
             continue
+        wid = str(r.get("id") or "").strip()
+        if wid in seen_ids:            # the same item listed under several categories
+            continue
+        seen_ids.add(wid)
         gtin = str(r.get("gtin") or "").strip()
         gtin = "" if gtin.lower() == "nan" else gtin.split(".")[0]
         try:
             price = float(r.get("price"))
         except (TypeError, ValueError):
             price = None
-        offers.append({"wolt_id": str(r.get("id") or "").strip(), "name": name, "gtin": gtin, "price": price})
+        offers.append({"wolt_id": wid, "name": name, "gtin": gtin, "price": price, "cats": item_cats.get(wid, set())})
 
     def take(offer, product, how):
         used.add(product["id"])
-        rows.append({**offer, "sku": product["id"], "site_name": product["name"], "site_price": product["price"], "match": how})
+        rows.append({**{k: v for k, v in offer.items() if k != "cats"}, "sku": product["id"], "site_name": product["name"],
+                     "site_price": product["price"], "match": how})
 
     pending = []
     for o in offers:                                     # 1. barcode
@@ -5587,9 +5609,28 @@ def build_wolt_sku_rows(df, cur):
     rest = []
     groups = defaultdict(list)
     for o in pending:
-        groups[_norm_name(o["name"])].append(o)
-    for key, group in groups.items():                    # 2. exact name, paired by closest price
-        cands = [p for p in by_name.get(key, []) if p["id"] not in used]
+        groups[key(o["name"])].append(o)
+    for k, group in groups.items():                      # 2. exact name, paired by closest price
+        cands = [p for p in by_name.get(k, []) if p["id"] not in used]
+        if (len(group) > 1 or len(cands) > 1) and any(o["price"] is None for o in group):
+            # Several products share this name and the file has no prices. If the site's candidates are identical
+            # (same price), any pairing is right. Otherwise try the category; whatever stays unclear goes to a person.
+            if len({round(p["price"], 2) for p in cands}) <= 1:
+                for o, p in zip(sorted(group, key=lambda x: x["wolt_id"]), sorted(cands, key=lambda x: x["id"])):
+                    take(o, p, "name")
+            else:
+                for o in group:
+                    scores = [(len(o.get("cats", set()) & site_cats.get(p["id"], set())), p) for p in cands if p["id"] not in used]
+                    scores.sort(key=lambda x: -x[0])
+                    if scores and scores[0][0] > 0 and (len(scores) == 1 or scores[1][0] < scores[0][0]):
+                        take(o, scores[0][1], "name")
+            done_ids = {r["wolt_id"] for r in rows}
+            left = [p for p in cands if p["id"] not in used]
+            for o in group:
+                if o["wolt_id"] not in done_ids:
+                    rows.append({**o, "sku": None, "site_name": " / ".join(f'{p["name"]} (#{p["id"]}, ₪{p["price"]:.2f})' for p in left) or None,
+                                 "site_price": None, "match": "ambiguous" if left else "none"})
+            continue
         pairs = []
         for o in group:
             for p in cands:
@@ -5620,7 +5661,7 @@ def build_wolt_sku_rows(df, cur):
             rows.append({**o, "sku": None, "site_name": None, "site_price": None, "match": "none"})
     summary = {"total": len(rows), "barcode": sum(r["match"] == "barcode" for r in rows),
                "name": sum(r["match"] == "name" for r in rows), "similar": sum(r["match"] == "similar" for r in rows),
-               "none": sum(r["match"] == "none" for r in rows)}
+               "ambiguous": sum(r["match"] == "ambiguous" for r in rows), "none": sum(r["match"] == "none" for r in rows)}
     return rows, summary
 
 @app.post("/api/admin/wolt/sku-file")
@@ -5633,12 +5674,19 @@ async def wolt_sku_file(file: UploadFile = File(...), sess: dict = Depends(requi
     data = await file.read(15 * 1024 * 1024 + 1)
     if len(data) > 15 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="הקובץ גדול מדי")
+    # Wolt has several exports. Any sheet with the item "id" and "name" columns works: "offers" (full export,
+    # with prices) is preferred, otherwise e.g. "category_item_sequences" (one row per item per category).
     try:
-        df = pd.read_excel(io.BytesIO(data), sheet_name="offers")
+        sheets = pd.read_excel(io.BytesIO(data), sheet_name=None)
     except Exception:
-        raise HTTPException(status_code=400, detail="צריך את קובץ הייצוא של וולט עם גיליון 'offers' (אותו קובץ שממנו ייבאנו את המוצרים)")
-    if "id" not in df.columns or "name" not in df.columns:
-        raise HTTPException(status_code=400, detail="בקובץ חסרות העמודות id / name של וולט")
+        raise HTTPException(status_code=400, detail="לא הצלחתי לפתוח את הקובץ. צריך קובץ אקסל (xlsx) שהורד מוולט")
+    usable = {n: d for n, d in sheets.items() if {"id", "name"} <= {str(c).strip() for c in d.columns}}
+    if not usable:
+        raise HTTPException(status_code=400, detail="בקובץ אין גיליון עם העמודות id ו-name של המוצרים בוולט. "
+                                                    "שמות הגיליונות בקובץ: " + ", ".join(map(str, sheets.keys())))
+    name = "offers" if "offers" in usable else max(usable, key=lambda n: len(usable[n]))
+    df = usable[name]
+    df.columns = [str(c).strip() for c in df.columns]
     conn = get_conn(); cur = conn.cursor()
     rows, summary = build_wolt_sku_rows(df, cur)
     cur.close(); conn.close()
@@ -5650,11 +5698,13 @@ async def wolt_sku_file(file: UploadFile = File(...), sess: dict = Depends(requi
         if r["sku"] is not None and r["match"] in ("barcode", "name"):
             ws.append([r["wolt_id"], r["name"], r["gtin"] or None, str(r["sku"])])
     ws2 = wb.create_sheet("לבדיקה")
-    ws2.append(["wolt_item_id", "שם בוולט", "מחיר בוולט", "SKU מוצע", "שם באתר", "מחיר באתר", "מצב"])
-    label = {"similar": "שם דומה – לבדוק", "none": "לא נמצא באתר"}
-    fill = {"similar": PatternFill("solid", fgColor="FFF3CD"), "none": PatternFill("solid", fgColor="F8D7DA")}
+    ws2.append(["wolt_item_id", "שם בוולט", "מחיר בוולט", "SKU מוצע", "מוצר באתר (או אפשרויות)", "מחיר באתר", "מצב"])
+    label = {"similar": "שם דומה – לבדוק", "none": "לא נמצא באתר",
+             "ambiguous": "כמה מוצרים באותו שם – לבחור SKU מהאפשרויות"}
+    fill = {"similar": PatternFill("solid", fgColor="FFF3CD"), "none": PatternFill("solid", fgColor="F8D7DA"),
+            "ambiguous": PatternFill("solid", fgColor="DCEBFF")}
     for r in rows:
-        if r["match"] in ("similar", "none"):
+        if r["match"] in ("similar", "none", "ambiguous"):
             ws2.append([r["wolt_id"], r["name"], r["price"], str(r["sku"]) if r["sku"] else None, r["site_name"], r["site_price"], label[r["match"]]])
             for c in ws2[ws2.max_row]:
                 c.fill = fill[r["match"]]

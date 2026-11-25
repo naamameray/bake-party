@@ -1901,7 +1901,7 @@
                 html += `<p style="font-size:0.85em; color:var(--muted);">הודעות הזמנה שהתקבלו מוולט: ${st.events}${st.last_event ? ' · אחרונה ' + fmt(st.last_event) : ''}</p>`;
                 if (st.venues.some(v => v.status === 'active')) html += `<div class="w-sync" style="background:var(--pink-light); border-radius:12px; padding:8px 12px; margin:8px 0; font-size:0.9em;">טוען מצב עדכונים...</div>`;
                 html += `<details style="font-size:0.9em; margin:8px 0;"><summary style="cursor:pointer; font-weight:bold;">📄 קובץ SKU לוולט (לפני מעבר לחנות האמיתית)</summary>
-                    <p style="color:var(--muted); margin:6px 0;">מעלים את קובץ הייצוא של וולט (אותו אקסל שממנו ייבאנו את המוצרים). יורד קובץ שבו לכל מוצר בוולט מופיע ה-SKU שלו, כלומר מספר המוצר באתר, לשליחה לוולט.</p>
+                    <p style="color:var(--muted); margin:6px 0;">מעלים קובץ אקסל שהורד מוולט עם רשימת המוצרים (צריכות להיות בו העמודות id ו-name). יורד קובץ שבו לכל מוצר בוולט מופיע ה-SKU שלו, כלומר מספר המוצר באתר, לשליחה לוולט.</p>
                     <input type="file" class="w-sku-file" accept=".xlsx" style="max-width:100%;">
                     <button class="btn w-sku-btn" type="button" style="padding:6px 12px; margin-top:6px;">יצירת הקובץ</button>
                     <p class="w-sku-msg" style="font-weight:bold; margin:6px 0 0;"></p></details>`;
@@ -1924,7 +1924,7 @@
                         a.href = URL.createObjectURL(blob); a.download = 'bake-party-sku-for-wolt.xlsx'; document.body.appendChild(a); a.click(); a.remove();
                         msg.style.color = 'var(--ok)';
                         msg.textContent = `✓ הקובץ ירד. ${sum.barcode + sum.name} מתוך ${sum.total} מוצרים הותאמו בוודאות` +
-                            (sum.similar || sum.none ? ` · לבדיקה: ${sum.similar} בשם דומה, ${sum.none} לא נמצאו (בגיליון "לבדיקה")` : '');
+                            (sum.similar || sum.none || sum.ambiguous ? ` · לבדיקה בגיליון "לבדיקה": ${sum.similar} בשם דומה, ${sum.ambiguous || 0} עם שם כפול, ${sum.none} לא נמצאו` : '');
                     } catch (e) { msg.style.color = '#c62828'; msg.textContent = e.message; }
                 };
                 wrap.querySelector('.w-w').textContent = st.webhook_url;
