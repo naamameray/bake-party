@@ -5564,7 +5564,7 @@ def wolt_sync_status(sess: dict = Depends(require_admin)):
             "last_count": state.get("last_count"), "last_error": state.get("last_error"),
             "next_send": datetime.fromtimestamp(nxt, timezone.utc).isoformat() if nxt > time_module.time() else None}
 
-def build_wolt_sku_rows(df, cur):
+def build_wolt_sku_rows(df, cur, exclude_ids=()):
     """Pairs each Wolt item (from Wolt's Excel export, 'offers' sheet) with a site product, whose id is the SKU.
     Order of trust: same barcode (GTIN); same name (for repeated names, paired one-to-one by the closest
     price, since site prices were set from Wolt's price / 1.3); otherwise a near-certain name match, marked
@@ -5580,7 +5580,7 @@ def build_wolt_sku_rows(df, cur):
     by_name = defaultdict(list)
     for p in products:
         by_name[key(p["name"])].append(p)
-    used = set()
+    used = set(exclude_ids)          # site products already linked to a Wolt item
     rows = []
     def cat_key(c):
         return key(str(c).split("::")[0].replace("_", " "))
@@ -5738,6 +5738,158 @@ async def wolt_sku_file(file: UploadFile = File(...), sess: dict = Depends(requi
     return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": 'attachment; filename="bake-party-sku-for-wolt.xlsx"',
                              "X-Summary": json.dumps(summary), "Access-Control-Expose-Headers": "X-Summary", "Cache-Control": "no-store"})
+
+# --- Reading the menu back from Wolt: check the SKUs Wolt set, and complete the missing ones ---
+_wolt_menu_job = {"state": "idle"}           # idle | running | ready | error (one at a time)
+
+def _wolt_text(translations):
+    if isinstance(translations, list) and translations:
+        he = next((t.get("value") for t in translations if t.get("lang") == "he"), None)
+        return he or translations[0].get("value") or ""
+    return str(translations or "")
+
+def _wolt_fetch_menu(venue_id):
+    """GET /v2/venues/{id}/menu is asynchronous: it returns a resource_url to poll until READY."""
+    import urllib.request, urllib.error
+    start = _wolt_api("GET", f"/v2/venues/{venue_id}/menu", venue_id) or {}
+    url = start.get("resource_url")
+    if not url:
+        raise RuntimeError("וולט לא החזירו כתובת לתפריט")
+    for _ in range(90):                          # up to ~4.5 minutes
+        time_module.sleep(3)
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {wolt_access_token(venue_id)}", "Accept": "application/json"})
+        try:
+            res = json.loads(urllib.request.urlopen(req, timeout=30).read())
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"וולט החזירו שגיאה {e.code} בקריאת התפריט")
+        if res.get("status") == "READY":
+            return res.get("menu") or {}
+        if res.get("status") == "ERROR":
+            raise RuntimeError("וולט לא הצליחו להכין את התפריט: " + str(res.get("error") or "")[:150])
+    raise RuntimeError("וולט לא סיימו להכין את התפריט בזמן. נסו שוב בעוד כמה דקות.")
+
+def analyze_wolt_menu(menu, cur):
+    """Returns (checks, completion_rows, summary).
+    checks: Wolt items that already have a SKU, with anything suspicious about the link.
+    completion_rows: Wolt items without a SKU, matched like the SKU file (now with Wolt's prices)."""
+    import difflib, pandas as pd
+    cur.execute("SELECT id, name, price FROM Products;")
+    site = {r[0]: {"name": r[1], "price": float(r[2])} for r in cur.fetchall()}
+    cat_names = {}
+    for c in menu.get("categories") or []:
+        for b in c.get("item_bindings") or []:
+            cat_names.setdefault(b.get("item_id"), []).append(f'{_wolt_text(c.get("name"))}::{c.get("id")}')
+    checks, missing, linked = [], [], set()
+    for it in menu.get("items") or []:
+        prod = it.get("product") or {}
+        name = _wolt_text(prod.get("name")).strip()
+        price = (it.get("price") or 0) / 100 if it.get("price") is not None else None
+        sku = str(prod.get("sku") or "").strip()
+        if not sku:
+            for c in cat_names.get(it.get("id"), [None]):
+                missing.append({"id": it.get("id"), "name": name, "price": price, "gtin": prod.get("gtin") or "", "category_id": c or ""})
+            continue
+        problems = []
+        p = site.get(int(sku)) if sku.isdigit() else None
+        if not p:
+            problems.append("ה-SKU לא קיים באתר")
+        else:
+            linked.add(int(sku))
+            sim = difflib.SequenceMatcher(None, name.lower(), p["name"].lower()).ratio()
+            if sim < 0.6:
+                problems.append(f"שם שונה ({round(sim * 100)}% דמיון)")
+            if price and p["price"] > 0:
+                off = min(abs(p["price"] - price), abs(invoice_ai.wolt_price_from_site(p["price"]) - price)) / price
+                if off > 0.15:
+                    problems.append("מחיר שונה")
+        checks.append({"wolt_id": it.get("id"), "name": name, "price": price, "sku": sku,
+                       "site_name": p["name"] if p else None, "site_price": p["price"] if p else None, "problems": problems})
+    completion, comp_summary = [], {}
+    if missing:
+        completion, comp_summary = build_wolt_sku_rows(pd.DataFrame(missing), cur, exclude_ids=linked)
+    summary = {"items": len(menu.get("items") or []), "with_sku": len(checks),
+               "suspicious": sum(1 for c in checks if c["problems"]), "without_sku": comp_summary.get("total", 0),
+               "completable": comp_summary.get("barcode", 0) + comp_summary.get("name", 0),
+               "to_check": comp_summary.get("similar", 0) + comp_summary.get("ambiguous", 0) + comp_summary.get("none", 0)}
+    return checks, completion, summary
+
+def _wolt_menu_job_run(venue_id, user_id):
+    try:
+        menu = _wolt_fetch_menu(venue_id)
+        conn = get_conn(); cur = conn.cursor()
+        checks, completion, summary = analyze_wolt_menu(menu, cur)
+        cur.close(); conn.close()
+        _wolt_menu_job.update({"state": "ready", "checks": checks, "completion": completion, "summary": summary,
+                               "at": time_module.time()})
+        _audit({"user_id": user_id, "name": None}, "wolt_menu_check", "wolt", None, summary)
+    except Exception as e:
+        _wolt_menu_job.update({"state": "error", "error": str(e)[:300], "at": time_module.time()})
+
+@app.post("/api/admin/wolt/menu-check")
+def wolt_menu_check_start(sess: dict = Depends(require_admin)):
+    """Starts reading the venue's menu from Wolt (Wolt allows this about once per 15 minutes)."""
+    if _wolt_menu_job.get("state") == "running":
+        return {"state": "running"}
+    if _wolt_menu_job.get("state") in ("ready", "error") and time_module.time() - _wolt_menu_job.get("at", 0) < 15 * 60:
+        return {"state": _wolt_menu_job["state"], "cached": True}
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT venue_id FROM wolt_connection WHERE status = 'active' ORDER BY id LIMIT 1;")
+    r = cur.fetchone(); cur.close(); conn.close()
+    if not r:
+        raise HTTPException(status_code=400, detail="החנות לא מחוברת לוולט")
+    _wolt_menu_job.clear(); _wolt_menu_job.update({"state": "running", "at": time_module.time()})
+    threading.Thread(target=_wolt_menu_job_run, args=(r[0], sess["user_id"]), daemon=True).start()
+    return {"state": "running"}
+
+@app.get("/api/admin/wolt/menu-check")
+def wolt_menu_check_status(sess: dict = Depends(require_admin)):
+    j = _wolt_menu_job
+    out = {"state": j.get("state", "idle"), "error": j.get("error"), "summary": j.get("summary")}
+    if j.get("at"):
+        out["at"] = datetime.fromtimestamp(j["at"], timezone.utc).isoformat()
+    return out
+
+@app.get("/api/admin/wolt/menu-check/file")
+def wolt_menu_check_file(sess: dict = Depends(require_admin)):
+    """Excel: SKUs to add (for Wolt), items to check, and suspicious existing SKUs."""
+    import io
+    from fastapi.responses import Response
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    j = _wolt_menu_job
+    if j.get("state") != "ready":
+        raise HTTPException(status_code=400, detail="קודם מריצים בדיקת תפריט")
+    wb = Workbook()
+    ws = wb.active; ws.title = "sku_for_wolt"
+    ws.append(["wolt_item_id", "item_name", "gtin", "sku"])
+    for r in j["completion"]:
+        if r["sku"] is not None and r["match"] in ("barcode", "name"):
+            ws.append([r["wolt_id"], r["name"], r["gtin"] or None, str(r["sku"])])
+    ws2 = wb.create_sheet("לבדיקה")
+    ws2.append(["wolt_item_id", "שם בוולט", "מחיר בוולט", "SKU מוצע", "מוצר באתר (או אפשרויות)", "מחיר באתר", "מצב"])
+    label = {"similar": "שם דומה – לבדוק", "none": "לא נמצא באתר", "ambiguous": "כמה מוצרים באותו שם – לבחור SKU"}
+    for r in j["completion"]:
+        if r["match"] in label:
+            ws2.append([r["wolt_id"], r["name"], r["price"], str(r["sku"]) if r["sku"] else None, r["site_name"], r["site_price"], label[r["match"]]])
+    ws3 = wb.create_sheet("SKU חשודים")
+    ws3.append(["wolt_item_id", "שם בוולט", "מחיר בוולט", "SKU בוולט", "המוצר באתר", "מחיר באתר", "מה חשוד"])
+    red = PatternFill("solid", fgColor="F8D7DA")
+    for c in j["checks"]:
+        if c["problems"]:
+            ws3.append([c["wolt_id"], c["name"], c["price"], c["sku"], c["site_name"], c["site_price"], ", ".join(c["problems"])])
+            for cell in ws3[ws3.max_row]:
+                cell.fill = red
+    for sheet in wb.worksheets:
+        for c in sheet[1]:
+            c.font = Font(bold=True)
+        for col in sheet.columns:
+            sheet.column_dimensions[col[0].column_letter].width = min(60, max(12, max(len(str(c.value or "")) for c in col) + 2))
+    for sheet in list(wb.worksheets):
+        if sheet.max_row == 1 and len(wb.worksheets) > 1:
+            wb.remove(sheet)
+    buf = io.BytesIO(); wb.save(buf)
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="bake-party-wolt-menu-check.xlsx"', "Cache-Control": "no-store"})
 
 @app.post("/api/admin/wolt/sync-all")
 def wolt_sync_all(sess: dict = Depends(require_admin)):
