@@ -550,6 +550,20 @@ try:
         DROP TRIGGER IF EXISTS trg_wolt_queue ON Products;
         CREATE TRIGGER trg_wolt_queue AFTER INSERT OR UPDATE OF price, stock_quantity ON Products
             FOR EACH ROW EXECUTE FUNCTION wolt_queue_product();
+        -- A product deleted on the site must stop being sold on Wolt too
+        CREATE TABLE IF NOT EXISTS wolt_sync_removed (
+            sku       TEXT PRIMARY KEY,
+            queued_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE OR REPLACE FUNCTION wolt_queue_removed() RETURNS trigger AS $$
+        BEGIN
+            INSERT INTO wolt_sync_removed (sku, queued_at) VALUES (OLD.id::text, NOW())
+            ON CONFLICT (sku) DO UPDATE SET queued_at = NOW();
+            RETURN OLD;
+        END $$ LANGUAGE plpgsql;
+        DROP TRIGGER IF EXISTS trg_wolt_removed ON Products;
+        CREATE TRIGGER trg_wolt_removed AFTER DELETE ON Products
+            FOR EACH ROW EXECUTE FUNCTION wolt_queue_removed();
     """)
     init_cur.execute("DELETE FROM wolt_events WHERE received_at < NOW() - INTERVAL '90 days';")
 
@@ -5464,7 +5478,7 @@ def run_wolt_item_sync(force=False):
     try:
         cur.execute("SELECT venue_id FROM wolt_connection WHERE status = 'active';")
         venues = [r[0] for r in cur.fetchall()]
-        cur.execute("SELECT COUNT(*) FROM wolt_sync_queue;")
+        cur.execute("SELECT (SELECT COUNT(*) FROM wolt_sync_queue) + (SELECT COUNT(*) FROM wolt_sync_removed);")
         if not venues or cur.fetchone()[0] == 0:
             return None
         kind = _wolt_venue_kind(cur)
@@ -5479,9 +5493,11 @@ def run_wolt_item_sync(force=False):
             cur.execute("""SELECT q.product_id, q.queued_at, p.price, p.stock_quantity FROM wolt_sync_queue q
                            JOIN Products p ON p.id = q.product_id ORDER BY q.queued_at LIMIT %s;""", (WOLT_ITEMS_BATCH,))
             rows = cur.fetchall()
-            if not rows:
+            cur.execute("SELECT sku, queued_at FROM wolt_sync_removed ORDER BY queued_at LIMIT %s;", (WOLT_ITEMS_BATCH,))
+            removed = cur.fetchall()
+            if not rows and not removed:
                 continue
-            data = []
+            data = [{"sku": sku, "enabled": False, **({"in_stock": False} if kind == "retail" else {})} for sku, _ in removed]
             for pid, _, price, stock in rows:
                 item = {"sku": str(pid)}
                 if price and float(price) > 0:
@@ -5496,6 +5512,8 @@ def run_wolt_item_sync(force=False):
                 # Remove only what was sent and hasn't changed again since
                 for pid, queued_at, _, _ in rows:
                     cur.execute("DELETE FROM wolt_sync_queue WHERE product_id = %s AND queued_at = %s;", (pid, queued_at))
+                for sku, queued_at in removed:
+                    cur.execute("DELETE FROM wolt_sync_removed WHERE sku = %s AND queued_at = %s;", (sku, queued_at))
                 state.update({"last_sent": time_module.time(), "last_count": len(data), "last_error": None, "retry_after": 0})
                 result = {"sent": len(data)}
             except WoltApiError as e:
@@ -5528,7 +5546,7 @@ async def _wolt_items_loop():
 @app.get("/api/admin/wolt/sync-status")
 def wolt_sync_status(sess: dict = Depends(require_admin)):
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM wolt_sync_queue;")
+    cur.execute("SELECT (SELECT COUNT(*) FROM wolt_sync_queue) + (SELECT COUNT(*) FROM wolt_sync_removed);")
     queued = cur.fetchone()[0]
     cur.execute("SELECT venue_id FROM wolt_connection WHERE status = 'active' ORDER BY id LIMIT 1;")
     r = cur.fetchone()
