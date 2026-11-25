@@ -5739,6 +5739,11 @@ async def wolt_sku_file(file: UploadFile = File(...), sess: dict = Depends(requi
                     headers={"Content-Disposition": 'attachment; filename="bake-party-sku-for-wolt.xlsx"',
                              "X-Summary": json.dumps(summary), "Access-Control-Expose-Headers": "X-Summary", "Cache-Control": "no-store"})
 
+def _name_key(n):
+    """Names compared loosely: no emojis, punctuation or extra spaces."""
+    import re
+    return " ".join(re.sub(r"[^\w\s]", " ", str(n or "")).lower().split())
+
 # --- Reading the menu back from Wolt: check the SKUs Wolt set, and complete the missing ones ---
 _wolt_menu_job = {"state": "idle"}           # idle | running | ready | error (one at a time)
 
@@ -5819,6 +5824,14 @@ def _wolt_menu_job_run(venue_id, user_id):
         conn = get_conn(); cur = conn.cursor()
         checks, completion, summary = analyze_wolt_menu(menu, cur)
         cur.close(); conn.close()
+        # Keep what's on Wolt (SKUs and names) for the "new products for Wolt" export
+        skus, names = set(), set()
+        for it in menu.get("items") or []:
+            prod = it.get("product") or {}
+            if str(prod.get("sku") or "").strip():
+                skus.add(str(prod["sku"]).strip())
+            names.add(_name_key(_wolt_text(prod.get("name"))))
+        _wolt_menu_job.update({"wolt_skus": skus, "wolt_names": names})
         _wolt_menu_job.update({"state": "ready", "checks": checks, "completion": completion, "summary": summary,
                                "at": time_module.time()})
         _audit({"user_id": user_id, "name": None}, "wolt_menu_check", "wolt", None, summary)
@@ -5890,6 +5903,89 @@ def wolt_menu_check_file(sess: dict = Depends(require_admin)):
     buf = io.BytesIO(); wb.save(buf)
     return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": 'attachment; filename="bake-party-wolt-menu-check.xlsx"', "Cache-Control": "no-store"})
+
+@app.post("/api/admin/wolt/new-products-export")
+async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess: dict = Depends(require_admin)):
+    """ZIP for Wolt with every site product that isn't on Wolt yet: an Excel sheet (with SKU = product id,
+    so stock and price sync from day one) and an images/ folder (16:9 on white, named <sku>.jpg).
+    What's on Wolt comes from an uploaded Wolt export (id/name, optional sku), or else from the last menu check."""
+    import io, zipfile, pandas as pd
+    from fastapi.responses import Response
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    wolt_skus, wolt_names = set(), set()
+    if file is not None and file.filename:
+        data = await file.read(15 * 1024 * 1024 + 1)
+        try:
+            sheets = pd.read_excel(io.BytesIO(data), sheet_name=None)
+        except Exception:
+            raise HTTPException(status_code=400, detail="לא הצלחתי לפתוח את הקובץ. צריך קובץ אקסל (xlsx) שהורד מוולט")
+        found = False
+        for d in sheets.values():
+            cols = {str(c).strip().lower(): c for c in d.columns}
+            if "name" in cols:
+                found = True
+                wolt_names |= {_name_key(v) for v in d[cols["name"]].dropna()}
+                for k in ("sku", "merchant_sku"):
+                    if k in cols:
+                        wolt_skus |= {str(v).split(".")[0].strip() for v in d[cols[k]].dropna()}
+        if not found:
+            raise HTTPException(status_code=400, detail="בקובץ אין עמודה name עם שמות המוצרים בוולט")
+    elif _wolt_menu_job.get("state") == "ready" and "wolt_names" in _wolt_menu_job:
+        wolt_skus, wolt_names = _wolt_menu_job["wolt_skus"], _wolt_menu_job["wolt_names"]
+    else:
+        raise HTTPException(status_code=400, detail="צריך לדעת מה כבר יש בוולט: מריצים קודם \"בדיקת התפריט בוולט\", או מעלים קובץ ייצוא מוולט")
+
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""SELECT p.id, p.name, p.price, p.stock_quantity, p.notes, p.barcode, p.weight_grams, p.units_per_package,
+                          p.image_url, p.category_id, p.created_at FROM Products p ORDER BY p.id;""")
+    products = cur.fetchall()
+    chains = {}
+    rows = []
+    for pid, name, price, stock, notes, barcode, weight, units, image, cat_id, created in products:
+        if str(pid) in wolt_skus or _name_key(name) in wolt_names:
+            continue                                   # already on Wolt
+        if cat_id not in chains:
+            chains[cat_id] = " > ".join(n for _, n in _category_chain(cur, cat_id)) if cat_id else ""
+        rows.append({"sku": str(pid), "name": name, "price": float(price), "in_stock": (stock or 0) > 0, "notes": notes,
+                     "barcode": barcode, "weight": weight, "units": units, "image": image, "category": chains[cat_id],
+                     "created": created})
+    cur.close(); conn.close()
+    if not rows:
+        raise HTTPException(status_code=400, detail="✓ אין מוצרים באתר שחסרים בוולט")
+
+    zbuf = io.BytesIO()
+    no_image = 0
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+        wb = Workbook(); ws = wb.active; ws.title = "new_products"
+        ws.append(["sku", "name", "description", "price", "category", "gtin", "weight_in_grams", "number_of_units",
+                   "image_file", "in_stock"])
+        for r in rows:
+            img_file = None
+            path = str(r["image"] or "")
+            if path.startswith("/images/"):
+                base = os.path.basename(path)
+                stem, ext = os.path.splitext(base)
+                wide = os.path.join(IMAGES_DIR, f"{stem}-wide.jpg")   # Wolt wants 16:9 on white
+                src = wide if os.path.exists(wide) else os.path.join(IMAGES_DIR, base)
+                if os.path.exists(src):
+                    img_file = f"{r['sku']}{os.path.splitext(src)[1].lower() or '.jpg'}"
+                    z.write(src, f"images/{img_file}")
+            if not img_file:
+                no_image += 1
+            ws.append([r["sku"], r["name"], r["notes"], invoice_ai.wolt_price_from_site(r["price"]) if r["price"] > 0 else None,
+                       r["category"], r["barcode"], r["weight"], r["units"], img_file, "כן" if r["in_stock"] else "לא"])
+        for c in ws[1]:
+            c.font = Font(bold=True)
+        for col in ws.columns:
+            ws.column_dimensions[col[0].column_letter].width = min(60, max(10, max(len(str(c.value or "")) for c in col) + 2))
+        xbuf = io.BytesIO(); wb.save(xbuf)
+        z.writestr("bake-party-new-products.xlsx", xbuf.getvalue())
+    summary = {"products": len(rows), "with_image": len(rows) - no_image, "without_image": no_image}
+    _audit(sess, "wolt_new_products_export", "wolt", None, summary)
+    return Response(zbuf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="bake-party-new-products-for-wolt.zip"',
+                             "X-Summary": json.dumps(summary), "Access-Control-Expose-Headers": "X-Summary", "Cache-Control": "no-store"})
 
 @app.post("/api/admin/wolt/sync-all")
 def wolt_sync_all(sess: dict = Depends(require_admin)):

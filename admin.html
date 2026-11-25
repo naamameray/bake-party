@@ -1904,6 +1904,12 @@
                     <p style="color:var(--muted); margin:6px 0;">האתר קורא את התפריט מוולט, בודק שכל SKU שהוגדר שם מצביע על המוצר הנכון באתר (שם ומחיר), ומכין קובץ השלמה למוצרים שעוד אין להם SKU. וולט מאפשרים קריאה כזו בערך פעם ברבע שעה.</p>
                     <button class="btn w-menu-btn" type="button" style="padding:6px 12px;">בדיקת התפריט</button>
                     <div class="w-menu-res" style="margin-top:6px;"></div></details>`;
+                html += `<details style="font-size:0.9em; margin:8px 0;"><summary style="cursor:pointer; font-weight:bold;">📦 ייצוא מוצרים חדשים לוולט</summary>
+                    <p style="color:var(--muted); margin:6px 0;">כל המוצרים שיש באתר ואין בוולט, בקובץ ZIP: אקסל עם הפרטים (כולל SKU, כדי שהמחיר והמלאי יתעדכנו מהיום הראשון) ותיקיית תמונות בפורמט של וולט (רקע לבן, 16:9). את ה-ZIP שולחים לוולט.<br>
+                    מה כבר יש בוולט נלקח מ"בדיקת התפריט" האחרונה. אפשר במקום זה להעלות קובץ ייצוא מוולט:</p>
+                    <input type="file" class="w-new-file" accept=".xlsx" style="max-width:100%;">
+                    <button class="btn w-new-btn" type="button" style="padding:6px 12px; margin-top:6px;">יצירת הקובץ</button>
+                    <p class="w-new-msg" style="font-weight:bold; margin:6px 0 0;"></p></details>`;
                 html += `<details style="font-size:0.9em; margin:8px 0;"><summary style="cursor:pointer; font-weight:bold;">📄 קובץ SKU לוולט (לפני מעבר לחנות האמיתית)</summary>
                     <p style="color:var(--muted); margin:6px 0;">מעלים קובץ אקסל שהורד מוולט עם רשימת המוצרים (צריכות להיות בו העמודות id ו-name). יורד קובץ שבו לכל מוצר בוולט מופיע ה-SKU שלו, כלומר מספר המוצר באתר, לשליחה לוולט.</p>
                     <input type="file" class="w-sku-file" accept=".xlsx" style="max-width:100%;">
@@ -1947,6 +1953,20 @@
                         poll();
                     };
                 }
+                wrap.querySelector('.w-new-btn').onclick = async () => {
+                    const f = wrap.querySelector('.w-new-file').files[0], msg = wrap.querySelector('.w-new-msg');
+                    msg.style.color = 'var(--muted)'; msg.textContent = 'משווה בין האתר לוולט...';
+                    try {
+                        const fd = new FormData(); if (f) fd.append('file', f);
+                        const r = await fetch(`${API}/api/admin/wolt/new-products-export`, { method: 'POST', headers: { 'Authorization': authHeaders()['Authorization'] }, body: fd });
+                        if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || 'שגיאה'); }
+                        const sum = JSON.parse(r.headers.get('X-Summary') || '{}');
+                        const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
+                        a.download = 'bake-party-new-products-for-wolt.zip'; document.body.appendChild(a); a.click(); a.remove();
+                        msg.style.color = 'var(--ok)';
+                        msg.textContent = `✓ הקובץ ירד: ${sum.products} מוצרים שאין בוולט, ${sum.with_image} עם תמונה` + (sum.without_image ? ` (${sum.without_image} בלי תמונה)` : '');
+                    } catch (e) { msg.style.color = e.message.startsWith('✓') ? 'var(--ok)' : '#c62828'; msg.textContent = e.message; }
+                };
                 wrap.querySelector('.w-sku-btn').onclick = async () => {
                     const f = wrap.querySelector('.w-sku-file').files[0], msg = wrap.querySelector('.w-sku-msg');
                     if (!f) { msg.style.color = '#c62828'; msg.textContent = 'בחרי את קובץ הייצוא של וולט'; return; }
