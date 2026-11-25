@@ -1900,12 +1900,33 @@
                 else html += `<p><b>ממתין לפרטים מוולט.</b> אחרי שוולט ישלחו Client ID ו-Secret, מכניסים אותם ב-Railway ואז יופיע כאן כפתור חיבור.</p>`;
                 html += `<p style="font-size:0.85em; color:var(--muted);">הודעות הזמנה שהתקבלו מוולט: ${st.events}${st.last_event ? ' · אחרונה ' + fmt(st.last_event) : ''}</p>`;
                 if (st.venues.some(v => v.status === 'active')) html += `<div class="w-sync" style="background:var(--pink-light); border-radius:12px; padding:8px 12px; margin:8px 0; font-size:0.9em;">טוען מצב עדכונים...</div>`;
+                html += `<details style="font-size:0.9em; margin:8px 0;"><summary style="cursor:pointer; font-weight:bold;">📄 קובץ SKU לוולט (לפני מעבר לחנות האמיתית)</summary>
+                    <p style="color:var(--muted); margin:6px 0;">מעלים את קובץ הייצוא של וולט (אותו אקסל שממנו ייבאנו את המוצרים). יורד קובץ שבו לכל מוצר בוולט מופיע ה-SKU שלו, כלומר מספר המוצר באתר, לשליחה לוולט.</p>
+                    <input type="file" class="w-sku-file" accept=".xlsx" style="max-width:100%;">
+                    <button class="btn w-sku-btn" type="button" style="padding:6px 12px; margin-top:6px;">יצירת הקובץ</button>
+                    <p class="w-sku-msg" style="font-weight:bold; margin:6px 0 0;"></p></details>`;
                 html += `<details style="font-size:0.85em;"><summary style="cursor:pointer;">הכתובות למסירה לוולט</summary>
                     <p style="direction:ltr; text-align:left; word-break:break-all;">Redirect URL: <code class="w-r"></code><br>Webhook: <code class="w-w"></code></p></details>`;
                 wrap.innerHTML = html;
                 if (wrap.querySelector('.w-err')) wrap.querySelector('.w-err').textContent = st.last_error.reason;
                 wrap.querySelector('.w-r').textContent = st.redirect_url;
                 if (wrap.querySelector('.w-sync')) loadWoltSync(wrap.querySelector('.w-sync'), fmt);
+                wrap.querySelector('.w-sku-btn').onclick = async () => {
+                    const f = wrap.querySelector('.w-sku-file').files[0], msg = wrap.querySelector('.w-sku-msg');
+                    if (!f) { msg.style.color = '#c62828'; msg.textContent = 'בחרי את קובץ הייצוא של וולט'; return; }
+                    msg.style.color = 'var(--muted)'; msg.textContent = 'מתאים מוצרים...';
+                    try {
+                        const fd = new FormData(); fd.append('file', f);
+                        const r = await fetch(`${API}/api/admin/wolt/sku-file`, { method: 'POST', headers: { 'Authorization': authHeaders()['Authorization'] }, body: fd });
+                        if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || 'שגיאה'); }
+                        const sum = JSON.parse(r.headers.get('X-Summary') || '{}');
+                        const blob = await r.blob(), a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob); a.download = 'bake-party-sku-for-wolt.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+                        msg.style.color = 'var(--ok)';
+                        msg.textContent = `✓ הקובץ ירד. ${sum.barcode + sum.name} מתוך ${sum.total} מוצרים הותאמו בוודאות` +
+                            (sum.similar || sum.none ? ` · לבדיקה: ${sum.similar} בשם דומה, ${sum.none} לא נמצאו (בגיליון "לבדיקה")` : '');
+                    } catch (e) { msg.style.color = '#c62828'; msg.textContent = e.message; }
+                };
                 wrap.querySelector('.w-w').textContent = st.webhook_url;
                 if (st.configured) {
                     const b = document.createElement('button');
