@@ -5906,7 +5906,8 @@ def analyze_wolt_menu(menu, cur):
         completion, comp_summary = build_wolt_sku_rows(pd.DataFrame(missing), cur, exclude_ids=linked)
     for r in completion:
         r["foreign_sku"] = foreign_skus.get(r.get("wolt_id"))
-    summary = {"items": len(menu.get("items") or []), "with_sku": len(checks), "foreign_sku": len(foreign_skus),
+    summary = {"not_on_site": sum(1 for r in completion if r["match"] == "none"),
+               "items": len(menu.get("items") or []), "with_sku": len(checks), "foreign_sku": len(foreign_skus),
                "suspicious": sum(1 for c in checks if c["problems"]), "without_sku": comp_summary.get("total", 0),
                "completable": comp_summary.get("barcode", 0) + comp_summary.get("name", 0),
                "to_check": comp_summary.get("similar", 0) + comp_summary.get("ambiguous", 0) + comp_summary.get("none", 0)}
@@ -5933,7 +5934,24 @@ def _wolt_menu_job_run(venue_id, user_id):
                 en = it.get("enabled")
                 enabled = en.get("enabled", True) if isinstance(en, dict) else (en is not False)
                 avail[pid] = bool(enabled) and str(it.get("inventory_mode") or "") != "forced_out_of_stock"
-        _wolt_menu_job.update({"wolt_skus": skus, "wolt_names": names, "wolt_avail": avail})
+        # Details of every Wolt item, for "import products that are on Wolt but not on the site"
+        cats_of = defaultdict(list)
+        for c in menu.get("categories") or []:
+            for b in c.get("item_bindings") or []:
+                cats_of[b.get("item_id")].append(_wolt_text(c.get("name")))
+        details = {}
+        for it in menu.get("items") or []:
+            prod = it.get("product") or {}
+            en = it.get("enabled")
+            details[it.get("id")] = {
+                "name": _wolt_text(prod.get("name")).strip(), "description": _wolt_text(prod.get("description")).strip(),
+                "price": (it.get("price") or 0) / 100, "image": prod.get("image_url") or None,
+                "gtin": "".join(ch for ch in str(prod.get("gtin") or "") if ch.isdigit()) or None,
+                "weight": prod.get("weight_in_grams"), "units": prod.get("number_of_units"),
+                "available": (en.get("enabled", True) if isinstance(en, dict) else en is not False)
+                             and str(it.get("inventory_mode") or "") != "forced_out_of_stock",
+                "categories": cats_of.get(it.get("id"), [])}
+        _wolt_menu_job.update({"wolt_skus": skus, "wolt_names": names, "wolt_avail": avail, "wolt_items": details})
         _wolt_menu_job.update({"state": "ready", "checks": checks, "completion": completion, "summary": summary,
                                "at": time_module.time()})
         _audit({"user_id": user_id, "name": None}, "wolt_menu_check", "wolt", None, summary)
@@ -6088,6 +6106,59 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
     return Response(zbuf.getvalue(), media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="bake-party-new-products-for-wolt.zip"',
                              "X-Summary": json.dumps(summary), "Access-Control-Expose-Headers": "X-Summary", "Cache-Control": "no-store"})
+
+@app.post("/api/admin/wolt/import-missing-products")
+def wolt_import_missing_products(sess: dict = Depends(require_admin)):
+    """Adds to the site every product that's on Wolt but not on the site (from the last menu check):
+    name, description, barcode, weight, image, availability, and price = Wolt's price / 1.3 rounded up to x.90.
+    The category is the site category with the same name as one of the item's Wolt categories.
+    Nothing is sent back to Wolt: its prices stay exactly as they are."""
+    j = _wolt_menu_job
+    if j.get("state") != "ready" or "wolt_items" not in j:
+        raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")
+    missing = {r["wolt_id"] for r in j.get("completion", []) if r["match"] == "none"}
+    if not missing:
+        raise HTTPException(status_code=400, detail="✓ אין מוצרים שקיימים בוולט ולא באתר")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""SELECT c.id, c.name, (SELECT COUNT(*) FROM Categories s WHERE s.parent_id = c.id) FROM Categories c;""")
+    cats = defaultdict(list)
+    for cid, cname, nsub in cur.fetchall():
+        cats[_name_key(cname)].append((nsub == 0, cid))          # prefer a leaf category on equal names
+    cur.execute("SELECT name FROM Products;")
+    existing = {_name_key(r[0]) for r in cur.fetchall()}
+    created, no_category = [], []
+    for wid in missing:
+        d = j["wolt_items"].get(wid)
+        if not d or not d["name"] or _name_key(d["name"]) in existing:
+            continue
+        cat_id = None
+        for wc in d["categories"]:
+            options = sorted(cats.get(_name_key(wc), []), reverse=True)
+            if options:
+                cat_id = options[0][1]; break
+        price = _wolt_price(d["price"], True, "nine") if d["price"] else 0
+        cur.execute("""INSERT INTO Products (name, category_id, price, stock_quantity, weight_grams, units_per_package,
+                                             image_url, notes, barcode, created_at)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW()) RETURNING id;""",
+                    (d["name"][:500], cat_id, price, 100 if d["available"] else 0, d["weight"], d["units"],
+                     d["image"], d["description"] or None, d["gtin"]))
+        pid = cur.fetchone()[0]
+        if cat_id:
+            cur.execute("INSERT INTO product_categories (product_id, category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING;", (pid, cat_id))
+        else:
+            no_category.append({"id": pid, "name": d["name"]})
+        existing.add(_name_key(d["name"]))
+        created.append({"id": pid, "name": d["name"], "sku": wolt_sku(pid), "price": price})
+    if not created:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=400, detail="✓ כל המוצרים האלה כבר קיימים באתר")
+    if created:
+        # They match Wolt already: don't send them back (that would change Wolt's prices by the rounding)
+        cur.execute("DELETE FROM wolt_sync_queue WHERE product_id = ANY(%s);", ([c["id"] for c in created],))
+    conn.commit(); cur.close(); conn.close()
+    summary = {"created": len(created), "without_category": len(no_category)}
+    _audit(sess, "wolt_import_missing_products", "wolt", None, summary)
+    return {**summary, "products": created, "no_category": no_category}
 
 @app.post("/api/admin/wolt/import-availability")
 def wolt_import_availability(sess: dict = Depends(require_admin)):
