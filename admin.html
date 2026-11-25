@@ -1692,13 +1692,22 @@
                 if (d.last_sent) h += ` · נשלח לאחרונה ב-${time(d.last_sent)} (${d.last_count} מוצרים)`;
                 if (d.queued && d.next_send) h += ` · השליחה הבאה ב-${time(d.next_send)}`;
                 else if (d.queued) h += ' · יישלח בדקה הקרובה';
-                h += `<br><span style="color:var(--muted);">וולט מאפשרים עדכון אחד כל ${Math.round(d.interval_minutes * 10) / 10} דקות, אז שינויים נאספים ונשלחים יחד.</span>`;
+                h += `<br><span style="color:var(--muted);">שינויים נאספים ונשלחים יחד, לכל היותר פעם ב-${Math.round(d.interval_minutes * 10) / 10} דקות, ופעם ביום בלילה נשלחים כל המוצרים.</span>`;
                 if (d.last_error) h += `<br><span style="color:#c62828;">השליחה האחרונה נכשלה: <span class="w-sync-err"></span></span>`;
-                h += '<br><button class="btn" type="button" style="margin-top:6px; padding:6px 12px;">שליחת כל המוצרים לוולט</button>';
+                if (!d.site_is_source) h += '<br><span style="color:#c77700;">⚠️ העדכון היומי של כל המוצרים כבוי, עד שהזמינות באתר תואמת לוולט. לפני חיבור החנות האמיתית: "בדיקת התפריט" ואז "קליטת זמינות מוולט".</span>';
+                h += '<br><button class="btn w-sync-all" type="button" style="margin-top:6px; padding:6px 12px;">שליחת כל המוצרים לוולט</button>';
+                h += ' <button class="btn w-import-avail" type="button" style="margin-top:6px; padding:6px 12px; background:#999;">קליטת זמינות מוולט לאתר</button>';
                 box.innerHTML = h;
+                box.querySelector('.w-import-avail').onclick = async () => {
+                    if (!confirm('להעתיק מוולט לאתר מה במלאי ומה אזל, לכל המוצרים שיש להם SKU? (לפי "בדיקת התפריט" האחרונה)')) return;
+                    const rr = await fetch(`${API}/api/admin/wolt/import-availability`, { method: 'POST', headers: authHeaders() });
+                    const dd = await rr.json().catch(() => ({}));
+                    alert(rr.ok ? `✓ עודכן: ${dd.sold_out} סומנו "אזל", ${dd.back_in_stock} חזרו למלאי (מתוך ${dd.linked} מוצרים מקושרים). מעכשיו האתר הוא המקור.` : (dd.detail || 'שגיאה'));
+                    loadWoltSync(box, fmt);
+                };
                 if (d.last_error) box.querySelector('.w-sync-err').textContent = d.last_error;
-                box.querySelector('button').onclick = async () => {
-                    if (!confirm('לשלוח לוולט את המחיר והמלאי של כל המוצרים באתר? זה נשלח במנות, לפי המגבלה של וולט.')) return;
+                box.querySelector('.w-sync-all').onclick = async () => {
+                    if (!confirm('לשלוח לוולט את המחיר והמלאי של כל המוצרים באתר?\nזה ידרוס את המלאי שבוולט. אם המלאי בוולט עדכני יותר, קודם לוחצים "קליטת זמינות מוולט לאתר".')) return;
                     const rr = await fetch(`${API}/api/admin/wolt/sync-all`, { method: 'POST', headers: authHeaders() });
                     const dd = await rr.json().catch(() => ({}));
                     alert(rr.ok ? `✓ ${dd.queued} מוצרים בתור לשליחה` : (dd.detail || 'שגיאה'));
@@ -1911,7 +1920,7 @@
                     <button class="btn w-new-btn" type="button" style="padding:6px 12px; margin-top:6px;">יצירת הקובץ</button>
                     <p class="w-new-msg" style="font-weight:bold; margin:6px 0 0;"></p></details>`;
                 html += `<details style="font-size:0.9em; margin:8px 0;"><summary style="cursor:pointer; font-weight:bold;">📄 קובץ SKU לוולט (לפני מעבר לחנות האמיתית)</summary>
-                    <p style="color:var(--muted); margin:6px 0;">מעלים קובץ אקסל שהורד מוולט עם רשימת המוצרים (צריכות להיות בו העמודות id ו-name). יורד קובץ שבו לכל מוצר בוולט מופיע ה-SKU שלו, כלומר מספר המוצר באתר, לשליחה לוולט.</p>
+                    <p style="color:var(--muted); margin:6px 0;">מעלים קובץ אקסל שהורד מוולט עם רשימת המוצרים (צריכות להיות בו העמודות id ו-name). יורד קובץ שבו לכל מוצר בוולט מופיע ה-SKU שלו (BP- ומספר המוצר באתר, למשל BP-000939), לשליחה לוולט.</p>
                     <input type="file" class="w-sku-file" accept=".xlsx" style="max-width:100%;">
                     <button class="btn w-sku-btn" type="button" style="padding:6px 12px; margin-top:6px;">יצירת הקובץ</button>
                     <p class="w-sku-msg" style="font-weight:bold; margin:6px 0 0;"></p></details>`;
