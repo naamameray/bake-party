@@ -5825,13 +5825,27 @@ def _wolt_fetch_menu(venue_id):
     url = start.get("resource_url")
     if not url:
         raise RuntimeError("וולט לא החזירו כתובת לתפריט")
+    import urllib.parse
+    # The resource_url may be on Wolt's API (needs our token) or a pre-signed download link on a storage
+    # server (rejects an extra Authorization header, typically with 400). Start with what the host suggests,
+    # and switch once if the other way is the one that works.
+    same_host = urllib.parse.urlparse(url).netloc == urllib.parse.urlparse(WOLT_API_BASE).netloc
+    with_auth = same_host
+    switched = False
     for _ in range(90):                          # up to ~4.5 minutes
         time_module.sleep(3)
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {wolt_access_token(venue_id)}", "Accept": "application/json"})
+        headers = {"Accept": "application/json"}
+        if with_auth:
+            headers["Authorization"] = f"Bearer {wolt_access_token(venue_id)}"
         try:
-            res = json.loads(urllib.request.urlopen(req, timeout=30).read())
+            res = json.loads(urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30).read())
         except urllib.error.HTTPError as e:
-            raise RuntimeError(f"וולט החזירו שגיאה {e.code} בקריאת התפריט")
+            detail = e.read().decode("utf-8", "replace")[:300]
+            print(f"[WOLT] menu poll {e.code} ({'with' if with_auth else 'without'} token) {urllib.parse.urlparse(url).netloc}: {detail}")
+            if e.code in (400, 401, 403) and not switched:
+                with_auth, switched = not with_auth, True
+                continue
+            raise RuntimeError(f"וולט החזירו שגיאה {e.code} בקריאת התפריט: {detail[:120]}")
         if res.get("status") == "READY":
             return res.get("menu") or {}
         if res.get("status") == "ERROR":
