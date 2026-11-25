@@ -5370,8 +5370,22 @@ def wolt_oauth_callback(request: Request, code: str = "", state: str = "", error
             conn.commit()
             return _wolt_result_page(False, "וולט לא אישרו את החיבור. " + reason)
         extra = {k: v for k, v in request.query_params.items() if k not in ("code", "state")}
+        cur.execute("SELECT venue_id FROM wolt_connection;")
+        previous = {r[0] for r in cur.fetchall()}
         venue = _wolt_save_tokens(cur, tok, None, extra or None)
         _setting_set(cur, "wolt_last_error", "")
+        if previous - {venue} or not previous:
+            # A different venue (e.g. moving from Wolt's test store to the real one): drop the old link and
+            # anything still queued for it, so nothing meant for the test store reaches the real one, and
+            # switch the daily full refresh off until availability has been imported from Wolt.
+            cur.execute("DELETE FROM wolt_connection WHERE venue_id <> %s;", (venue,))
+            cur.execute("DELETE FROM wolt_sync_queue;")
+            cur.execute("DELETE FROM wolt_sync_removed;")
+            _setting_set(cur, "wolt_site_is_source", "")
+            _setting_set(cur, "wolt_venue_kind", "")
+            for k in ("wolt_daily_full",):
+                _setting_set(cur, k, "")
+            _wolt_menu_job.clear(); _wolt_menu_job.update({"state": "idle"})
         conn.commit()
         _audit({"user_id": saved.get("by"), "name": None}, "wolt_connected", "wolt", None, {"venue": venue})
         return _wolt_result_page(True, "החנות חוברה לוולט בהצלחה")
