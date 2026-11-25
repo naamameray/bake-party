@@ -1692,10 +1692,10 @@
                 if (d.last_sent) h += ` · נשלח לאחרונה ב-${time(d.last_sent)} (${d.last_count} מוצרים)`;
                 if (d.queued && d.next_send) h += ` · השליחה הבאה ב-${time(d.next_send)}`;
                 else if (d.queued) h += ' · יישלח בדקה הקרובה';
-                h += `<br><span style="color:var(--muted);">שינויים נאספים ונשלחים יחד, לכל היותר פעם ב-${Math.round(d.interval_minutes * 10) / 10} דקות, ופעם ביום בלילה נשלחים כל המוצרים.</span>`;
+                h += `<br><span style="color:var(--muted);">שינויים נאספים ונשלחים יחד, לכל היותר פעם ב-${Math.round(d.interval_minutes * 10) / 10} דקות, ופעם ביום בלילה נשלחת הזמינות של כל המוצרים. מחיר נשלח רק כשהוא משתנה באתר.</span>`;
                 if (d.last_error) h += `<br><span style="color:#c62828;">השליחה האחרונה נכשלה: <span class="w-sync-err"></span></span>`;
                 if (!d.site_is_source) h += '<br><span style="color:#c77700;">⚠️ העדכון היומי של כל המוצרים כבוי, עד שהזמינות באתר תואמת לוולט. לפני חיבור החנות האמיתית: "בדיקת התפריט" ואז "קליטת זמינות מוולט".</span>';
-                h += '<br><button class="btn w-sync-all" type="button" style="margin-top:6px; padding:6px 12px;">שליחת כל המוצרים לוולט</button>';
+                h += '<br><button class="btn w-sync-all" type="button" style="margin-top:6px; padding:6px 12px;">שליחת זמינות כל המוצרים לוולט</button>';
                 h += ' <button class="btn w-import-avail" type="button" style="margin-top:6px; padding:6px 12px; background:#999;">קליטת זמינות מוולט לאתר</button>';
                 box.innerHTML = h;
                 box.querySelector('.w-import-avail').onclick = async () => {
@@ -1707,7 +1707,7 @@
                 };
                 if (d.last_error) box.querySelector('.w-sync-err').textContent = d.last_error;
                 box.querySelector('.w-sync-all').onclick = async () => {
-                    if (!confirm('לשלוח לוולט את המחיר והמלאי של כל המוצרים באתר?\nזה ידרוס את המלאי שבוולט. אם המלאי בוולט עדכני יותר, קודם לוחצים "קליטת זמינות מוולט לאתר".')) return;
+                    if (!confirm('לשלוח לוולט את הזמינות (במלאי / אזל) של כל המוצרים באתר? המחירים לא נשלחים.\nזה ידרוס את המלאי שבוולט. אם המלאי בוולט עדכני יותר, קודם לוחצים "קליטת זמינות מוולט לאתר".')) return;
                     const rr = await fetch(`${API}/api/admin/wolt/sync-all`, { method: 'POST', headers: authHeaders() });
                     const dd = await rr.json().catch(() => ({}));
                     alert(rr.ok ? `✓ ${dd.queued} מוצרים בתור לשליחה` : (dd.detail || 'שגיאה'));

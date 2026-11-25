@@ -538,12 +538,18 @@ try:
             product_id INTEGER PRIMARY KEY REFERENCES Products(id) ON DELETE CASCADE,
             queued_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        -- with_price: send the price too. Only when the price itself changed (or the product is new);
+        -- stock changes and full refreshes send availability only, so Wolt's prices aren't touched for nothing.
+        ALTER TABLE wolt_sync_queue ADD COLUMN IF NOT EXISTS with_price BOOLEAN NOT NULL DEFAULT TRUE;
         CREATE OR REPLACE FUNCTION wolt_queue_product() RETURNS trigger AS $$
+        DECLARE wp BOOLEAN;
         BEGIN
             IF TG_OP = 'INSERT' OR NEW.price IS DISTINCT FROM OLD.price
                OR (NEW.stock_quantity > 0) IS DISTINCT FROM (OLD.stock_quantity > 0) THEN
-                INSERT INTO wolt_sync_queue (product_id, queued_at) VALUES (NEW.id, NOW())
-                ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();
+                wp := (TG_OP = 'INSERT' OR NEW.price IS DISTINCT FROM OLD.price);
+                INSERT INTO wolt_sync_queue (product_id, queued_at, with_price) VALUES (NEW.id, NOW(), wp)
+                ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW(),
+                    with_price = wolt_sync_queue.with_price OR EXCLUDED.with_price;
             END IF;
             RETURN NEW;
         END $$ LANGUAGE plpgsql;
@@ -5510,7 +5516,7 @@ def run_wolt_item_sync(force=False):
             next_ok = max(state.get("last_sent", 0) + interval * 60, state.get("retry_after", 0))
             if not force and time_module.time() < next_ok:
                 continue
-            cur.execute("""SELECT q.product_id, q.queued_at, p.price, p.stock_quantity FROM wolt_sync_queue q
+            cur.execute("""SELECT q.product_id, q.queued_at, p.price, p.stock_quantity, q.with_price FROM wolt_sync_queue q
                            JOIN Products p ON p.id = q.product_id ORDER BY q.queued_at LIMIT %s;""", (WOLT_ITEMS_BATCH,))
             rows = cur.fetchall()
             cur.execute("SELECT sku, queued_at FROM wolt_sync_removed ORDER BY queued_at LIMIT %s;", (WOLT_ITEMS_BATCH,))
@@ -5519,9 +5525,9 @@ def run_wolt_item_sync(force=False):
                 continue
             data = [{"sku": wolt_sku(sku) if str(sku).isdigit() else sku, "enabled": False,
                      **({"in_stock": False} if kind == "retail" else {})} for sku, _ in removed]
-            for pid, _, price, stock in rows:
+            for pid, _, price, stock, with_price in rows:
                 item = {"sku": wolt_sku(pid)}
-                if price and float(price) > 0:
+                if with_price and price and float(price) > 0:
                     item["price"] = int(round(invoice_ai.wolt_price_from_site(float(price)) * 100))
                 if kind == "retail":
                     item.update({"enabled": True, "in_stock": (stock or 0) > 0})
@@ -5531,7 +5537,7 @@ def run_wolt_item_sync(force=False):
             try:
                 _wolt_api("PATCH", f"/venues/{venue}/items", venue, {"data": data})
                 # Remove only what was sent and hasn't changed again since
-                for pid, queued_at, _, _ in rows:
+                for pid, queued_at, _, _, _ in rows:
                     cur.execute("DELETE FROM wolt_sync_queue WHERE product_id = %s AND queued_at = %s;", (pid, queued_at))
                 for sku, queued_at in removed:
                     cur.execute("DELETE FROM wolt_sync_removed WHERE sku = %s AND queued_at = %s;", (sku, queued_at))
@@ -5569,7 +5575,7 @@ def _wolt_daily_full_refresh():
         if _setting_get(cur, "wolt_site_is_source") != "1":
             return
         _setting_set(cur, "wolt_daily_full", now.date().isoformat())
-        cur.execute("INSERT INTO wolt_sync_queue (product_id) SELECT id FROM Products ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();")
+        cur.execute("INSERT INTO wolt_sync_queue (product_id, with_price) SELECT id, FALSE FROM Products ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();")
         conn.commit()
         print(f"[WOLT] daily full refresh queued {cur.rowcount} products")
     finally:
@@ -6080,7 +6086,7 @@ def wolt_import_availability(sess: dict = Depends(require_admin)):
 def wolt_sync_all(sess: dict = Depends(require_admin)):
     """Queues every product, for a full price/stock refresh on Wolt (sent in batches as the rate limit allows)."""
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("INSERT INTO wolt_sync_queue (product_id) SELECT id FROM Products ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();")
+    cur.execute("INSERT INTO wolt_sync_queue (product_id, with_price) SELECT id, FALSE FROM Products ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();")
     n = cur.rowcount
     _setting_set(cur, "wolt_site_is_source", "1")       # from now on the site leads (daily full refresh on)
     conn.commit(); cur.close(); conn.close()
