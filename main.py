@@ -1807,13 +1807,15 @@ def _fetch_image(url, max_bytes=MAX_IMAGE_BYTES):
         def redirect_request(self, *a, **k):
             return None
     opener = urllib.request.build_opener(NoRedirect)
-    for _ in range(4):
+    followed_page = False
+    for _ in range(6):
         u = urllib.parse.urlparse(url)
         if u.scheme not in ("http", "https") or not u.hostname:
             raise ValueError("קישור לא תקין")
         if os.environ.get("IMAGE_FETCH_ALLOW_LOCAL") != "1" and not _public_host_ok(u.hostname):
             raise ValueError("אי אפשר להוריד מהכתובת הזו")
-        req = urllib.request.Request(url, headers={"User-Agent": "BakeParty-Shop/1.0", "Accept": "image/*"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; BakeParty-Shop/1.0)",
+                                                   "Accept": "image/*,text/html;q=0.8,*/*;q=0.5"})
         try:
             resp = opener.open(req, timeout=15)
         except urllib.error.HTTPError as e:
@@ -1824,9 +1826,29 @@ def _fetch_image(url, max_bytes=MAX_IMAGE_BYTES):
         if len(data) > max_bytes:
             raise ValueError("התמונה גדולה מדי")
         if not _image_kind(data):
-            raise ValueError("הקישור לא מוביל לתמונה (צריך קישור ישיר לקובץ התמונה)")
+            # A product page (e.g. on the supplier's site) instead of the image itself:
+            # take the page's main image, the one it declares for sharing (og:image).
+            page_img = _page_main_image(data, url) if not followed_page else None
+            if page_img:
+                url, followed_page = page_img, True
+                continue
+            raise ValueError("לא מצאתי תמונה בקישור. אפשר להדביק קישור לעמוד המוצר או לתמונה עצמה.")
         return data
     raise ValueError("יותר מדי הפניות בקישור")
+
+def _page_main_image(data, base_url):
+    """The main image a web page declares (og:image, twitter:image, or a product schema image)."""
+    import re, html as _h, urllib.parse
+    text = data[:600000].decode("utf-8", "ignore")
+    pats = [r'<meta[^>]+(?:property|name)=["\'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["\'][^>]*content=["\']([^"\']+)',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\'](?:og:image|twitter:image)',
+            r'"image"\s*:\s*(?:\[\s*)?"(https?:[^"]+)"']
+    for pat in pats:
+        m = re.search(pat, text, re.I)
+        if m:
+            u = _h.unescape(m.group(1).strip()).replace("\\/", "/")
+            return urllib.parse.urljoin(base_url, u)
+    return None
 
 @app.get("/api/admin/products/{product_id}/image-suggestions")
 def image_suggestions(product_id: int, sess: dict = Depends(require_admin)):
@@ -1927,24 +1949,49 @@ def _save_image_bytes(data):
         f.write(data)
     return f"/images/{base}.{ext}"
 
-def _auto_image_for(pid):
-    """True if a photo was found and attached to product pid."""
+def _save_square_copy(data):
+    """For photos that are already catalogue photos (e.g. from Wolt): no cut-out, just placed on a white
+    square for the site; the original is kept as the wide copy."""
+    import io
+    from PIL import Image, ImageOps
+    img = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA"); bg = Image.new("RGB", img.size, (255, 255, 255)); bg.paste(img, mask=img.split()[-1]); img = bg
+    img = img.convert("RGB")
+    base = uuid.uuid4().hex
+    img.save(os.path.join(IMAGES_DIR, f"{base}-wide.jpg"), "JPEG", quality=88, optimize=True)
+    img.thumbnail((920, 920))
+    canvas = Image.new("RGB", (1000, 1000), (255, 255, 255))
+    canvas.paste(img, ((1000 - img.width) // 2, (1000 - img.height) // 2))
+    canvas.save(os.path.join(IMAGES_DIR, f"{base}.jpg"), "JPEG", quality=88, optimize=True)
+    return f"/images/{base}.jpg"
+
+def _auto_image_for(pid, src_url=None):
+    """True if a photo was found and attached to product pid.
+    src_url: a known image (from the shop's own Wolt menu); otherwise search by the product's barcode."""
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT barcode, COALESCE(image_url, '') FROM Products WHERE id = %s;", (pid,))
     r = cur.fetchone(); cur.close(); conn.close()
-    if not r or not r[0] or r[1]:
+    if not r or r[1] or (not src_url and not r[0]):
         return False
-    sug = _off_suggestions(r[0]).get("suggestions") or []
-    if not sug:
-        return False
-    try:
-        url = _save_image_bytes(_fetch_image(sug[0]["url"]))
-    except Exception as e:
-        print(f"[IMG] automatic photo for product {pid} failed: {e}")
-        return False
+    if src_url:
+        try:
+            url, credit = _save_square_copy(_fetch_image(src_url)), None
+        except Exception as e:
+            print(f"[IMG] copying the Wolt photo of product {pid} failed: {e}")
+            return False
+    else:
+        sug = _off_suggestions(r[0]).get("suggestions") or []
+        if not sug:
+            return False
+        try:
+            url, credit = _save_image_bytes(_fetch_image(sug[0]["url"])), sug[0].get("credit")
+        except Exception as e:
+            print(f"[IMG] automatic photo for product {pid} failed: {e}")
+            return False
     conn = get_conn(); cur = conn.cursor()
     cur.execute("UPDATE Products SET image_url = %s, image_credit = %s WHERE id = %s AND COALESCE(image_url, '') = '';",
-                (url, sug[0].get("credit"), pid))
+                (url, credit, pid))
     ok = cur.rowcount == 1
     conn.commit(); cur.close(); conn.close()
     return ok
@@ -1956,21 +2003,24 @@ def _auto_images_worker():
                 _auto_img["running"] = False
                 _auto_img["last_run"] = datetime.now(timezone.utc).isoformat()
                 return
-            pid = _auto_img["queue"].pop(0)
+            pid, src = _auto_img["queue"].pop(0)
         try:
-            found = _auto_image_for(pid)
+            found = _auto_image_for(pid, src)
         except Exception as e:
             print(f"[IMG] automatic photo for product {pid} failed: {e}"); found = False
         with _auto_img_lock:
             _auto_img["done"] += 1
             _auto_img["found"] += 1 if found else 0
-        time_module.sleep(0.8)   # Open Food Facts asks for no more than ~100 product lookups a minute
+        time_module.sleep(0.2 if src else 0.8)   # Open Food Facts asks for no more than ~100 product lookups a minute
 
-def queue_auto_images(pids):
-    """Adds products to the background photo search. Returns how many were added."""
+def queue_auto_images(pids, sources=None):
+    """Adds products to the background photo search. sources: {product id: image url} for photos
+    that are already known (Wolt). Returns how many were added."""
+    sources = sources or {}
     pids = [int(p) for p in dict.fromkeys(pids)]
     with _auto_img_lock:
-        new = [p for p in pids if p not in _auto_img["queue"]]
+        queued = {q[0] for q in _auto_img["queue"]}
+        new = [(p, sources.get(p)) for p in pids if p not in queued]
         if not new:
             return 0
         if not _auto_img["running"]:
@@ -6174,6 +6224,7 @@ def _wolt_menu_job_run(venue_id, user_id):
             prod = it.get("product") or {}
             en = it.get("enabled")
             details[it.get("id")] = {
+                "pid": _pid_from_sku(prod.get("sku")),
                 "name": _wolt_text(prod.get("name")).strip(), "description": _wolt_text(prod.get("description")).strip(),
                 "price": (it.get("price") or 0) / 100, "image": prod.get("image_url") or None,
                 "gtin": "".join(ch for ch in str(prod.get("gtin") or "") if ch.isdigit()) or None,
@@ -6336,6 +6387,35 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
     return Response(zbuf.getvalue(), media_type="application/zip",
                     headers={"Content-Disposition": 'attachment; filename="bake-party-new-products-for-wolt.zip"',
                              "X-Summary": json.dumps(summary), "Access-Control-Expose-Headers": "X-Summary", "Cache-Control": "no-store"})
+
+@app.post("/api/admin/wolt/copy-images")
+def wolt_copy_images(sess: dict = Depends(require_admin)):
+    """Gives every site product that has no photo the photo of its Wolt item (from the last menu check).
+    Linked by SKU (BP-...), or else by the same barcode. Products that already have a photo are left alone."""
+    j = _wolt_menu_job
+    if j.get("state") != "ready" or "wolt_items" not in j:
+        raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT id, COALESCE(barcode, '') FROM Products WHERE COALESCE(image_url, '') = '';")
+    rows = cur.fetchall(); cur.close(); conn.close()
+    missing = {r[0] for r in rows}
+    by_barcode = {}
+    for pid, bc in rows:
+        if bc:
+            for v in _barcode_variants(bc):
+                by_barcode.setdefault(v, pid)
+    sources = {}
+    for it in j["wolt_items"].values():
+        if not it.get("image"):
+            continue
+        pid = it.get("pid") if it.get("pid") in missing else by_barcode.get(it.get("gtin") or "")
+        if pid in missing and pid not in sources:
+            sources[pid] = it["image"]
+    if not sources:
+        raise HTTPException(status_code=400, detail="✓ אין מוצרים באתר בלי תמונה שיש להם תמונה בוולט")
+    added = queue_auto_images(list(sources), sources)
+    _audit(sess, "wolt_copy_images", "products", None, {"queued": added})
+    return {"queued": added, "without_photo": len(missing)}
 
 @app.post("/api/admin/wolt/import-missing-products")
 def wolt_import_missing_products(sess: dict = Depends(require_admin)):
