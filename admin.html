@@ -1566,7 +1566,7 @@
 
         // ===================== Staff and users =====================
         const ROLE_LABELS = { admin: 'מנהל', employee: 'עובד', customer: 'לקוח' };
-        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט', '2fa_enabled': 'הפעלת אימות דו-שלבי', '2fa_disabled': 'כיבוי אימות דו-שלבי', '2fa_backup_code_used': 'כניסה עם קוד גיבוי', password_reset_by_email: 'איפוס סיסמה במייל', backup_download: 'הורדת גיבוי', invoice_apply: 'קליטת חשבונית', auto_images: 'חיפוש תמונות אוטומטי', wolt_copy_images: 'העתקת תמונות מוולט', wolt_content_done: 'עדכון שמות/תמונות בוולט' };
+        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט', '2fa_enabled': 'הפעלת אימות דו-שלבי', '2fa_disabled': 'כיבוי אימות דו-שלבי', '2fa_backup_code_used': 'כניסה עם קוד גיבוי', password_reset_by_email: 'איפוס סיסמה במייל', backup_download: 'הורדת גיבוי', invoice_apply: 'קליטת חשבונית', auto_images: 'חיפוש תמונות אוטומטי', wolt_copy_images: 'העתקת תמונות מוולט', wolt_content_done: 'עדכון שמות/תמונות בוולט', wolt_sync_paused: 'עצירת עדכונים לוולט', wolt_sync_resumed: 'המשך עדכונים לוולט' };
 
         async function loadStaffTab() {
             const list = document.getElementById('st-list');
@@ -1709,6 +1709,8 @@
                 h += `<br><span style="color:var(--muted);">שינויים נאספים ונשלחים יחד, לכל היותר פעם ב-${Math.round(d.interval_minutes * 10) / 10} דקות, ופעם ביום בלילה נשלחת הזמינות של כל המוצרים. מחיר נשלח רק כשהוא משתנה באתר.</span>`;
                 if (d.last_error) h += `<br><span style="color:#c62828;">השליחה האחרונה נכשלה: <span class="w-sync-err"></span></span>`;
                 if (!d.site_is_source) h += '<br><span style="color:#c77700;">⚠️ העדכון היומי של כל המוצרים כבוי, עד שהזמינות באתר תואמת לוולט. לפני חיבור החנות האמיתית: "בדיקת התפריט" ואז "קליטת זמינות מוולט".</span>';
+                if (d.paused) h += '<br><b style="color:#c62828;">⏸️ העדכונים לוולט עצורים.</b> שינויים נשמרים בתור ויישלחו כשממשיכים.';
+                h += `<br><button class="btn w-pause" type="button" style="margin-top:6px; padding:6px 12px; background:${d.paused ? 'var(--ok, #3B9E6A)' : '#c62828'};">${d.paused ? '▶️ להמשיך את העדכונים לוולט' : '⏸️ עצירת העדכונים לוולט'}</button>`;
                 h += '<br><button class="btn w-sync-all" type="button" style="margin-top:6px; padding:6px 12px;">שליחת זמינות כל המוצרים לוולט</button>';
                 h += ' <button class="btn w-import-avail" type="button" style="margin-top:6px; padding:6px 12px; background:#999;">קליטת זמינות מוולט לאתר</button>';
                 box.innerHTML = h;
@@ -1717,6 +1719,13 @@
                     const rr = await fetch(`${API}/api/admin/wolt/import-availability`, { method: 'POST', headers: authHeaders() });
                     const dd = await rr.json().catch(() => ({}));
                     alert(rr.ok ? `✓ עודכן: ${dd.sold_out} סומנו "אזל", ${dd.back_in_stock} חזרו למלאי (מתוך ${dd.linked} מוצרים מקושרים). מעכשיו האתר הוא המקור.` : (dd.detail || 'שגיאה'));
+                    loadWoltSync(box, fmt);
+                };
+                box.querySelector('.w-pause').onclick = async () => {
+                    const pause = !d.paused;
+                    if (!confirm(pause ? 'לעצור את כל העדכונים מהאתר לוולט (מחיר, מלאי והעדכון היומי)?' : 'להמשיך לשלוח עדכונים לוולט? מה שנאסף בתור יישלח.')) return;
+                    const rr = await fetch(`${API}/api/admin/wolt/sync-pause`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ paused: pause }) });
+                    if (!rr.ok) { alert('שגיאה'); return; }
                     loadWoltSync(box, fmt);
                 };
                 if (d.last_error) box.querySelector('.w-sync-err').textContent = d.last_error;
@@ -2073,7 +2082,8 @@
                         res.innerHTML = `${d.notice ? '<div class="w-menu-notice" style="background:#FFF4E5; color:#8a5300; border-radius:12px; padding:8px 12px; margin-bottom:6px;"></div>' : ''}
                             <div style="background:var(--pink-light); border-radius:12px; padding:8px 12px;">
                             ${when ? `<span style="color:var(--muted); font-size:0.85em;">הבדיקה מ-${when}</span><br>` : ''}
-                            ${s.items} מוצרים בוולט · ${s.with_sku} מקושרים לאתר (SKU בפורמט BP-)${s.with_sku ? (s.suspicious ? ` · <b style="color:#c62828;">${s.suspicious} חשודים</b>` : ' · ✓ אין חשודים') : ''}<br>
+                            ${s.items} מוצרים בוולט · ${s.with_sku} מקושרים לאתר (SKU בפורמט BP-)
+                            ${s.linked_sold_out != null ? `<br>זמינות בוולט (מקושרים): <b>${s.linked_available}</b> זמינים · <b>${s.linked_sold_out}</b> אזלו או מוסתרים` : ''}${s.with_sku ? (s.suspicious ? ` · <b style="color:#c62828;">${s.suspicious} חשודים</b>` : ' · ✓ אין חשודים') : ''}<br>
                             ${s.without_sku} עוד לא מקושרים${s.foreign_sku ? ` (מהם ${s.foreign_sku} עם SKU אחר שוולט יחליפו)` : ''}: ${s.completable} אפשר להשלים אוטומטית${s.to_check ? `, ${s.to_check} לבדיקה ידנית` : ''}<br>
                             <a href="#" class="w-menu-dl">⬇️ הורדת הקובץ (השלמה לוולט + בדיקה + חשודים)</a>
                             <br><button class="btn btn-ghost w-copy-img" type="button" style="margin-top:6px; padding:6px 12px;">🖼️ העתקת תמונות מוולט למוצרים באתר שאין להם תמונה</button><div class="w-copy-img-res" style="margin-top:4px;"></div>
