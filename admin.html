@@ -1566,7 +1566,7 @@
 
         // ===================== Staff and users =====================
         const ROLE_LABELS = { admin: 'מנהל', employee: 'עובד', customer: 'לקוח' };
-        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט', '2fa_enabled': 'הפעלת אימות דו-שלבי', '2fa_disabled': 'כיבוי אימות דו-שלבי', '2fa_backup_code_used': 'כניסה עם קוד גיבוי', password_reset_by_email: 'איפוס סיסמה במייל', backup_download: 'הורדת גיבוי', invoice_apply: 'קליטת חשבונית', auto_images: 'חיפוש תמונות אוטומטי', wolt_copy_images: 'העתקת תמונות מוולט' };
+        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט', '2fa_enabled': 'הפעלת אימות דו-שלבי', '2fa_disabled': 'כיבוי אימות דו-שלבי', '2fa_backup_code_used': 'כניסה עם קוד גיבוי', password_reset_by_email: 'איפוס סיסמה במייל', backup_download: 'הורדת גיבוי', invoice_apply: 'קליטת חשבונית', auto_images: 'חיפוש תמונות אוטומטי', wolt_copy_images: 'העתקת תמונות מוולט', wolt_content_done: 'עדכון שמות/תמונות בוולט' };
 
         async function loadStaffTab() {
             const list = document.getElementById('st-list');
@@ -1891,6 +1891,7 @@
                 const wrap = document.getElementById('inv-review');
                 wrap.innerHTML = `<div style="background:#E8F5E9; border-radius:12px; padding:12px; margin-top:10px;">
                     <b>✓ נשמר.</b> עודכנו ${d.updated} מוצרים (${d.price_changes} שינויי מחיר${d.renamed ? ', ' + d.renamed + ' שמות עודכנו' : ''}), נוספו ${d.created} מוצרים חדשים.
+                    ${d.renamed ? `<p style="margin:8px 0 0;">✏️ ${d.renamed} שמות השתנו באתר. בוולט השם לא משתנה לבד: הם נוספו לרשימה "שם, תיאור ותמונה לוולט" בכרטיס וולט.</p>` : ''}
                     ${d.photo_search ? `<p style="margin:8px 0 0;">🔍 מחפש ברקע תמונות לפי ברקוד ל-${d.photo_search} מוצרים בלי תמונה. מה שיימצא יופיע באתר תוך כמה דקות (ההתקדמות בכרטיס "תמונות אוטומטיות").</p>` : ''}
                     ${d.created_products.length ? '<p style="margin:8px 0 4px;">📷 מוצרים חדשים (לחיצה פותחת את המוצר באתר; אם לא נמצאה תמונה, מצלמים שם ב"📸 צילום"):</p><ul class="inv-new-list" style="margin:0;"></ul>' : ''}</div>`;
                 if (d.photo_search) setTimeout(loadAutoImages, 500);
@@ -1923,6 +1924,77 @@
             if (!res.ok) { alert(d.detail || 'שגיאה'); return; }
             loadAutoImages();
         };
+        // Name / description / photo changes: Wolt's item API takes price and stock only, so these are
+        // listed here to pass on to Wolt (a file for the rep, or by hand in Wolt's menu editor).
+        async function loadWoltContent(box) {
+            try {
+                const r = await fetch(`${API}/api/admin/wolt/content-changes`, { headers: authHeaders() });
+                const d = await r.json(); if (!r.ok) throw new Error(d.detail || 'שגיאה');
+                if (!d.changes.length) {
+                    box.innerHTML = '<b>✏️ שם, תיאור ותמונה לוולט</b><br>✓ אין שינויים שצריך להעביר לוולט. (מחיר ומלאי עוברים לבד; שם, תיאור ותמונה שמשנים באתר יופיעו כאן.)';
+                    return;
+                }
+                box.innerHTML = `<b>✏️ ${d.changes.length} שינויים באתר שצריך לעדכן גם בוולט</b>
+                    <div style="color:var(--muted);">שם, תיאור ותמונה לא עוברים לוולט לבד. מעדכנים בוולט (או שולחים לנציגה את הקובץ) ולוחצים "עדכנתי".</div>
+                    <div class="w-content-list" style="margin:8px 0; max-height:420px; overflow:auto;"></div>
+                    <button class="btn w-content-file" type="button" style="padding:6px 12px;">⬇️ קובץ לנציגה</button>
+                    <button class="btn btn-ghost w-content-done" type="button" style="padding:6px 12px;">✓ עדכנתי הכל</button>`;
+                const list = box.querySelector('.w-content-list');
+                const imgSrc = u => (u && u.startsWith('/')) ? API + u : u;
+                d.changes.forEach(c => {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'background:#fff; border-radius:10px; padding:8px 10px; margin:6px 0; display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap;';
+                    const info = document.createElement('div'); info.style.cssText = 'flex:1; min-width:200px;';
+                    const head = document.createElement('div'); head.style.cssText = 'font-size:.85em; color:var(--muted);';
+                    head.textContent = `${c.field_label} · מק"ט בוולט ${c.sku}`;
+                    info.appendChild(head);
+                    if (c.field === 'image') {
+                        const pics = document.createElement('div'); pics.style.cssText = 'display:flex; gap:8px; align-items:center; margin-top:4px;';
+                        const mk = (u, t) => { const w = document.createElement('div'); w.style.cssText = 'text-align:center; font-size:.75em; color:var(--muted);';
+                            if (u) { const im = document.createElement('img'); im.src = imgSrc(u); im.alt = ''; im.style.cssText = 'width:56px; height:56px; object-fit:contain; border:1px solid #eee; border-radius:8px; display:block;'; w.appendChild(im); }
+                            else { const n = document.createElement('div'); n.textContent = 'אין'; n.style.cssText = 'width:56px; height:56px; line-height:56px; border:1px dashed #ddd; border-radius:8px;'; w.appendChild(n); }
+                            const cap = document.createElement('div'); cap.textContent = t; w.appendChild(cap); return w; };
+                        pics.append(mk(c.old, 'קודמת'), '←', mk(c.new, 'חדשה'));
+                        info.appendChild(pics);
+                        const nm = document.createElement('div'); nm.textContent = c.product_name; nm.style.fontWeight = '600'; info.appendChild(nm);
+                    } else {
+                        const was = document.createElement('div'); was.innerHTML = '<span style="color:var(--muted);">היה:</span> '; 
+                        const ws = document.createElement('span'); ws.style.textDecoration = 'line-through'; ws.textContent = c.old || '—'; was.appendChild(ws);
+                        const now = document.createElement('div'); now.innerHTML = '<span style="color:var(--muted);">עכשיו:</span> ';
+                        const ns = document.createElement('b'); ns.textContent = c.new || '—'; now.appendChild(ns);
+                        if (c.field !== 'name') { const nm = document.createElement('div'); nm.textContent = c.product_name; nm.style.cssText = 'font-weight:600;'; info.appendChild(nm); }
+                        info.append(was, now);
+                    }
+                    const acts = document.createElement('div'); acts.style.cssText = 'display:flex; gap:6px; align-items:center;';
+                    const open = document.createElement('a'); open.href = '/#p=' + c.product_id; open.target = '_blank'; open.textContent = 'למוצר'; open.style.fontSize = '.85em';
+                    const done = document.createElement('button'); done.type = 'button'; done.className = 'btn'; done.style.cssText = 'padding:6px 12px; background:var(--ok, #3B9E6A);';
+                    done.textContent = '✓ עדכנתי';
+                    done.onclick = async () => {
+                        done.disabled = true;
+                        const rr = await fetch(`${API}/api/admin/wolt/content-changes/done`, { method: 'POST', headers: authHeaders(),
+                            body: JSON.stringify({ items: [{ product_id: c.product_id, field: c.field }] }) });
+                        if (!rr.ok) { done.disabled = false; alert('שגיאה'); return; }
+                        row.remove();
+                        if (!list.children.length) loadWoltContent(box);
+                    };
+                    acts.append(open, done);
+                    row.append(info, acts);
+                    list.appendChild(row);
+                });
+                box.querySelector('.w-content-file').onclick = async () => {
+                    const rr = await fetch(`${API}/api/admin/wolt/content-changes/file`, { headers: authHeaders() });
+                    if (!rr.ok) { const e = await rr.json().catch(() => ({})); alert(e.detail || 'שגיאה'); return; }
+                    const a = document.createElement('a'); a.href = URL.createObjectURL(await rr.blob());
+                    a.download = 'bake-party-wolt-changes.xlsx'; document.body.appendChild(a); a.click(); a.remove();
+                };
+                box.querySelector('.w-content-done').onclick = async () => {
+                    if (!confirm('לסמן שכל השינויים ברשימה עודכנו בוולט? כולם ייעלמו מהרשימה.')) return;
+                    const rr = await fetch(`${API}/api/admin/wolt/content-changes/done`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
+                    if (!rr.ok) { alert('שגיאה'); return; }
+                    loadWoltContent(box);
+                };
+            } catch (e) { box.textContent = e.message; }
+        }
         async function loadInvoiceHistory() {
             const wrap = document.getElementById('inv-history');
             try {
@@ -1962,6 +2034,7 @@
                 else html += `<p><b>ממתין לפרטים מוולט.</b> אחרי שוולט ישלחו Client ID ו-Secret, מכניסים אותם ב-Railway ואז יופיע כאן כפתור חיבור.</p>`;
                 html += `<p style="font-size:0.85em; color:var(--muted);">הודעות הזמנה שהתקבלו מוולט: ${st.events}${st.last_event ? ' · אחרונה ' + fmt(st.last_event) : ''}</p>`;
                 if (st.venues.some(v => v.status === 'active')) html += `<div class="w-sync" style="background:var(--pink-light); border-radius:12px; padding:8px 12px; margin:8px 0; font-size:0.9em;">טוען מצב עדכונים...</div>`;
+                if (st.venues.some(v => v.status === 'active')) html += `<div class="w-content" style="background:#FFF4E5; border-radius:12px; padding:8px 12px; margin:8px 0; font-size:0.9em;">טוען...</div>`;
                 if (st.venues.some(v => v.status === 'active')) html += `<details style="font-size:0.9em; margin:8px 0;"><summary style="cursor:pointer; font-weight:bold;">🔎 בדיקת התפריט בוולט (SKU חסרים וחשודים)</summary>
                     <p style="color:var(--muted); margin:6px 0;">האתר קורא את התפריט מוולט, בודק שכל SKU שהוגדר שם מצביע על המוצר הנכון באתר (שם ומחיר), ומכין קובץ השלמה למוצרים שעוד אין להם SKU. וולט מאפשרים קריאה כזו בערך פעם ברבע שעה.</p>
                     <button class="btn w-menu-btn" type="button" style="padding:6px 12px;">בדיקת התפריט</button>
@@ -1983,6 +2056,7 @@
                 if (wrap.querySelector('.w-err')) wrap.querySelector('.w-err').textContent = st.last_error.reason;
                 wrap.querySelector('.w-r').textContent = st.redirect_url;
                 if (wrap.querySelector('.w-sync')) loadWoltSync(wrap.querySelector('.w-sync'), fmt);
+                if (wrap.querySelector('.w-content')) loadWoltContent(wrap.querySelector('.w-content'));
                 if (wrap.querySelector('.w-menu-btn')) {
                     const res = wrap.querySelector('.w-menu-res');
                     const show = d => {

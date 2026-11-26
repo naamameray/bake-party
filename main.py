@@ -556,6 +556,37 @@ try:
         DROP TRIGGER IF EXISTS trg_wolt_queue ON Products;
         CREATE TRIGGER trg_wolt_queue AFTER INSERT OR UPDATE OF price, stock_quantity ON Products
             FOR EACH ROW EXECUTE FUNCTION wolt_queue_product();
+        -- Name / description / photo changes are not sent by the item API (price and stock only), so they
+        -- are listed for the admin to pass on to Wolt. One open row per product and field; the "old" value
+        -- is what Wolt last had, so changing a name twice, or back, is handled.
+        CREATE TABLE IF NOT EXISTS wolt_content_changes (
+            product_id INT NOT NULL,
+            field      TEXT NOT NULL,
+            old_value  TEXT,
+            new_value  TEXT,
+            changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (product_id, field)
+        );
+        CREATE OR REPLACE FUNCTION wolt_note_content() RETURNS trigger AS $$
+        DECLARE f TEXT; o TEXT; n TEXT;
+        BEGIN
+            FOREACH f IN ARRAY ARRAY['name', 'description', 'image'] LOOP
+                IF f = 'name' THEN o := OLD.name; n := NEW.name;
+                ELSIF f = 'description' THEN o := OLD.notes; n := NEW.notes;
+                ELSE o := OLD.image_url; n := NEW.image_url; END IF;
+                IF o IS DISTINCT FROM n THEN
+                    INSERT INTO wolt_content_changes (product_id, field, old_value, new_value, changed_at)
+                    VALUES (NEW.id, f, o, n, NOW())
+                    ON CONFLICT (product_id, field) DO UPDATE SET new_value = EXCLUDED.new_value, changed_at = NOW();
+                    DELETE FROM wolt_content_changes
+                     WHERE product_id = NEW.id AND field = f AND old_value IS NOT DISTINCT FROM new_value;
+                END IF;
+            END LOOP;
+            RETURN NEW;
+        END $$ LANGUAGE plpgsql;
+        DROP TRIGGER IF EXISTS trg_wolt_content ON Products;
+        CREATE TRIGGER trg_wolt_content AFTER UPDATE OF name, notes, image_url ON Products
+            FOR EACH ROW EXECUTE FUNCTION wolt_note_content();
         -- Photo library: staff upload product photos (cleaned up automatically), and products pick from it
         CREATE TABLE IF NOT EXISTS photo_library (
             id               SERIAL PRIMARY KEY,
@@ -6689,6 +6720,102 @@ def wolt_copy_images(sess: dict = Depends(require_admin)):
     added = queue_auto_images(list(sources), sources)
     _audit(sess, "wolt_copy_images", "products", None, {"queued": added})
     return {"queued": added, "without_photo": len(missing)}
+
+_CONTENT_LABELS = {"name": "שם", "description": "תיאור", "image": "תמונה"}
+
+def _wolt_content_changes(cur):
+    """Open name/description/photo changes for products that are on Wolt (as far as the last menu check
+    knows; before any check, every change is listed)."""
+    cur.execute("""SELECT c.product_id, c.field, c.old_value, c.new_value, c.changed_at, p.name
+                   FROM wolt_content_changes c JOIN Products p ON p.id = c.product_id
+                   ORDER BY c.changed_at DESC;""")
+    rows = cur.fetchall()
+    j = _wolt_menu()
+    on_wolt = j.get("wolt_skus") if j.get("state") == "ready" and j.get("wolt_skus") else None
+    out = []
+    for pid, field, old, new, at, name in rows:
+        if on_wolt is not None and pid not in on_wolt:
+            continue
+        out.append({"product_id": pid, "sku": wolt_sku(pid), "product_name": name, "field": field,
+                    "field_label": _CONTENT_LABELS.get(field, field), "old": old, "new": new,
+                    "changed_at": at.isoformat() if at else None})
+    return out
+
+def _abs_image(url):
+    """Full link to a product photo, preferring the 16:9 copy Wolt asks for."""
+    if not url:
+        return ""
+    if url.startswith("/images/") and url.endswith(".jpg") and not url.endswith("-wide.jpg"):
+        wide = url[:-4] + "-wide.jpg"
+        if os.path.isfile(os.path.join(IMAGES_DIR, os.path.basename(wide))):
+            url = wide
+    return SITE_URL.rstrip("/") + url if url.startswith("/") else url
+
+@app.get("/api/admin/wolt/content-changes")
+def wolt_content_changes_list(sess: dict = Depends(require_admin)):
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        items = _wolt_content_changes(cur)
+    finally:
+        cur.close(); conn.close()
+    return {"changes": items, "products": len({c["product_id"] for c in items})}
+
+@app.get("/api/admin/wolt/content-changes/file")
+def wolt_content_changes_file(sess: dict = Depends(require_admin)):
+    """Excel for the Wolt rep: one row per product with the new name / description / photo link."""
+    import io, pandas as pd
+    from fastapi.responses import Response
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        items = _wolt_content_changes(cur)
+    finally:
+        cur.close(); conn.close()
+    if not items:
+        raise HTTPException(status_code=400, detail="✓ אין שינויים שמחכים לוולט")
+    rows = {}
+    for c in items:
+        r = rows.setdefault(c["product_id"], {"sku": c["sku"], "name_before": "", "new_name": "", "new_description": "", "new_image_url": ""})
+        if c["field"] == "name":
+            r["name_before"], r["new_name"] = c["old"] or "", c["new"] or ""
+        elif c["field"] == "description":
+            r["new_description"] = c["new"] or ""
+        else:
+            r["new_image_url"] = _abs_image(c["new"])
+        if not r["name_before"]:
+            r["name_before"] = c["product_name"]
+    buf = io.BytesIO()
+    pd.DataFrame(list(rows.values())).to_excel(buf, index=False, sheet_name="changes_for_wolt")
+    return Response(buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="bake-party-wolt-changes.xlsx"'})
+
+class ContentDoneItem(BaseModel):
+    product_id: int
+    field: str
+
+class ContentDoneBody(BaseModel):
+    product_ids: Optional[List[int]] = None    # None (and no items) = everything listed now
+    items: Optional[List[ContentDoneItem]] = None   # one change at a time ("עדכנתי" next to it)
+
+@app.post("/api/admin/wolt/content-changes/done")
+def wolt_content_changes_done(body: ContentDoneBody, sess: dict = Depends(require_admin)):
+    """Marks changes as passed on to Wolt (they leave the list)."""
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        if body.items:
+            n = 0
+            for it in body.items:
+                cur.execute("DELETE FROM wolt_content_changes WHERE product_id = %s AND field = %s;", (it.product_id, it.field))
+                n += cur.rowcount
+            ids = list({it.product_id for it in body.items})
+        else:
+            ids = body.product_ids if body.product_ids is not None else list({c["product_id"] for c in _wolt_content_changes(cur)})
+            cur.execute("DELETE FROM wolt_content_changes WHERE product_id = ANY(%s);", (ids,))
+            n = cur.rowcount
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+    _audit(sess, "wolt_content_done", "products", None, {"products": len(ids), "changes": n})
+    return {"ok": True, "cleared": n}
 
 @app.post("/api/admin/wolt/import-missing-products")
 def wolt_import_missing_products(sess: dict = Depends(require_admin)):
