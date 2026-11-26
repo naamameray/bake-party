@@ -602,6 +602,8 @@ try:
             used_at          TIMESTAMPTZ
         );
         CREATE INDEX IF NOT EXISTS photo_library_barcode ON photo_library (barcode);
+        -- Photographed from the "what still needs a photo" list: meant for this product, waiting for approval
+        ALTER TABLE photo_library ADD COLUMN IF NOT EXISTS for_product_id INT;
         -- The last menu read from Wolt, so a restart (every deploy) doesn't lose it
         CREATE TABLE IF NOT EXISTS wolt_menu_cache (
             id   INT PRIMARY KEY,
@@ -2157,15 +2159,29 @@ def _lib_kick():
 def _lib_row(r):
     return {"id": r[0], "url": r[1], "original_url": r[2], "label": r[3], "barcode": r[4], "status": r[5],
             "uploaded_by": r[6], "created_at": r[7].isoformat() if r[7] else None,
-            "used_product_id": r[8], "used_product_name": r[9]}
+            "used_product_id": r[8], "used_product_name": r[9],
+            # photographed for a specific product (from the "needs a photo" list), waiting for approval
+            "for_product_id": r[10], "for_product_name": r[11], "for_product_has_image": bool(r[12]),
+            # a product on the site with the barcode read from the photo
+            "match_product_id": r[13], "match_product_name": r[14], "match_product_has_image": bool(r[15])}
 
 _LIB_SELECT = """SELECT l.id, l.url, l.original_url, l.label, l.barcode, l.status, l.uploaded_by_name, l.created_at,
-                        l.used_product_id, p.name
-                 FROM photo_library l LEFT JOIN Products p ON p.id = l.used_product_id"""
+                        l.used_product_id, p.name,
+                        l.for_product_id, fp.name, COALESCE(fp.image_url, '') <> '',
+                        mp.id, mp.name, COALESCE(mp.image_url, '') <> ''
+                 FROM photo_library l
+                 LEFT JOIN Products p ON p.id = l.used_product_id
+                 LEFT JOIN Products fp ON fp.id = l.for_product_id
+                 LEFT JOIN LATERAL (SELECT id, name, image_url FROM Products
+                                    WHERE l.barcode IS NOT NULL AND barcode IS NOT NULL
+                                      AND ltrim(barcode, '0') = ltrim(l.barcode, '0')
+                                    ORDER BY id LIMIT 1) mp ON TRUE"""
 
 @app.post("/api/library/photos")
-async def library_upload(file: UploadFile = File(...), label: str = "", sess: dict = Depends(require_staff)):
-    """One photo per request (the page uploads a batch one by one, so a weak connection doesn't lose all)."""
+async def library_upload(file: UploadFile = File(...), label: str = "", product_id: Optional[int] = None,
+                         sess: dict = Depends(require_staff)):
+    """One photo per request (the page uploads a batch one by one, so a weak connection doesn't lose all).
+    product_id: photographed for that product (from the "needs a photo" list); the admin approves it."""
     _simple_rate_limit(_lib_upload_hits, str(sess["user_id"]), 600, 3600, "הועלו הרבה תמונות בשעה האחרונה. אפשר להמשיך בעוד קצת.")
     data = await file.read(MAX_IMAGE_BYTES * 2 + 1)
     if len(data) > MAX_IMAGE_BYTES * 2:
@@ -2177,37 +2193,86 @@ async def library_upload(file: UploadFile = File(...), label: str = "", sess: di
     with open(os.path.join(IMAGES_DIR, name), "wb") as f:
         f.write(data)
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("""INSERT INTO photo_library (original_url, label, uploaded_by, uploaded_by_name)
-                   VALUES (%s, %s, %s, %s) RETURNING id;""",
-                (f"/images/{name}", (label or "").strip()[:200] or None, sess["user_id"], sess.get("name")))
+    if product_id is not None:
+        cur.execute("SELECT name FROM Products WHERE id = %s;", (product_id,))
+        pr = cur.fetchone()
+        if not pr:
+            cur.close(); conn.close()
+            raise HTTPException(status_code=400, detail="המוצר לא נמצא")
+        label = label or pr[0]
+    cur.execute("""INSERT INTO photo_library (original_url, label, uploaded_by, uploaded_by_name, for_product_id)
+                   VALUES (%s, %s, %s, %s, %s) RETURNING id;""",
+                (f"/images/{name}", (label or "").strip()[:200] or None, sess["user_id"], sess.get("name"), product_id))
     new_id = cur.fetchone()[0]
     conn.commit(); cur.close(); conn.close()
     _lib_kick()
     return {"id": new_id}
 
 @app.get("/api/library/photos")
-def library_list(unused: bool = False, q: str = "", barcode: str = "", limit: int = 120, sess: dict = Depends(require_staff)):
-    """Newest first. With barcode: photos with that barcode come first (marked "same_barcode")."""
+def library_list(unused: bool = False, pending: bool = False, q: str = "", barcode: str = "", product_id: Optional[int] = None,
+                 limit: int = 120, sess: dict = Depends(require_staff)):
+    """Newest first. With barcode / product_id (when picking for a product): photos taken for that product,
+    then photos with its barcode, come first."""
     conds, params = [], []
     if unused:
         conds.append("l.used_product_id IS NULL")
+    if pending:
+        conds.append("l.used_product_id IS NULL AND l.for_product_id IS NOT NULL")
     if q.strip():
         conds.append("(l.label ILIKE %s OR l.barcode LIKE %s)"); params += [f"%{q.strip()}%", f"%{q.strip()}%"]
     sql = _LIB_SELECT + (" WHERE " + " AND ".join(conds) if conds else "") + " ORDER BY l.id DESC LIMIT %s;"
     conn = get_conn(); cur = conn.cursor()
     cur.execute(sql, params + [max(1, min(int(limit), 500))])
     rows = [_lib_row(r) for r in cur.fetchall()]
+    first = []
+    if product_id:
+        cur.execute(_LIB_SELECT + " WHERE l.for_product_id = %s AND l.used_product_id IS NULL ORDER BY l.id DESC LIMIT 20;", (product_id,))
+        first += [dict(_lib_row(r), for_this=True) for r in cur.fetchall()]
     bc = "".join(ch for ch in barcode if ch.isdigit())
     if bc:
         cur.execute(_LIB_SELECT + " WHERE l.barcode = ANY(%s) ORDER BY l.id DESC LIMIT 20;", (list(_barcode_variants(bc)),))
-        same = [dict(_lib_row(r), same_barcode=True) for r in cur.fetchall()]
-        ids = {x["id"] for x in same}
-        rows = same + [x for x in rows if x["id"] not in ids]
-    cur.execute("SELECT COUNT(*) FILTER (WHERE used_product_id IS NULL), COUNT(*), COUNT(*) FILTER (WHERE status = 'processing') FROM photo_library;")
+        first += [dict(_lib_row(r), same_barcode=True) for r in cur.fetchall()]
+    if first:
+        seen, merged = set(), []
+        for x in first + rows:
+            if x["id"] not in seen:
+                seen.add(x["id"]); merged.append(x)
+        rows = merged
+    cur.execute("""SELECT COUNT(*) FILTER (WHERE used_product_id IS NULL), COUNT(*), COUNT(*) FILTER (WHERE status = 'processing'),
+                          COUNT(*) FILTER (WHERE used_product_id IS NULL AND for_product_id IS NOT NULL)
+                   FROM photo_library;""")
     c = cur.fetchone(); cur.close(); conn.close()
     if c[2]:
         _lib_kick()     # resume after a restart
-    return {"photos": rows, "unused": c[0], "total": c[1], "processing": c[2]}
+    return {"photos": rows, "unused": c[0], "total": c[1], "processing": c[2], "pending": c[3]}
+
+@app.get("/api/library/missing")
+def library_missing(q: str = "", limit: int = 60, offset: int = 0, sess: dict = Depends(require_staff)):
+    """Products on the site that have no photo yet ("what still needs a photo"), and whether a photo
+    for them is already waiting for approval."""
+    conds, params = ["COALESCE(p.image_url, '') = ''", "p.category_id IS NOT NULL"], []
+    if q.strip():
+        conds.append("(p.name ILIKE %s OR p.barcode LIKE %s)"); params += [f"%{q.strip()}%", f"%{q.strip()}%"]
+    where = " AND ".join(conds)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(f"SELECT COUNT(*) FROM Products p WHERE {where};", params)
+    total = cur.fetchone()[0]
+    cur.execute(f"""SELECT p.id, p.name, c.name, p.barcode,
+                           EXISTS (SELECT 1 FROM photo_library l WHERE l.for_product_id = p.id AND l.used_product_id IS NULL)
+                    FROM Products p LEFT JOIN Categories c ON c.id = p.category_id
+                    WHERE {where} ORDER BY c.name NULLS LAST, p.name LIMIT %s OFFSET %s;""",
+                params + [max(1, min(int(limit), 200)), max(0, int(offset))])
+    items = [{"id": r[0], "name": r[1], "category": r[2], "barcode": r[3], "photo_waiting": r[4]} for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return {"total": total, "items": items}
+
+@app.post("/api/library/photos/{photo_id}/reject")
+def library_reject(photo_id: int, sess: dict = Depends(require_admin)):
+    """Not approved for the product it was taken for: it stays in the library as a general photo."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("UPDATE photo_library SET for_product_id = NULL WHERE id = %s;", (photo_id,))
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True}
 
 class LibraryPhotoBody(BaseModel):
     label: Optional[str] = None

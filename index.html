@@ -2065,15 +2065,16 @@
                 try {
                     const bc = (typeof opts.barcode === 'function' ? opts.barcode() : opts.barcode) || '';
                     const qs = new URLSearchParams({ unused: 'true', q: panel.querySelector('.lib-q').value.trim(), barcode: bc, limit: '60' });
+                    if (opts.productId) qs.set('product_id', opts.productId);
                     const res = await fetch(`${API}/api/library/photos?${qs}`, { headers: authHeaders() });
                     const d = await res.json(); if (!res.ok) throw new Error(d.detail || 'שגיאה');
                     const ready = d.photos.filter(x => x.status === 'ready' && x.url);
                     libGrid.innerHTML = ready.length ? '' : 'אין במאגר תמונות פנויות' + (panel.querySelector('.lib-q').value ? ' שמתאימות לחיפוש.' : '.');
                     ready.forEach(ph => {
                         const b = document.createElement('button'); b.type = 'button';
-                        b.style.cssText = `flex:0 0 96px; border:2px solid ${ph.same_barcode ? 'var(--ok, #2e7d32)' : 'var(--line, #eee)'}; border-radius:10px; background:#fff; padding:4px; cursor:pointer; font-family:inherit;`;
+                        b.style.cssText = `flex:0 0 96px; border:2px solid ${ph.same_barcode || ph.for_this ? 'var(--ok, #2e7d32)' : 'var(--line, #eee)'}; border-radius:10px; background:#fff; padding:4px; cursor:pointer; font-family:inherit;`;
                         b.innerHTML = `<img alt="" loading="lazy" src="${esc(imgUrl(ph.url))}" style="width:86px; height:86px; object-fit:contain; display:block;">
-                            <div style="font-size:.75em; color:${ph.same_barcode ? 'var(--ok, #2e7d32)' : 'var(--muted)'}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${ph.same_barcode ? '✓ אותו ברקוד' : esc(ph.label || '')}</div>`;
+                            <div style="font-size:.75em; color:${ph.same_barcode || ph.for_this ? 'var(--ok, #2e7d32)' : 'var(--muted)'}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${ph.for_this ? '📸 צולם בשבילו' : ph.same_barcode ? '✓ אותו ברקוד' : esc(ph.label || '')}</div>`;
                         b.onclick = async () => {
                             msg.style.color = 'var(--muted)'; msg.textContent = 'בוחר מהמאגר...';
                             try {

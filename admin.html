@@ -1909,6 +1909,11 @@
                 const res = await fetch(`${API}/api/admin/auto-images`, { headers: authHeaders() });
                 const d = await res.json(); if (!res.ok) throw new Error(d.detail || 'שגיאה');
                 let html = `${d.without_photo} מוצרים בלי תמונה, מתוכם ${d.without_photo_with_barcode} עם ברקוד.`;
+                try {
+                    const lr = await fetch(`${API}/api/library/photos?pending=true&limit=1`, { headers: authHeaders() });
+                    const ld = await lr.json();
+                    if (lr.ok && ld.pending) html = `<b>📚 <a href="/photos?show=pending" target="_blank" rel="noopener">${ld.pending} תמונות במאגר מחכות לאישור שלך</a></b><br>` + html;
+                } catch (e) {}
                 if (d.running) html += `<br><b>🔍 מחפש: ${d.done}/${d.total} נבדקו, ${d.found} תמונות נמצאו...</b>`;
                 else if (d.total) html += `<br>✓ החיפוש האחרון: ${d.total} נבדקו, ${d.found} תמונות נמצאו וצורפו.`;
                 box.innerHTML = html;
