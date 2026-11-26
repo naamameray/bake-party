@@ -4343,7 +4343,7 @@ async def admin_import_wolt(
                 img = str(r["images"]).split(",")[0].strip() if "images" in r.index and pd.notna(r["images"]) else None
                 merged[key] = {
                     "name": nm, "wolt_price": float(r["price"]), "cats": ids,
-                    "stock": 0 if str(r.get("inventory_mode")) == "forced_out_of_stock" else 100,
+                    "stock": 0 if _wolt_forced_out(r.get("inventory_mode")) else 100,
                     "weight": num("weight_in_grams"), "units": num("number_of_units"),
                     "image": img or None,
                     "notes": str(r["description"]) if "description" in r.index and pd.notna(r["description"]) else None,
@@ -4851,7 +4851,7 @@ def compare_stock_with_wolt_file(file_path):
         name = str(row.get("name", "")).strip()
         if not name or name.lower() == "nan":
             continue
-        is_forced_out = str(row.get("inventory_mode", "")) == "forced_out_of_stock"
+        is_forced_out = _wolt_forced_out(row.get("inventory_mode", ""))
         # pandas returns numpy.bool_, not a Python bool, so "is False" never matched a disabled product
         en = row.get("enabled") if has_enabled_col else None
         is_disabled = has_enabled_col and pd.notna(en) and str(en).strip().lower() in ("false", "0", "0.0")
@@ -6085,6 +6085,8 @@ def run_wolt_item_sync(force=False):
         cur.execute("SELECT (SELECT COUNT(*) FROM wolt_sync_queue) + (SELECT COUNT(*) FROM wolt_sync_removed);")
         if not venues or cur.fetchone()[0] == 0:
             return None
+        if _setting_get(cur, "wolt_sync_paused") == "1":
+            return None     # paused by the admin: changes stay queued and go out when resumed
         kind = _wolt_venue_kind(cur)
         result = None
         for venue in venues:
@@ -6150,7 +6152,7 @@ def _wolt_daily_full_refresh():
             return
         # Only once the site is the agreed source of truth (after availability was imported from Wolt, or the
         # admin sent everything): otherwise a full refresh would overwrite Wolt's up-to-date stock with old data.
-        if _setting_get(cur, "wolt_site_is_source") != "1":
+        if _setting_get(cur, "wolt_site_is_source") != "1" or _setting_get(cur, "wolt_sync_paused") == "1":
             return
         _setting_set(cur, "wolt_daily_full", now.date().isoformat())
         cur.execute("INSERT INTO wolt_sync_queue (product_id, with_price) SELECT id, FALSE FROM Products ON CONFLICT (product_id) DO UPDATE SET queued_at = NOW();")
@@ -6170,6 +6172,19 @@ async def _wolt_items_loop():
             print(f"[WOLT] item sync error: {e}")
         await asyncio.sleep(60)
 
+class WoltPauseBody(BaseModel):
+    paused: bool
+
+@app.post("/api/admin/wolt/sync-pause")
+def wolt_sync_pause(body: WoltPauseBody, sess: dict = Depends(require_admin)):
+    """Stops (or resumes) everything the site sends to Wolt: price/stock changes and the daily full update.
+    While paused, changes stay queued."""
+    conn = get_conn(); cur = conn.cursor()
+    _setting_set(cur, "wolt_sync_paused", "1" if body.paused else "")
+    conn.commit(); cur.close(); conn.close()
+    _audit(sess, "wolt_sync_paused" if body.paused else "wolt_sync_resumed", "wolt", None, None)
+    return {"paused": body.paused}
+
 @app.get("/api/admin/wolt/sync-status")
 def wolt_sync_status(sess: dict = Depends(require_admin)):
     conn = get_conn(); cur = conn.cursor()
@@ -6185,10 +6200,11 @@ def wolt_sync_status(sess: dict = Depends(require_admin)):
             interval = cached["minutes"]
     kind = _wolt_venue_kind(cur)
     site_is_source = _setting_get(cur, "wolt_site_is_source") == "1"
+    paused = _setting_get(cur, "wolt_sync_paused") == "1"
     cur.close(); conn.close()
     interval = max(interval, WOLT_MIN_SYNC_MINUTES)
     nxt = max(state.get("last_sent", 0) + interval * 60, state.get("retry_after", 0))
-    return {"queued": queued, "interval_minutes": interval, "venue_kind": kind or None, "site_is_source": site_is_source,
+    return {"queued": queued, "interval_minutes": interval, "venue_kind": kind or None, "site_is_source": site_is_source, "paused": paused,
             "last_sent": datetime.fromtimestamp(state["last_sent"], timezone.utc).isoformat() if state.get("last_sent") else None,
             "last_count": state.get("last_count"), "last_error": state.get("last_error"),
             "next_send": datetime.fromtimestamp(nxt, timezone.utc).isoformat() if nxt > time_module.time() else None}
@@ -6398,8 +6414,11 @@ def _wolt_menu():
                 conn = get_conn(); cur = conn.cursor()
                 cur.execute("SELECT data FROM wolt_menu_cache WHERE id = 1;")
                 r = cur.fetchone(); cur.close(); conn.close()
-                if r:
-                    d = json.loads(r[0])
+                d = json.loads(r[0]) if r else None
+                # A check saved before sold-out items were read correctly has wrong availability: drop it
+                if d and "linked_sold_out" not in (d.get("summary") or {}):
+                    d = None
+                if d:
                     d["wolt_skus"] = set(d.get("wolt_skus") or [])
                     d["wolt_names"] = set(d.get("wolt_names") or [])
                     d["wolt_avail"] = {int(k): v for k, v in (d.get("wolt_avail") or {}).items()}
@@ -6438,6 +6457,31 @@ def _wolt_menu_wait_text(seconds):
     at = (datetime.now(ISRAEL_TZ) + timedelta(seconds=seconds)).strftime("%H:%M")
     return (f"וולט מאפשרים לקרוא את התפריט פעם ברבע שעה. אפשר לנסות שוב בעוד {mins} דקות (בערך ב-{at})."
             + (" בינתיים מוצגת הבדיקה הקודמת." if _wolt_menu_job.get("summary") else ""))
+
+def _wolt_forced_out(mode):
+    """Wolt writes inventory_mode in capitals in the API ("FORCED_OUT_OF_STOCK"), and in lower case in its
+    Excel export. Compare without case, so a sold-out item is never read as in stock."""
+    return str(mode or "").strip().lower() == "forced_out_of_stock"
+
+def _wolt_item_available(it):
+    """An item read from Wolt's menu is available unless it is disabled, disabled until a future time,
+    or marked sold out (inventory_mode FORCED_OUT_OF_STOCK)."""
+    en = it.get("enabled")
+    if isinstance(en, dict):
+        if en.get("enabled") is False:
+            return False
+        after = en.get("after")
+        if after:
+            try:
+                if datetime.fromisoformat(str(after).replace("Z", "+00:00")) > datetime.now(timezone.utc):
+                    return False
+            except ValueError:
+                pass
+    elif en is False:
+        return False
+    if it.get("in_stock") is False:
+        return False
+    return not _wolt_forced_out(it.get("inventory_mode"))
 
 def _wolt_text(translations):
     if isinstance(translations, list) and translations:
@@ -6564,9 +6608,7 @@ def _wolt_menu_job_run(venue_id, user_id, previous=None):
         for it in menu.get("items") or []:
             pid = _pid_from_sku((it.get("product") or {}).get("sku"))
             if pid is not None:
-                en = it.get("enabled")
-                enabled = en.get("enabled", True) if isinstance(en, dict) else (en is not False)
-                avail[pid] = bool(enabled) and str(it.get("inventory_mode") or "") != "forced_out_of_stock"
+                avail[pid] = _wolt_item_available(it)
         # Details of every Wolt item, for "import products that are on Wolt but not on the site"
         cats_of = defaultdict(list)
         for c in menu.get("categories") or []:
@@ -6582,9 +6624,10 @@ def _wolt_menu_job_run(venue_id, user_id, previous=None):
                 "price": (it.get("price") or 0) / 100, "image": prod.get("image_url") or None,
                 "gtin": "".join(ch for ch in str(prod.get("gtin") or "") if ch.isdigit()) or None,
                 "weight": prod.get("weight_in_grams"), "units": prod.get("number_of_units"),
-                "available": (en.get("enabled", True) if isinstance(en, dict) else en is not False)
-                             and str(it.get("inventory_mode") or "") != "forced_out_of_stock",
+                "available": _wolt_item_available(it),
                 "categories": cats_of.get(it.get("id"), [])}
+        summary["linked_sold_out"] = sum(1 for v in avail.values() if not v)
+        summary["linked_available"] = sum(1 for v in avail.values() if v)
         _wolt_menu_job.update({"wolt_skus": skus, "wolt_names": names, "wolt_avail": avail, "wolt_items": details})
         _wolt_menu_job.update({"state": "ready", "checks": checks, "completion": completion, "summary": summary,
                                "at": time_module.time()})
