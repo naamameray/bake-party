@@ -2026,7 +2026,14 @@ def _auto_image_for(pid, src_url=None):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT barcode, COALESCE(image_url, '') FROM Products WHERE id = %s;", (pid,))
     r = cur.fetchone(); cur.close(); conn.close()
-    if not r or r[1] or (not src_url and not r[0]):
+    if not r:
+        return False
+    barcode, current = r
+    if current and not current.startswith("http"):
+        return False                     # already has its own photo on the site: never replaced
+    if current and not src_url:
+        return False                     # linked from elsewhere: only replaced by a known photo (Wolt's)
+    if not src_url and not barcode:
         return False
     if src_url:
         try:
@@ -2044,8 +2051,8 @@ def _auto_image_for(pid, src_url=None):
             print(f"[IMG] automatic photo for product {pid} failed: {e}")
             return False
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("UPDATE Products SET image_url = %s, image_credit = %s WHERE id = %s AND COALESCE(image_url, '') = '';",
-                (url, credit, pid))
+    cur.execute("""UPDATE Products SET image_url = %s, image_credit = %s
+                   WHERE id = %s AND (COALESCE(image_url, '') = '' OR image_url LIKE 'http%%');""", (url, credit, pid))
     ok = cur.rowcount == 1
     conn.commit(); cur.close(); conn.close()
     return ok
@@ -6809,7 +6816,8 @@ def wolt_copy_images(sess: dict = Depends(require_admin)):
     if j.get("state") != "ready" or "wolt_items" not in j:
         raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, COALESCE(barcode, '') FROM Products WHERE COALESCE(image_url, '') = '';")
+    # No photo, or only a link to a photo elsewhere (an earlier import kept Wolt's link): save a copy on the site
+    cur.execute("SELECT id, COALESCE(barcode, '') FROM Products WHERE COALESCE(image_url, '') = '' OR image_url LIKE 'http%';")
     rows = cur.fetchall(); cur.close(); conn.close()
     missing = {r[0] for r in rows}
     by_barcode = {}
@@ -6936,13 +6944,14 @@ def wolt_item_check(product: str, sess: dict = Depends(require_admin)):
     pid = int(digits) if len(digits) <= 7 else None
     conn = get_conn(); cur = conn.cursor()
     if pid is not None:
-        cur.execute("SELECT id, name, stock_quantity, barcode, price FROM Products WHERE id = %s;", (pid,))
+        cur.execute("SELECT id, name, stock_quantity, barcode, price, image_url FROM Products WHERE id = %s;", (pid,))
     else:
-        cur.execute("SELECT id, name, stock_quantity, barcode, price FROM Products WHERE ltrim(barcode, '0') = ltrim(%s, '0') LIMIT 1;", (digits,))
+        cur.execute("SELECT id, name, stock_quantity, barcode, price, image_url FROM Products WHERE ltrim(barcode, '0') = ltrim(%s, '0') LIMIT 1;", (digits,))
     r = cur.fetchone(); cur.close(); conn.close()
     if not r:
         raise HTTPException(status_code=404, detail="המוצר לא נמצא באתר")
-    site = {"id": r[0], "name": r[1], "in_stock": (r[2] or 0) > 0, "barcode": r[3], "price": float(r[4]), "sku": wolt_sku(r[0])}
+    site = {"id": r[0], "name": r[1], "in_stock": (r[2] or 0) > 0, "barcode": r[3], "price": float(r[4]), "sku": wolt_sku(r[0]),
+            "image": r[5] or None}
     j = _wolt_menu()
     if j.get("state") != "ready" or "wolt_items" not in j:
         return {"site": site, "wolt": None, "checked_at": None}
@@ -6985,14 +6994,14 @@ def wolt_import_missing_products(sess: dict = Depends(require_admin)):
                                              image_url, notes, barcode, created_at)
                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW()) RETURNING id;""",
                     (d["name"][:500], cat_id, price, 100 if d["available"] else 0, d["weight"], d["units"],
-                     d["image"], d["description"] or None, d["gtin"]))
+                     None, d["description"] or None, d["gtin"]))
         pid = cur.fetchone()[0]
         if cat_id:
             cur.execute("INSERT INTO product_categories (product_id, category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING;", (pid, cat_id))
         else:
             no_category.append({"id": pid, "name": d["name"]})
         existing.add(_name_key(d["name"]))
-        created.append({"id": pid, "name": d["name"], "sku": wolt_sku(pid), "price": price})
+        created.append({"id": pid, "name": d["name"], "sku": wolt_sku(pid), "price": price, "image": d.get("image")})
     if not created:
         cur.close(); conn.close()
         raise HTTPException(status_code=400, detail="✓ כל המוצרים האלה כבר קיימים באתר")
@@ -7000,7 +7009,11 @@ def wolt_import_missing_products(sess: dict = Depends(require_admin)):
         # They match Wolt already: don't send them back (that would change Wolt's prices by the rounding)
         cur.execute("DELETE FROM wolt_sync_queue WHERE product_id = ANY(%s);", ([c["id"] for c in created],))
     conn.commit(); cur.close(); conn.close()
-    summary = {"created": len(created), "without_category": len(no_category)}
+    # Photos: a copy is saved on the site (a link to Wolt's image could stop working)
+    photos = {c["id"]: c["image"] for c in created if c.get("image")}
+    if photos:
+        queue_auto_images(list(photos), photos)
+    summary = {"created": len(created), "without_category": len(no_category), "photos": len(photos)}
     _audit(sess, "wolt_import_missing_products", "wolt", None, summary)
     return {**summary, "products": created, "no_category": no_category}
 
