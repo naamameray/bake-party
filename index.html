@@ -1481,6 +1481,7 @@
             };
             document.getElementById('add-p-suggest').onclick = () => openImageSuggestions({
                 suggestUrl: `${API}/api/admin/image-suggestions?barcode=${encodeURIComponent(document.getElementById('add-p-barcode').value)}`,
+                query: () => document.getElementById('add-p-name').value.trim() || document.getElementById('add-p-barcode').value.trim(),
                 mount: document.getElementById('add-p-img-mount'),
                 onChosen: (url, credit) => { addPendingImage = url; addPendingCredit = credit; addPendingFile = null;
                     document.getElementById('add-p-orig').style.display = 'none';
@@ -1948,6 +1949,7 @@
                 const sugBtn = document.createElement('button');
                 sugBtn.type = 'button'; sugBtn.className = 'ef-img-btn'; sugBtn.textContent = '🔍 הצעות תמונה';
                 sugBtn.onclick = () => openImageSuggestions({ suggestUrl: `${API}/api/admin/products/${p.id}/image-suggestions`,
+                    query: () => (document.getElementById('edit-detail-name') || {}).value || p.name,
                     mount: document.getElementById('edit-form'),
                     onChosen: (url, credit) => { editPendingImage = url; editPendingCredit = credit; editPendingFile = null; img.src = url;
                         wrap.querySelectorAll('.ef-img-orig').forEach(x => x.remove());
@@ -2012,13 +2014,20 @@
             panel.style.cssText = 'border:1.5px dashed var(--brand-2); border-radius:14px; padding:10px; margin:8px 0; background:#FFF6F8;';
             panel.innerHTML = `<div class="sug-list" style="font-size:.9em; color:var(--muted);">מחפש תמונות לפי הברקוד...</div>
                 <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
-                  <input class="sug-url" type="url" dir="ltr" placeholder="או הדבקת קישור לתמונה (למשל מאתר הספק)" style="flex:1; min-width:180px; margin:0;">
+                  <input class="sug-url" type="url" dir="ltr" placeholder="הדבקת קישור לעמוד המוצר או לתמונה" style="flex:1; min-width:180px; margin:0;">
                   <button type="button" class="btn btn-ghost sug-go" style="padding:6px 12px;">שימוש בקישור</button>
+                </div>
+                <div style="display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; align-items:center;">
+                  <a class="btn btn-ghost sug-google" target="_blank" rel="noopener" style="padding:6px 12px; text-decoration:none;">🔎 חיפוש תמונה בגוגל</a>
+                  <span style="font-size:.8em; color:var(--muted);">נכנסים לאתר שמוכר את המוצר (עדיף הספק), מעתיקים את הקישור לעמוד, ומדביקים כאן. התמונה נשלפת מהעמוד לבד.</span>
                 </div>
                 <label style="display:flex; gap:6px; align-items:center; font-size:.85em; margin-top:6px;"><input type="checkbox" class="sug-studio" checked style="width:auto; margin:0;"> ✨ לסדר את התמונה (רקע לבן ומרכוז)</label>
                 <p class="sug-msg" style="font-size:.85em; margin:6px 0 0; color:#c62828;"></p>`;
             opts.mount.prepend(panel);
             const msg = panel.querySelector('.sug-msg');
+            const q = (typeof opts.query === 'function' ? opts.query() : opts.query) || '';
+            panel.querySelector('.sug-google').href = 'https://www.google.com/search?tbm=isch&q=' + encodeURIComponent(q);
+            panel.querySelector('.sug-google').style.display = q ? '' : 'none';
             const choose = async (url, credit) => {
                 msg.style.color = 'var(--muted)'; msg.textContent = '✨ מוריד ומסדר את התמונה...';
                 try {
