@@ -6625,6 +6625,7 @@ def _wolt_menu_job_run(venue_id, user_id, previous=None):
                 "gtin": "".join(ch for ch in str(prod.get("gtin") or "") if ch.isdigit()) or None,
                 "weight": prod.get("weight_in_grams"), "units": prod.get("number_of_units"),
                 "available": _wolt_item_available(it),
+                "inventory_mode": it.get("inventory_mode"), "enabled_raw": it.get("enabled"),
                 "categories": cats_of.get(it.get("id"), [])}
         summary["linked_sold_out"] = sum(1 for v in avail.values() if not v)
         summary["linked_available"] = sum(1 for v in avail.values() if v)
@@ -6924,6 +6925,31 @@ def wolt_content_changes_done(body: ContentDoneBody, sess: dict = Depends(requir
         cur.close(); conn.close()
     _audit(sess, "wolt_content_done", "products", None, {"products": len(ids), "changes": n})
     return {"ok": True, "cleared": n}
+
+@app.get("/api/admin/wolt/item-check")
+def wolt_item_check(product: str, sess: dict = Depends(require_admin)):
+    """One product side by side: what the site says, and every Wolt item linked to it (by SKU or barcode),
+    as read in the last menu check."""
+    digits = "".join(ch for ch in product if ch.isdigit())
+    if not digits:
+        raise HTTPException(status_code=400, detail="מקלידים מספר מוצר מהאתר (המספר שאחרי p= בקישור)")
+    pid = int(digits) if len(digits) <= 7 else None
+    conn = get_conn(); cur = conn.cursor()
+    if pid is not None:
+        cur.execute("SELECT id, name, stock_quantity, barcode, price FROM Products WHERE id = %s;", (pid,))
+    else:
+        cur.execute("SELECT id, name, stock_quantity, barcode, price FROM Products WHERE ltrim(barcode, '0') = ltrim(%s, '0') LIMIT 1;", (digits,))
+    r = cur.fetchone(); cur.close(); conn.close()
+    if not r:
+        raise HTTPException(status_code=404, detail="המוצר לא נמצא באתר")
+    site = {"id": r[0], "name": r[1], "in_stock": (r[2] or 0) > 0, "barcode": r[3], "price": float(r[4]), "sku": wolt_sku(r[0])}
+    j = _wolt_menu()
+    if j.get("state") != "ready" or "wolt_items" not in j:
+        return {"site": site, "wolt": None, "checked_at": None}
+    bc = (r[3] or "").lstrip("0")
+    items = [dict(v, wolt_id=k, by="SKU" if v.get("pid") == r[0] else "ברקוד") for k, v in j["wolt_items"].items()
+             if v.get("pid") == r[0] or (bc and (v.get("gtin") or "").lstrip("0") == bc)]
+    return {"site": site, "wolt": items, "checked_at": datetime.fromtimestamp(j["at"], timezone.utc).isoformat() if j.get("at") else None}
 
 @app.post("/api/admin/wolt/import-missing-products")
 def wolt_import_missing_products(sess: dict = Depends(require_admin)):
