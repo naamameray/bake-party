@@ -1901,6 +1901,204 @@ async def image_from_url(body: ImageFromUrlBody, sess: dict = Depends(require_ad
         f.write(data)
     return {"url": f"/images/{base}.{ext}"}
 
+# --- Automatic product photos by barcode ---
+# After an invoice is applied (or on demand for the whole catalogue), products that have a barcode but
+# no photo are looked up in Open Food Facts. A found photo is cleaned up like a phone photo (white
+# background, centred) and attached, with its credit. Products that already have a photo are never touched.
+_auto_img = {"queue": [], "running": False, "done": 0, "found": 0, "total": 0, "last_run": None}
+_auto_img_lock = threading.Lock()
+
+def _save_image_bytes(data):
+    """Saves an image (cleaned up when the photo studio is available). Returns its /images URL."""
+    base = uuid.uuid4().hex
+    try:
+        import photo_studio
+        if photo_studio.available():
+            out = photo_studio.process(data)
+            with open(os.path.join(IMAGES_DIR, f"{base}.jpg"), "wb") as f:
+                f.write(out["square"])
+            with open(os.path.join(IMAGES_DIR, f"{base}-wide.jpg"), "wb") as f:
+                f.write(out["wide"])
+            return f"/images/{base}.jpg"
+    except Exception as e:
+        print(f"[PHOTO] clean-up of an automatic photo failed, keeping the original: {e}")
+    ext = _image_kind(data) or "jpg"
+    with open(os.path.join(IMAGES_DIR, f"{base}.{ext}"), "wb") as f:
+        f.write(data)
+    return f"/images/{base}.{ext}"
+
+def _auto_image_for(pid):
+    """True if a photo was found and attached to product pid."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT barcode, COALESCE(image_url, '') FROM Products WHERE id = %s;", (pid,))
+    r = cur.fetchone(); cur.close(); conn.close()
+    if not r or not r[0] or r[1]:
+        return False
+    sug = _off_suggestions(r[0]).get("suggestions") or []
+    if not sug:
+        return False
+    try:
+        url = _save_image_bytes(_fetch_image(sug[0]["url"]))
+    except Exception as e:
+        print(f"[IMG] automatic photo for product {pid} failed: {e}")
+        return False
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("UPDATE Products SET image_url = %s, image_credit = %s WHERE id = %s AND COALESCE(image_url, '') = '';",
+                (url, sug[0].get("credit"), pid))
+    ok = cur.rowcount == 1
+    conn.commit(); cur.close(); conn.close()
+    return ok
+
+def _auto_images_worker():
+    while True:
+        with _auto_img_lock:
+            if not _auto_img["queue"]:
+                _auto_img["running"] = False
+                _auto_img["last_run"] = datetime.now(timezone.utc).isoformat()
+                return
+            pid = _auto_img["queue"].pop(0)
+        try:
+            found = _auto_image_for(pid)
+        except Exception as e:
+            print(f"[IMG] automatic photo for product {pid} failed: {e}"); found = False
+        with _auto_img_lock:
+            _auto_img["done"] += 1
+            _auto_img["found"] += 1 if found else 0
+        time_module.sleep(0.8)   # Open Food Facts asks for no more than ~100 product lookups a minute
+
+def queue_auto_images(pids):
+    """Adds products to the background photo search. Returns how many were added."""
+    pids = [int(p) for p in dict.fromkeys(pids)]
+    with _auto_img_lock:
+        new = [p for p in pids if p not in _auto_img["queue"]]
+        if not new:
+            return 0
+        if not _auto_img["running"]:
+            _auto_img.update({"done": 0, "found": 0, "total": 0})
+        _auto_img["queue"].extend(new)
+        _auto_img["total"] += len(new)
+        start = not _auto_img["running"]
+        _auto_img["running"] = True
+    if start:
+        threading.Thread(target=_auto_images_worker, daemon=True).start()
+    return len(new)
+
+def _products_missing_photo(cur, ids=None):
+    sql = ("SELECT id FROM Products WHERE COALESCE(image_url, '') = '' AND COALESCE(barcode, '') <> ''"
+           + (" AND id = ANY(%s)" if ids is not None else "") + " ORDER BY id;")
+    cur.execute(sql, (list(ids),) if ids is not None else ())
+    return [r[0] for r in cur.fetchall()]
+
+@app.post("/api/admin/auto-images")
+def start_auto_images(sess: dict = Depends(require_admin)):
+    """Searches photos for every product that has a barcode and no photo."""
+    conn = get_conn(); cur = conn.cursor()
+    ids = _products_missing_photo(cur)
+    cur.close(); conn.close()
+    added = queue_auto_images(ids)
+    _audit(sess, "auto_images", "products", None, {"queued": added})
+    return {"queued": added, **auto_images_status(sess)}
+
+@app.get("/api/admin/auto-images")
+def auto_images_status(sess: dict = Depends(require_admin)):
+    with _auto_img_lock:
+        st = {k: _auto_img[k] for k in ("running", "done", "found", "total", "last_run")}
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*), COUNT(*) FILTER (WHERE COALESCE(barcode, '') <> '') FROM Products WHERE COALESCE(image_url, '') = '';")
+    r = cur.fetchone(); cur.close(); conn.close()
+    return {**st, "without_photo": r[0], "without_photo_with_barcode": r[1]}
+
+# --- Find a product from a photo ---
+_identify_hits = defaultdict(list)
+
+def _decode_barcodes(data):
+    """Barcode numbers visible in a photo (EAN/UPC), read locally without any outside service."""
+    try:
+        import io, numpy as np, cv2
+        from PIL import Image, ImageOps
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
+        img.thumbnail((1600, 1600))
+        bgr = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        det = cv2.barcode.BarcodeDetector()
+        found = []
+        # A few versions of the photo: the decoder sometimes misses on one and reads another
+        # (very sharp or very large images, or a barcode printed sideways).
+        variants = (lambda: bgr, lambda: cv2.GaussianBlur(bgr, (3, 3), 0), lambda: cv2.resize(bgr, None, fx=0.5, fy=0.5),
+                    lambda: cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE))
+        for make in variants:
+            ok, infos = det.detectAndDecodeMulti(make())[:2]
+            for t in (infos or ()):
+                d = "".join(ch for ch in str(t) if ch.isdigit())
+                if 8 <= len(d) <= 14 and d not in found:
+                    found.append(d)
+            if found:
+                break
+        return found
+    except Exception as e:
+        print(f"[PHOTO] barcode reading failed: {e}")
+        return []
+
+def _barcode_variants(bc):
+    """A shop's barcode may have been saved with or without a leading zero (UPC-A vs EAN-13)."""
+    bc = bc.lstrip("0")
+    return {bc, "0" + bc, "00" + bc}
+
+def _product_card(cur, pid, extra=None):
+    cur.execute("SELECT id, name, price, COALESCE(image_url, ''), barcode, stock_quantity FROM Products WHERE id = %s;", (pid,))
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {"id": r[0], "name": r[1], "price": float(r[2]), "image": r[3] or None, "barcode": r[4],
+            "in_stock": (r[5] or 0) > 0, **(extra or {})}
+
+@app.post("/api/admin/identify-photo")
+async def identify_photo(file: UploadFile = File(...), sess: dict = Depends(require_admin)):
+    """Finds which product is in a photo: the barcode is read first (free and exact); if there is
+    none, or it isn't in the shop yet, the AI reads the packaging and the name is matched."""
+    import asyncio
+    _simple_rate_limit(_identify_hits, str(sess["user_id"]), 120, 3600, "יותר מדי זיהויים בשעה. נסו שוב מאוחר יותר.")
+    data = await file.read(MAX_IMAGE_BYTES * 2 + 1)
+    if len(data) > MAX_IMAGE_BYTES * 2 or not _image_kind(data):
+        raise HTTPException(status_code=400, detail="צריך תמונה (עד 16MB)")
+    barcodes = await asyncio.to_thread(_decode_barcodes, data)
+    conn = get_conn(); cur = conn.cursor()
+    try:
+        def by_barcode(codes):
+            for bc in codes:
+                cur.execute("SELECT id FROM Products WHERE barcode = ANY(%s) ORDER BY id LIMIT 1;", (list(_barcode_variants(bc)),))
+                r = cur.fetchone()
+                if r:
+                    return bc, r[0]
+            return None, None
+        bc, pid = by_barcode(barcodes)
+        if pid:
+            return {"source": "barcode", "barcode": bc, "name": None, "match": _product_card(cur, pid), "candidates": []}
+        name, ai_error = None, None
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if api_key:
+            try:
+                read = await asyncio.to_thread(invoice_ai.identify_photo, data, api_key)
+            except RuntimeError as e:
+                read, ai_error = {}, str(e)
+            ai_bc = "".join(ch for ch in str(read.get("barcode") or "") if ch.isdigit())
+            if ai_bc and ai_bc not in barcodes and 8 <= len(ai_bc) <= 14:
+                barcodes.append(ai_bc)
+                bc, pid = by_barcode([ai_bc])
+                if pid:
+                    return {"source": "barcode", "barcode": bc, "name": read.get("name"), "match": _product_card(cur, pid), "candidates": []}
+            name = " ".join(x for x in (read.get("name"), read.get("size") if read.get("size") and read.get("size") not in (read.get("name") or "") else None) if x) or None
+        cands, match = [], None
+        if name:
+            catalog = _load_catalog(cur)
+            m, _method, cs = _match_line({"suggested_name": name, "description": " ".join(x for x in (read.get("brand"), name) if x)},
+                                         catalog, {}, {})
+            cands = [c for c in (_product_card(cur, c["id"], {"score": c["score"]}) for c in cs) if c]
+            match = cands[0] if m and cands else None
+        return {"source": "ai" if name else "none", "barcode": barcodes[0] if barcodes else None, "name": name,
+                "match": match, "candidates": [c for c in cands if not match or c["id"] != match["id"]], "ai_error": ai_error}
+    finally:
+        cur.close(); conn.close()
+
 # --- Products & Categories ---
 
 def _serialize_products(rows):
@@ -2036,6 +2234,7 @@ class ProductUpdateBody(BaseModel):
     units_per_package: Optional[int] = None
     image_url: Optional[str] = None
     image_credit: Optional[str] = None
+    barcode: Optional[str] = None
     notes: Optional[str] = None
     is_on_sale: Optional[bool] = None
     sale_label: Optional[str] = None
@@ -2088,6 +2287,9 @@ def admin_update_product(product_id: int, body: ProductUpdateBody, sess: dict = 
 
     if cat_ids is not None:
         fields["category_id"] = cat_ids[0] if cat_ids else None
+    if "barcode" in fields:
+        # Digits only (spaces or dashes typed by hand would stop the barcode search from finding it)
+        fields["barcode"] = "".join(ch for ch in str(fields["barcode"] or "") if ch.isdigit())[:40] or None
 
     if fields:
         sets = ", ".join(f"{k} = %s" for k in fields)
@@ -2245,7 +2447,8 @@ def get_product_detail(product_id: int):
         "notes": r[9],
         "category_ids": cats,
         "is_on_sale": bool(r[11]),
-        "sale_label": r[13]
+        "sale_label": r[13],
+        "image_credit": r[14], "barcode": r[15],
     }
 
 @app.get("/api/categories/tree")
@@ -5035,6 +5238,8 @@ class InvoiceLineDecision(BaseModel):
     category_id: Optional[int] = None
     description: Optional[str] = None
     rename: bool = False             # update: also replace the site name with `name` (the invoice's name)
+    weight_grams: Optional[int] = None
+    units_per_package: Optional[int] = None
 
 class InvoiceApplyBody(BaseModel):
     lines: List[InvoiceLineDecision]
@@ -5052,7 +5257,7 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
             raise HTTPException(status_code=409, detail="החשבונית הזו כבר נקלטה")
         doc = json.loads(r[0])
         src = {ln["index"]: ln["invoice"] for ln in doc["lines"]}
-        updated, created, price_changes, created_ids, renamed = 0, 0, [], [], []
+        updated, created, price_changes, created_ids, renamed, touched = 0, 0, [], [], [], []
         for d in body.lines:
             if d.action == "skip":
                 continue
@@ -5065,6 +5270,19 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
                 raise HTTPException(status_code=400, detail=f"שורה {d.index + 1}: מחיר לא תקין")
             barcode = "".join(ch for ch in str(inv.get("barcode") or "") if ch.isdigit())[:40] or None
             sku = (str(inv.get("supplier_sku") or "").strip()[:60]) or None
+            # Weight and pieces: what the person typed, else what the AI read from the line.
+            # On an existing product they only fill in what's empty, never overwrite.
+            def _pos_int(*vals, top):
+                for v in vals:
+                    try:
+                        v = int(v)
+                    except (TypeError, ValueError):
+                        continue
+                    if 0 < v <= top:
+                        return v
+                return None
+            grams = _pos_int(d.weight_grams, inv.get("weight_grams"), top=100000)
+            pieces = _pos_int(d.units_per_package, inv.get("pieces_per_item"), top=10000)
             if d.action == "update":
                 if not d.product_id:
                     raise HTTPException(status_code=400, detail=f"שורה {d.index + 1}: לא נבחר מוצר לעדכון")
@@ -5076,8 +5294,9 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
                                    cost_price = COALESCE(%s, cost_price),
                                    cost_updated_at = CASE WHEN %s IS NULL THEN cost_updated_at ELSE NOW() END,
                                    price = COALESCE(%s, price),
-                                   barcode = COALESCE(barcode, %s), supplier_sku = COALESCE(supplier_sku, %s)
-                               WHERE id = %s;""", (d.cost, d.cost, d.price, barcode, sku, d.product_id))
+                                   barcode = COALESCE(barcode, %s), supplier_sku = COALESCE(supplier_sku, %s),
+                                   weight_grams = COALESCE(weight_grams, %s), units_per_package = COALESCE(units_per_package, %s)
+                               WHERE id = %s;""", (d.cost, d.cost, d.price, barcode, sku, grams, pieces, d.product_id))
                 updated += 1
                 new_name = (d.name or "").strip()[:500]
                 if d.rename and new_name and new_name != p[0]:
@@ -5085,18 +5304,21 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
                     renamed.append({"id": d.product_id, "from": p[0], "to": new_name})
                 if d.price is not None and round(float(p[1]), 2) != round(d.price, 2):
                     price_changes.append({"id": d.product_id, "name": p[0], "from": float(p[1]), "to": d.price})
+                touched.append(d.product_id)
             elif d.action == "create":
                 name = (d.name or inv.get("suggested_name") or "").strip()[:500]
                 if not name or d.price is None:
                     raise HTTPException(status_code=400, detail=f"שורה {d.index + 1}: למוצר חדש צריך שם ומחיר")
                 if not d.category_id:
                     raise HTTPException(status_code=400, detail=f"שורה {d.index + 1} ({name}): צריך לבחור קטגוריה, אחרת המוצר לא יוצג באתר")
-                cur.execute("""INSERT INTO Products (name, category_id, price, stock_quantity, notes, cost_price, cost_updated_at, barcode, supplier_sku)
-                               VALUES (%s,%s,%s,100,%s,%s,NOW(),%s,%s) RETURNING id;""",
-                            (name, d.category_id, d.price, (d.description or "").strip()[:2000] or None, d.cost, barcode, sku))
+                cur.execute("""INSERT INTO Products (name, category_id, price, stock_quantity, notes, cost_price, cost_updated_at, barcode, supplier_sku,
+                                                    weight_grams, units_per_package)
+                               VALUES (%s,%s,%s,100,%s,%s,NOW(),%s,%s,%s,%s) RETURNING id;""",
+                            (name, d.category_id, d.price, (d.description or "").strip()[:2000] or None, d.cost, barcode, sku, grams, pieces))
                 pid = cur.fetchone()[0]
                 cur.execute("INSERT INTO product_categories (product_id, category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING;", (pid, d.category_id))
                 created += 1; created_ids.append({"id": pid, "name": name})
+                touched.append(pid)
             else:
                 raise HTTPException(status_code=400, detail="פעולה לא מוכרת")
         summary = {"updated": updated, "created": created, "price_changes": len(price_changes), "renamed": len(renamed)}
@@ -5108,7 +5330,15 @@ def apply_invoice(invoice_id: int, body: InvoiceApplyBody, sess: dict = Depends(
     finally:
         cur.close(); conn.close()
     _audit(sess, "invoice_apply", "invoice", invoice_id, {**summary, "supplier": doc.get("supplier"), "number": doc.get("invoice_number")})
-    return {"ok": True, **summary, "price_change_list": price_changes, "created_products": created_ids, "renamed_list": renamed}
+    # Products from this invoice that have a barcode but no photo: look for one in the background
+    photo_search = 0
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        photo_search = queue_auto_images(_products_missing_photo(cur, touched))
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f"[IMG] queueing automatic photos failed: {e}")
+    return {"ok": True, **summary, "photo_search": photo_search, "price_change_list": price_changes, "created_products": created_ids, "renamed_list": renamed}
 
 
 # --- Wolt API (OAuth connection + order webhook) ---
