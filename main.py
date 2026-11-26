@@ -556,6 +556,27 @@ try:
         DROP TRIGGER IF EXISTS trg_wolt_queue ON Products;
         CREATE TRIGGER trg_wolt_queue AFTER INSERT OR UPDATE OF price, stock_quantity ON Products
             FOR EACH ROW EXECUTE FUNCTION wolt_queue_product();
+        -- Photo library: staff upload product photos (cleaned up automatically), and products pick from it
+        CREATE TABLE IF NOT EXISTS photo_library (
+            id               SERIAL PRIMARY KEY,
+            url              TEXT,
+            original_url     TEXT NOT NULL,
+            label            TEXT,
+            barcode          TEXT,
+            status           TEXT NOT NULL DEFAULT 'processing',
+            uploaded_by      INT,
+            uploaded_by_name TEXT,
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            used_product_id  INT,
+            used_at          TIMESTAMPTZ
+        );
+        CREATE INDEX IF NOT EXISTS photo_library_barcode ON photo_library (barcode);
+        -- The last menu read from Wolt, so a restart (every deploy) doesn't lose it
+        CREATE TABLE IF NOT EXISTS wolt_menu_cache (
+            id   INT PRIMARY KEY,
+            data TEXT NOT NULL,
+            at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
         -- A product deleted on the site must stop being sold on Wolt too
         CREATE TABLE IF NOT EXISTS wolt_sync_removed (
             sku       TEXT PRIMARY KEY,
@@ -2057,6 +2078,173 @@ def auto_images_status(sess: dict = Depends(require_admin)):
     cur.execute("SELECT COUNT(*), COUNT(*) FILTER (WHERE COALESCE(barcode, '') <> '') FROM Products WHERE COALESCE(image_url, '') = '';")
     r = cur.fetchone(); cur.close(); conn.close()
     return {**st, "without_photo": r[0], "without_photo_with_barcode": r[1]}
+
+# --- Photo library ---
+# Anyone on the staff can photograph products and upload them here, many at once. Each photo is cleaned
+# up like a product photo (white background, centred, straightened) in the background. When editing or
+# adding a product, the admin picks a photo from the library; it is then marked as used.
+_lib_worker = {"running": False}
+_lib_lock = threading.Lock()
+_lib_upload_hits = defaultdict(list)
+
+def _lib_process_pending():
+    while True:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT id, original_url FROM photo_library WHERE status = 'processing' ORDER BY id LIMIT 1;")
+        r = cur.fetchone(); cur.close(); conn.close()
+        if not r:
+            with _lib_lock:
+                _lib_worker["running"] = False
+            return
+        pid, orig = r
+        url, barcode, status = None, None, "ready"
+        try:
+            with open(os.path.join(IMAGES_DIR, os.path.basename(orig)), "rb") as f:
+                data = f.read()
+            codes = _decode_barcodes(data)
+            barcode = codes[0] if codes else None
+            try:
+                url = _save_image_bytes(data)
+            except Exception as e:
+                print(f"[LIB] clean-up of photo {pid} failed: {e}")
+                url = orig
+        except Exception as e:
+            print(f"[LIB] photo {pid} could not be read: {e}")
+            status = "failed"
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("UPDATE photo_library SET url = %s, barcode = COALESCE(barcode, %s), status = %s WHERE id = %s;",
+                    (url, barcode, status, pid))
+        conn.commit(); cur.close(); conn.close()
+
+def _lib_kick():
+    with _lib_lock:
+        if _lib_worker["running"]:
+            return
+        _lib_worker["running"] = True
+    threading.Thread(target=_lib_process_pending, daemon=True).start()
+
+def _lib_row(r):
+    return {"id": r[0], "url": r[1], "original_url": r[2], "label": r[3], "barcode": r[4], "status": r[5],
+            "uploaded_by": r[6], "created_at": r[7].isoformat() if r[7] else None,
+            "used_product_id": r[8], "used_product_name": r[9]}
+
+_LIB_SELECT = """SELECT l.id, l.url, l.original_url, l.label, l.barcode, l.status, l.uploaded_by_name, l.created_at,
+                        l.used_product_id, p.name
+                 FROM photo_library l LEFT JOIN Products p ON p.id = l.used_product_id"""
+
+@app.post("/api/library/photos")
+async def library_upload(file: UploadFile = File(...), label: str = "", sess: dict = Depends(require_staff)):
+    """One photo per request (the page uploads a batch one by one, so a weak connection doesn't lose all)."""
+    _simple_rate_limit(_lib_upload_hits, str(sess["user_id"]), 600, 3600, "הועלו הרבה תמונות בשעה האחרונה. אפשר להמשיך בעוד קצת.")
+    data = await file.read(MAX_IMAGE_BYTES * 2 + 1)
+    if len(data) > MAX_IMAGE_BYTES * 2:
+        raise HTTPException(status_code=400, detail="התמונה גדולה מדי (עד 16MB)")
+    ext = _image_kind(data)
+    if not ext:
+        raise HTTPException(status_code=400, detail="הקובץ לא נראה כמו תמונה")
+    name = f"lib-{uuid.uuid4().hex}.{ext}"
+    with open(os.path.join(IMAGES_DIR, name), "wb") as f:
+        f.write(data)
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("""INSERT INTO photo_library (original_url, label, uploaded_by, uploaded_by_name)
+                   VALUES (%s, %s, %s, %s) RETURNING id;""",
+                (f"/images/{name}", (label or "").strip()[:200] or None, sess["user_id"], sess.get("name")))
+    new_id = cur.fetchone()[0]
+    conn.commit(); cur.close(); conn.close()
+    _lib_kick()
+    return {"id": new_id}
+
+@app.get("/api/library/photos")
+def library_list(unused: bool = False, q: str = "", barcode: str = "", limit: int = 120, sess: dict = Depends(require_staff)):
+    """Newest first. With barcode: photos with that barcode come first (marked "same_barcode")."""
+    conds, params = [], []
+    if unused:
+        conds.append("l.used_product_id IS NULL")
+    if q.strip():
+        conds.append("(l.label ILIKE %s OR l.barcode LIKE %s)"); params += [f"%{q.strip()}%", f"%{q.strip()}%"]
+    sql = _LIB_SELECT + (" WHERE " + " AND ".join(conds) if conds else "") + " ORDER BY l.id DESC LIMIT %s;"
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(sql, params + [max(1, min(int(limit), 500))])
+    rows = [_lib_row(r) for r in cur.fetchall()]
+    bc = "".join(ch for ch in barcode if ch.isdigit())
+    if bc:
+        cur.execute(_LIB_SELECT + " WHERE l.barcode = ANY(%s) ORDER BY l.id DESC LIMIT 20;", (list(_barcode_variants(bc)),))
+        same = [dict(_lib_row(r), same_barcode=True) for r in cur.fetchall()]
+        ids = {x["id"] for x in same}
+        rows = same + [x for x in rows if x["id"] not in ids]
+    cur.execute("SELECT COUNT(*) FILTER (WHERE used_product_id IS NULL), COUNT(*), COUNT(*) FILTER (WHERE status = 'processing') FROM photo_library;")
+    c = cur.fetchone(); cur.close(); conn.close()
+    if c[2]:
+        _lib_kick()     # resume after a restart
+    return {"photos": rows, "unused": c[0], "total": c[1], "processing": c[2]}
+
+class LibraryPhotoBody(BaseModel):
+    label: Optional[str] = None
+    barcode: Optional[str] = None
+
+@app.patch("/api/library/photos/{photo_id}")
+def library_update(photo_id: int, body: LibraryPhotoBody, sess: dict = Depends(require_staff)):
+    fields = body.model_dump(exclude_unset=True)
+    if "label" in fields:
+        fields["label"] = (fields["label"] or "").strip()[:200] or None
+    if "barcode" in fields:
+        fields["barcode"] = "".join(ch for ch in str(fields["barcode"] or "") if ch.isdigit())[:40] or None
+    if not fields:
+        return {"ok": True}
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute(f"UPDATE photo_library SET {', '.join(f'{k} = %s' for k in fields)} WHERE id = %s;", list(fields.values()) + [photo_id])
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True}
+
+@app.delete("/api/library/photos/{photo_id}")
+def library_delete(photo_id: int, sess: dict = Depends(require_staff)):
+    """Staff can delete their own photos; the admin any photo. A photo already used by a product
+    stays on the product (only the library entry goes)."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT uploaded_by, url, original_url, used_product_id FROM photo_library WHERE id = %s;", (photo_id,))
+    r = cur.fetchone()
+    if not r:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=404, detail="התמונה לא נמצאה")
+    if sess["role"] != "admin" and r[0] != sess["user_id"]:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=403, detail="אפשר למחוק רק תמונות שהעלית")
+    cur.execute("DELETE FROM photo_library WHERE id = %s;", (photo_id,))
+    conn.commit(); cur.close(); conn.close()
+    # Remove the files, except any a product is showing
+    for u in {r[1], r[2]} - {None}:
+        if not u.startswith("/images/") or _image_in_use(u):
+            continue
+        for fn in {os.path.basename(u), os.path.basename(u).replace(".jpg", "-wide.jpg")}:
+            try:
+                os.remove(os.path.join(IMAGES_DIR, fn))
+            except OSError:
+                pass
+    return {"ok": True}
+
+def _image_in_use(url):
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT 1 FROM Products WHERE image_url = %s LIMIT 1;", (url,))
+    r = cur.fetchone(); cur.close(); conn.close()
+    return bool(r)
+
+class LibraryUseBody(BaseModel):
+    product_id: Optional[int] = None
+
+@app.post("/api/library/photos/{photo_id}/use")
+def library_use(photo_id: int, body: LibraryUseBody, sess: dict = Depends(require_admin)):
+    """Marks a library photo as used. With product_id, also sets it as that product's photo right away."""
+    conn = get_conn(); cur = conn.cursor()
+    cur.execute("SELECT url, status FROM photo_library WHERE id = %s;", (photo_id,))
+    r = cur.fetchone()
+    if not r or not r[0]:
+        cur.close(); conn.close()
+        raise HTTPException(status_code=400, detail="התמונה עוד בעיבוד או לא נמצאה")
+    if body.product_id:
+        cur.execute("UPDATE Products SET image_url = %s, image_credit = NULL WHERE id = %s;", (r[0], body.product_id))
+    cur.execute("UPDATE photo_library SET used_product_id = %s, used_at = NOW() WHERE id = %s;", (body.product_id, photo_id))
+    conn.commit(); cur.close(); conn.close()
+    return {"ok": True, "url": r[0]}
 
 # --- Find a product from a photo ---
 _identify_hits = defaultdict(list)
@@ -5666,6 +5854,7 @@ def wolt_oauth_callback(request: Request, code: str = "", state: str = "", error
             for k in ("wolt_daily_full",):
                 _setting_set(cur, k, "")
             _wolt_menu_job.clear(); _wolt_menu_job.update({"state": "idle"})
+            cur.execute("DELETE FROM wolt_menu_cache;")
         conn.commit()
         _audit({"user_id": saved.get("by"), "name": None}, "wolt_connected", "wolt", None, {"venue": venue})
         return _wolt_result_page(True, "החנות חוברה לוולט בהצלחה")
@@ -6100,6 +6289,59 @@ def _name_key(n):
 
 # --- Reading the menu back from Wolt: check the SKUs Wolt set, and complete the missing ones ---
 _wolt_menu_job = {"state": "idle"}           # idle | running | ready | error (one at a time)
+WOLT_MENU_WINDOW = 15 * 60                    # Wolt allows reading the menu about once per 15 minutes
+_wolt_menu_loaded = False
+
+def _wolt_menu():
+    """The menu job, restored from the database after a restart (a deploy would otherwise lose it)."""
+    global _wolt_menu_loaded
+    if not _wolt_menu_loaded:
+        _wolt_menu_loaded = True
+        if _wolt_menu_job.get("state") == "idle":
+            try:
+                conn = get_conn(); cur = conn.cursor()
+                cur.execute("SELECT data FROM wolt_menu_cache WHERE id = 1;")
+                r = cur.fetchone(); cur.close(); conn.close()
+                if r:
+                    d = json.loads(r[0])
+                    d["wolt_skus"] = set(d.get("wolt_skus") or [])
+                    d["wolt_names"] = set(d.get("wolt_names") or [])
+                    d["wolt_avail"] = {int(k): v for k, v in (d.get("wolt_avail") or {}).items()}
+                    _wolt_menu_job.update(d)
+            except Exception as e:
+                print(f"[WOLT] restoring the last menu check failed: {e}")
+    return _wolt_menu_job
+
+def _wolt_menu_save():
+    j = _wolt_menu()
+    d = {k: v for k, v in j.items() if k not in ("wolt_skus", "wolt_names", "wolt_avail")}
+    d.update({"wolt_skus": sorted(j.get("wolt_skus") or []), "wolt_names": sorted(j.get("wolt_names") or []),
+              "wolt_avail": {str(k): v for k, v in (j.get("wolt_avail") or {}).items()}})
+    try:
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("""INSERT INTO wolt_menu_cache (id, data, at) VALUES (1, %s, NOW())
+                       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, at = NOW();""", (json.dumps(d, ensure_ascii=False),))
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"[WOLT] saving the menu check failed: {e}")
+
+def _wolt_menu_requested(cur=None):
+    """When the menu was last requested from Wolt (epoch seconds), kept across restarts."""
+    own = cur is None
+    if own:
+        conn = get_conn(); cur = conn.cursor()
+    try:
+        v = _setting_get(cur, "wolt_menu_requested_at")
+        return float(v) if v else 0.0
+    finally:
+        if own:
+            cur.close(); conn.close()
+
+def _wolt_menu_wait_text(seconds):
+    mins = max(1, int((seconds + 59) // 60))
+    at = (datetime.now(ISRAEL_TZ) + timedelta(seconds=seconds)).strftime("%H:%M")
+    return (f"וולט מאפשרים לקרוא את התפריט פעם ברבע שעה. אפשר לנסות שוב בעוד {mins} דקות (בערך ב-{at})."
+            + (" בינתיים מוצגת הבדיקה הקודמת." if _wolt_menu_job.get("summary") else ""))
 
 def _wolt_text(translations):
     if isinstance(translations, list) and translations:
@@ -6193,9 +6435,24 @@ def analyze_wolt_menu(menu, cur):
                "to_check": comp_summary.get("similar", 0) + comp_summary.get("ambiguous", 0) + comp_summary.get("none", 0)}
     return checks, completion, summary
 
-def _wolt_menu_job_run(venue_id, user_id):
+def _wolt_menu_job_run(venue_id, user_id, previous=None):
     try:
-        menu = _wolt_fetch_menu(venue_id)
+        try:
+            menu = _wolt_fetch_menu(venue_id)
+        except WoltApiError as e:
+            if e.code != 429:
+                raise
+            # Too soon for Wolt: keep the previous result, and say when it can be tried again
+            before = (previous or {}).get("requested_before") or 0
+            wait = max(60.0, WOLT_MENU_WINDOW - (time_module.time() - before)) if before else WOLT_MENU_WINDOW
+            if previous and previous.get("summary"):
+                _wolt_menu_job.clear(); _wolt_menu_job.update(previous)
+            else:
+                _wolt_menu_job.update({"state": "error"})
+            _wolt_menu_job.update({"notice": _wolt_menu_wait_text(wait), "retry_at": time_module.time() + wait})
+            if not previous or not previous.get("summary"):
+                _wolt_menu_job["error"] = _wolt_menu_job["notice"]
+            return
         conn = get_conn(); cur = conn.cursor()
         checks, completion, summary = analyze_wolt_menu(menu, cur)
         cur.close(); conn.close()
@@ -6235,6 +6492,7 @@ def _wolt_menu_job_run(venue_id, user_id):
         _wolt_menu_job.update({"wolt_skus": skus, "wolt_names": names, "wolt_avail": avail, "wolt_items": details})
         _wolt_menu_job.update({"state": "ready", "checks": checks, "completion": completion, "summary": summary,
                                "at": time_module.time()})
+        _wolt_menu_save()
         _audit({"user_id": user_id, "name": None}, "wolt_menu_check", "wolt", None, summary)
     except Exception as e:
         _wolt_menu_job.update({"state": "error", "error": str(e)[:300], "at": time_module.time()})
@@ -6242,25 +6500,40 @@ def _wolt_menu_job_run(venue_id, user_id):
 @app.post("/api/admin/wolt/menu-check")
 def wolt_menu_check_start(sess: dict = Depends(require_admin)):
     """Starts reading the venue's menu from Wolt (Wolt allows this about once per 15 minutes)."""
-    if _wolt_menu_job.get("state") == "running":
+    j = _wolt_menu()
+    if j.get("state") == "running":
         return {"state": "running"}
-    if _wolt_menu_job.get("state") in ("ready", "error") and time_module.time() - _wolt_menu_job.get("at", 0) < 15 * 60:
-        return {"state": _wolt_menu_job["state"], "cached": True}
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT venue_id FROM wolt_connection WHERE status = 'active' ORDER BY id LIMIT 1;")
-    r = cur.fetchone(); cur.close(); conn.close()
+    r = cur.fetchone()
+    last = _wolt_menu_requested(cur)
     if not r:
+        cur.close(); conn.close()
         raise HTTPException(status_code=400, detail="החנות לא מחוברת לוולט")
-    _wolt_menu_job.clear(); _wolt_menu_job.update({"state": "running", "at": time_module.time()})
-    threading.Thread(target=_wolt_menu_job_run, args=(r[0], sess["user_id"]), daemon=True).start()
+    wait = WOLT_MENU_WINDOW - (time_module.time() - last)
+    if wait > 0:
+        # Too soon to ask Wolt again: show the last result (if any) and when to try again
+        cur.close(); conn.close()
+        j.pop("error", None) if j.get("summary") else None
+        j.update({"notice": _wolt_menu_wait_text(wait), "retry_at": time_module.time() + wait})
+        if not j.get("summary"):
+            j.update({"state": "error", "error": j["notice"]})
+        return {"state": j["state"], "cached": True, "notice": j["notice"]}
+    _setting_set(cur, "wolt_menu_requested_at", str(time_module.time()))
+    conn.commit(); cur.close(); conn.close()
+    previous = dict(j, requested_before=last) if j.get("state") == "ready" else {"requested_before": last}
+    j.clear(); j.update({"state": "running", "at": time_module.time()})
+    threading.Thread(target=_wolt_menu_job_run, args=(r[0], sess["user_id"], previous), daemon=True).start()
     return {"state": "running"}
 
 @app.get("/api/admin/wolt/menu-check")
 def wolt_menu_check_status(sess: dict = Depends(require_admin)):
-    j = _wolt_menu_job
+    j = _wolt_menu()
     out = {"state": j.get("state", "idle"), "error": j.get("error"), "summary": j.get("summary")}
     if j.get("at"):
         out["at"] = datetime.fromtimestamp(j["at"], timezone.utc).isoformat()
+    if j.get("notice") and j.get("retry_at", 0) > time_module.time():
+        out["notice"] = j["notice"]
     return out
 
 @app.get("/api/admin/wolt/menu-check/file")
@@ -6270,7 +6543,7 @@ def wolt_menu_check_file(sess: dict = Depends(require_admin)):
     from fastapi.responses import Response
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
-    j = _wolt_menu_job
+    j = _wolt_menu()
     if j.get("state") != "ready":
         raise HTTPException(status_code=400, detail="קודם מריצים בדיקת תפריט")
     wb = Workbook()
@@ -6332,7 +6605,7 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
                         wolt_skus |= {pid for pid in (_pid_from_sku(str(v).split(".")[0]) for v in d[cols[k]].dropna()) if pid is not None}
         if not found:
             raise HTTPException(status_code=400, detail="בקובץ אין עמודה name עם שמות המוצרים בוולט")
-    elif _wolt_menu_job.get("state") == "ready" and "wolt_names" in _wolt_menu_job:
+    elif _wolt_menu().get("state") == "ready" and "wolt_names" in _wolt_menu_job:
         wolt_skus, wolt_names = _wolt_menu_job["wolt_skus"], _wolt_menu_job["wolt_names"]
     else:
         raise HTTPException(status_code=400, detail="צריך לדעת מה כבר יש בוולט: מריצים קודם \"בדיקת התפריט בוולט\", או מעלים קובץ ייצוא מוולט")
@@ -6392,7 +6665,7 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
 def wolt_copy_images(sess: dict = Depends(require_admin)):
     """Gives every site product that has no photo the photo of its Wolt item (from the last menu check).
     Linked by SKU (BP-...), or else by the same barcode. Products that already have a photo are left alone."""
-    j = _wolt_menu_job
+    j = _wolt_menu()
     if j.get("state") != "ready" or "wolt_items" not in j:
         raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")
     conn = get_conn(); cur = conn.cursor()
@@ -6423,7 +6696,7 @@ def wolt_import_missing_products(sess: dict = Depends(require_admin)):
     name, description, barcode, weight, image, availability, and price = Wolt's price / 1.3 rounded up to x.90.
     The category is the site category with the same name as one of the item's Wolt categories.
     Nothing is sent back to Wolt: its prices stay exactly as they are."""
-    j = _wolt_menu_job
+    j = _wolt_menu()
     if j.get("state") != "ready" or "wolt_items" not in j:
         raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")
     missing = {r["wolt_id"] for r in j.get("completion", []) if r["match"] == "none"}
@@ -6474,7 +6747,7 @@ def wolt_import_missing_products(sess: dict = Depends(require_admin)):
 def wolt_import_availability(sess: dict = Depends(require_admin)):
     """Copies in-stock / sold-out from Wolt to the site, for every product linked by SKU, using the last
     menu check. Meant for going live, while Wolt holds the up-to-date stock. Afterwards the site leads."""
-    j = _wolt_menu_job
+    j = _wolt_menu()
     if j.get("state") != "ready" or "wolt_avail" not in j:
         raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")
     avail = j["wolt_avail"]
@@ -6789,6 +7062,11 @@ def serve_admin():
 @app.get("/staff.html")
 def serve_staff():
     return FileResponse(os.path.join(STATIC_DIR, "staff.html"), headers=_NO_CACHE_HTML)
+
+@app.get("/photos")
+@app.get("/photos.html")
+def serve_photos():
+    return FileResponse(os.path.join(STATIC_DIR, "photos.html"), headers=_NO_CACHE_HTML)
 
 @app.get("/ui-inputs.js")
 def serve_ui_inputs():

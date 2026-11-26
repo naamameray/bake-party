@@ -1445,7 +1445,7 @@
         }
         // Photo in the add-product window: taken, picked from the gallery or suggested. A taken/picked photo is
         // cleaned up right away (when the box is ticked) and shown, so it can be checked before saving.
-        let addPendingImage = null, addPendingCredit = null, addPendingFile = null;
+        let addPendingImage = null, addPendingCredit = null, addPendingFile = null, addPendingLibId = null;
         function addShowPhoto(src, status) {
             const pv = document.getElementById('add-p-preview');
             pv.src = src || ''; pv.style.display = src ? 'block' : 'none';
@@ -1467,7 +1467,7 @@
         window.openAddProductModal = function() {
             closeSidebar();
             document.getElementById('add-product-form').reset();
-            addPendingImage = null; addPendingCredit = null; addPendingFile = null;
+            addPendingImage = null; addPendingCredit = null; addPendingFile = null; addPendingLibId = null;
             addShowPhoto(null, '');
             document.getElementById('add-p-orig').style.display = 'none';
             document.getElementById('img-sug')?.remove();
@@ -1482,8 +1482,9 @@
             document.getElementById('add-p-suggest').onclick = () => openImageSuggestions({
                 suggestUrl: `${API}/api/admin/image-suggestions?barcode=${encodeURIComponent(document.getElementById('add-p-barcode').value)}`,
                 query: () => document.getElementById('add-p-name').value.trim() || document.getElementById('add-p-barcode').value.trim(),
+                barcode: () => document.getElementById('add-p-barcode').value.trim(),
                 mount: document.getElementById('add-p-img-mount'),
-                onChosen: (url, credit) => { addPendingImage = url; addPendingCredit = credit; addPendingFile = null;
+                onChosen: (url, credit, libId) => { addPendingImage = url; addPendingCredit = credit; addPendingFile = null; addPendingLibId = libId || null;
                     document.getElementById('add-p-orig').style.display = 'none';
                     addShowPhoto(url, '✓ תמונה נבחרה'); } });
             document.getElementById('add-p-cat-1').innerHTML = catOptions('');
@@ -1596,6 +1597,13 @@
                     barcode: document.getElementById('add-p-barcode').value.trim() || null, weight_grams: weight ? parseInt(weight) : null, units_per_package: units ? parseInt(units) : null,
                     notes: notes || null, is_on_sale: document.getElementById('add-p-sale').checked, sale_label: saleLabel || null }) });
                 if (!res.ok) throw new Error('שגיאה בהוספת המוצר');
+                const created = await res.json().catch(() => ({}));
+                if (addPendingLibId && imageUrl === addPendingImage && created.product_id) {
+                    // The library photo is now this product's: mark it as used
+                    fetch(`${API}/api/library/photos/${addPendingLibId}/use`, { method: 'POST', headers: authHeaders(),
+                        body: JSON.stringify({ product_id: created.product_id }) }).catch(() => {});
+                }
+                addPendingLibId = null;
                 document.getElementById('add-p-msg').textContent = 'המוצר נוסף בהצלחה! ✓';
                 document.getElementById('add-product-form').reset();
                 await refreshProducts();
@@ -1950,6 +1958,8 @@
                 sugBtn.type = 'button'; sugBtn.className = 'ef-img-btn'; sugBtn.textContent = '🔍 הצעות תמונה';
                 sugBtn.onclick = () => openImageSuggestions({ suggestUrl: `${API}/api/admin/products/${p.id}/image-suggestions`,
                     query: () => (document.getElementById('edit-detail-name') || {}).value || p.name,
+                    productId: p.id,
+                    barcode: () => (document.getElementById('edit-detail-barcode') || {}).value || p.barcode || '',
                     mount: document.getElementById('edit-form'),
                     onChosen: (url, credit) => { editPendingImage = url; editPendingCredit = credit; editPendingFile = null; img.src = url;
                         wrap.querySelectorAll('.ef-img-orig').forEach(x => x.remove());
@@ -2012,7 +2022,15 @@
             panel = document.createElement('div');
             panel.id = 'img-sug';
             panel.style.cssText = 'border:1.5px dashed var(--brand-2); border-radius:14px; padding:10px; margin:8px 0; background:#FFF6F8;';
-            panel.innerHTML = `<div class="sug-list" style="font-size:.9em; color:var(--muted);">מחפש תמונות לפי הברקוד...</div>
+            panel.innerHTML = `<div class="lib-block" style="margin-bottom:10px;">
+                  <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+                    <b style="font-size:.95em;">📚 מהמאגר</b>
+                    <input class="lib-q" type="search" placeholder="חיפוש לפי שם או ברקוד" style="flex:1; min-width:140px; margin:0; padding:6px 10px;">
+                    <a href="/photos" target="_blank" rel="noopener" style="font-size:.8em;">פתיחת המאגר</a>
+                  </div>
+                  <div class="lib-grid" style="display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; font-size:.85em; color:var(--muted);">טוען...</div>
+                </div>
+                <div class="sug-list" style="font-size:.9em; color:var(--muted);">מחפש תמונות לפי הברקוד...</div>
                 <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
                   <input class="sug-url" type="url" dir="ltr" placeholder="הדבקת קישור לעמוד המוצר או לתמונה" style="flex:1; min-width:180px; margin:0;">
                   <button type="button" class="btn btn-ghost sug-go" style="padding:6px 12px;">שימוש בקישור</button>
@@ -2039,6 +2057,38 @@
                     panel.remove();
                 } catch (e) { msg.style.color = '#c62828'; msg.textContent = e.message; }
             };
+            // Photo library: unused photos, the ones with this product's barcode first
+            const libGrid = panel.querySelector('.lib-grid');
+            const loadLib = async () => {
+                try {
+                    const bc = (typeof opts.barcode === 'function' ? opts.barcode() : opts.barcode) || '';
+                    const qs = new URLSearchParams({ unused: 'true', q: panel.querySelector('.lib-q').value.trim(), barcode: bc, limit: '60' });
+                    const res = await fetch(`${API}/api/library/photos?${qs}`, { headers: authHeaders() });
+                    const d = await res.json(); if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                    const ready = d.photos.filter(x => x.status === 'ready' && x.url);
+                    libGrid.innerHTML = ready.length ? '' : 'אין במאגר תמונות פנויות' + (panel.querySelector('.lib-q').value ? ' שמתאימות לחיפוש.' : '.');
+                    ready.forEach(ph => {
+                        const b = document.createElement('button'); b.type = 'button';
+                        b.style.cssText = `flex:0 0 96px; border:2px solid ${ph.same_barcode ? 'var(--ok, #2e7d32)' : 'var(--line, #eee)'}; border-radius:10px; background:#fff; padding:4px; cursor:pointer; font-family:inherit;`;
+                        b.innerHTML = `<img alt="" loading="lazy" src="${esc(imgUrl(ph.url))}" style="width:86px; height:86px; object-fit:contain; display:block;">
+                            <div style="font-size:.75em; color:${ph.same_barcode ? 'var(--ok, #2e7d32)' : 'var(--muted)'}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${ph.same_barcode ? '✓ אותו ברקוד' : esc(ph.label || '')}</div>`;
+                        b.onclick = async () => {
+                            msg.style.color = 'var(--muted)'; msg.textContent = 'בוחר מהמאגר...';
+                            try {
+                                const r = await fetch(`${API}/api/library/photos/${ph.id}/use`, { method: 'POST', headers: authHeaders(),
+                                    body: JSON.stringify({ product_id: opts.productId || null }) });
+                                const d2 = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d2.detail || 'שגיאה');
+                                opts.onChosen(d2.url, null, ph.id);
+                                panel.remove();
+                            } catch (e) { msg.style.color = '#c62828'; msg.textContent = e.message; }
+                        };
+                        libGrid.appendChild(b);
+                    });
+                } catch (e) { libGrid.textContent = e.message; }
+            };
+            let libTimer = null;
+            panel.querySelector('.lib-q').oninput = () => { clearTimeout(libTimer); libTimer = setTimeout(loadLib, 300); };
+            loadLib();
             panel.querySelector('.sug-go').onclick = () => {
                 const u = panel.querySelector('.sug-url').value.trim();
                 if (!/^https?:\/\//.test(u)) { msg.textContent = 'צריך קישור שמתחיל ב-https://'; return; }

@@ -316,6 +316,7 @@
                         זה קורה לבד אחרי קליטת חשבונית, ואפשר להפעיל כאן לכל המוצרים. מוצר שכבר יש לו תמונה לא משתנה.
                         המאגר חזק במוצרי מזון ארוזים; לציוד אפייה ומסיבות בדרך כלל אין שם תמונות, ואותם מצלמים באתר.
                     </p>
+                    <p style="font-size:0.9em; margin:-4px 0 8px;">📚 <a href="/photos" target="_blank" rel="noopener">מאגר התמונות</a>: הצוות מעלה לשם צילומי מוצרים (הרבה ביחד), והם מסודרים לבד. בעריכת מוצר או בהוספת מוצר בוחרים מהמאגר ב"🔍 הצעות תמונה".</p>
                     <div id="auto-img-status" style="margin-bottom:8px;">טוען...</div>
                     <button class="btn" type="button" id="auto-img-btn" onclick="startAutoImages()">חיפוש תמונות לכל המוצרים בלי תמונה</button>
                 </div>
@@ -1988,7 +1989,10 @@
                         if (d.state === 'error') { res.innerHTML = '<span style="color:#c62828;"></span>'; res.firstChild.textContent = d.error; return true; }
                         if (d.state !== 'ready') { res.innerHTML = ''; return true; }
                         const s = d.summary;
-                        res.innerHTML = `<div style="background:var(--pink-light); border-radius:12px; padding:8px 12px;">
+                        const when = d.at ? new Date(d.at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) : '';
+                        res.innerHTML = `${d.notice ? '<div class="w-menu-notice" style="background:#FFF4E5; color:#8a5300; border-radius:12px; padding:8px 12px; margin-bottom:6px;"></div>' : ''}
+                            <div style="background:var(--pink-light); border-radius:12px; padding:8px 12px;">
+                            ${when ? `<span style="color:var(--muted); font-size:0.85em;">הבדיקה מ-${when}</span><br>` : ''}
                             ${s.items} מוצרים בוולט · ${s.with_sku} מקושרים לאתר (SKU בפורמט BP-)${s.with_sku ? (s.suspicious ? ` · <b style="color:#c62828;">${s.suspicious} חשודים</b>` : ' · ✓ אין חשודים') : ''}<br>
                             ${s.without_sku} עוד לא מקושרים${s.foreign_sku ? ` (מהם ${s.foreign_sku} עם SKU אחר שוולט יחליפו)` : ''}: ${s.completable} אפשר להשלים אוטומטית${s.to_check ? `, ${s.to_check} לבדיקה ידנית` : ''}<br>
                             <a href="#" class="w-menu-dl">⬇️ הורדת הקובץ (השלמה לוולט + בדיקה + חשודים)</a>
@@ -2006,6 +2010,7 @@
                                 loadAutoImages();
                             } catch (e) { out.textContent = e.message; b.disabled = false; }
                         };
+                        if (d.notice) res.querySelector('.w-menu-notice').textContent = '⏳ ' + d.notice;
                         const imp = res.querySelector('.w-import-missing');
                         if (imp) imp.onclick = async () => {
                             if (!confirm(`להוסיף לאתר ${s.not_on_site} מוצרים מוולט? (שם, תיאור, תמונה, מלאי, ומחיר = מחיר בוולט ÷ 1.3). בוולט שום דבר לא משתנה.`)) return;
