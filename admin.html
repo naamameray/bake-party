@@ -308,6 +308,18 @@
                     <details style="margin-top:10px; font-size:0.9em;"><summary style="cursor:pointer;">חשבוניות אחרונות</summary><div id="inv-history">טוען...</div></details>
                 </div>
 
+                <!-- Automatic photos by barcode -->
+                <div class="card" id="auto-img-card">
+                    <h2>🖼️ תמונות אוטומטיות</h2>
+                    <p style="color:var(--muted); font-size:0.9em; margin-top:-8px;">
+                        למוצרים עם ברקוד ובלי תמונה, האתר מחפש תמונה במאגר Open Food Facts, מסדר אותה (רקע לבן, ממורכז) ומצרף אותה למוצר.
+                        זה קורה לבד אחרי קליטת חשבונית, ואפשר להפעיל כאן לכל המוצרים. מוצר שכבר יש לו תמונה לא משתנה.
+                        המאגר חזק במוצרי מזון ארוזים; לציוד אפייה ומסיבות בדרך כלל אין שם תמונות, ואותם מצלמים באתר.
+                    </p>
+                    <div id="auto-img-status" style="margin-bottom:8px;">טוען...</div>
+                    <button class="btn" type="button" id="auto-img-btn" onclick="startAutoImages()">חיפוש תמונות לכל המוצרים בלי תמונה</button>
+                </div>
+
                 <!-- Wolt API connection -->
                 <div class="card" id="wolt-api-card">
                     <h2>🔗 חיבור ישיר לוולט (API)</h2>
@@ -785,7 +797,7 @@
             
             document.getElementById('tab-page-hours').classList.toggle('active', name === 'hours');
             document.getElementById('tab-page-products').classList.toggle('active', name === 'products');
-            if (name === 'products') { loadWoltApi(); loadInvoiceHistory(); }
+            if (name === 'products') { loadWoltApi(); loadInvoiceHistory(); loadAutoImages(); }
             document.getElementById('tab-page-categories').classList.toggle('active', name === 'categories');
             document.getElementById('tab-page-faq').classList.toggle('active', name === 'faq');
             document.getElementById('tab-btn-reviews').classList.toggle('active', name === 'reviews');
@@ -1552,7 +1564,7 @@
 
         // ===================== Staff and users =====================
         const ROLE_LABELS = { admin: 'מנהל', employee: 'עובד', customer: 'לקוח' };
-        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט', '2fa_enabled': 'הפעלת אימות דו-שלבי', '2fa_disabled': 'כיבוי אימות דו-שלבי', '2fa_backup_code_used': 'כניסה עם קוד גיבוי', password_reset_by_email: 'איפוס סיסמה במייל', backup_download: 'הורדת גיבוי', invoice_apply: 'קליטת חשבונית' };
+        const AUDIT_LABELS = { user_create: 'יצירת משתמש', user_update: 'עדכון משתמש', password_reset: 'איפוס סיסמה', password_change: 'החלפת סיסמה', rate_change: 'שינוי תעריף', shift_create: 'הוספת משמרת', shift_update: 'תיקון משמרת', shift_delete: 'מחיקת משמרת', push_send: 'שליחת הודעה', wolt_import: 'ייבוא מוולט', '2fa_enabled': 'הפעלת אימות דו-שלבי', '2fa_disabled': 'כיבוי אימות דו-שלבי', '2fa_backup_code_used': 'כניסה עם קוד גיבוי', password_reset_by_email: 'איפוס סיסמה במייל', backup_download: 'הורדת גיבוי', invoice_apply: 'קליטת חשבונית', auto_images: 'חיפוש תמונות אוטומטי' };
 
         async function loadStaffTab() {
             const list = document.getElementById('st-list');
@@ -1790,6 +1802,10 @@
                     <label style="font-size:0.85em;">שם באתר</label><input class="inv-name" style="width:100%;">
                     <label style="font-size:0.85em;">קטגוריה</label><select class="inv-cat" style="width:100%;">${catOpts}</select>
                     <label style="font-size:0.85em;">תיאור</label><textarea class="inv-desc" rows="2" style="width:100%;"></textarea>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; font-size:0.85em;">
+                        <label>משקל (גרם)<br><input class="inv-grams" type="number" min="0" style="width:95px;"></label>
+                        <label>יחידות בחבילה<br><input class="inv-pieces" type="number" min="0" style="width:95px;"></label>
+                    </div>
                 </div>
                 <div class="inv-prices" style="display:flex; gap:10px; flex-wrap:wrap; align-items:end; font-size:0.9em;">
                     <label>מחיר ספק ליחידה<br><input class="inv-cost" type="number" step="0.01" min="0" style="width:95px;"></label>
@@ -1803,6 +1819,8 @@
             el.querySelector('.inv-rename-name').value = inv.suggested_name || '';
             el.querySelector('.inv-rename-on').addEventListener('change', e => { el.querySelector('.inv-rename-name').disabled = !e.target.checked; });
             el.querySelector('.inv-desc').value = inv.suggested_description || '';
+            el.querySelector('.inv-grams').value = inv.weight_grams || '';
+            el.querySelector('.inv-pieces').value = inv.pieces_per_item || '';
             if (inv.suggested_category_id && invoiceCats.some(c => c.id === inv.suggested_category_id)) el.querySelector('.inv-cat').value = inv.suggested_category_id;
             el.querySelector('.inv-cost').value = ln.cost != null ? Number(ln.cost).toFixed(2) : '';
             el.querySelector('.inv-price').value = ln.price != null ? Number(ln.price).toFixed(2) : '';
@@ -1855,7 +1873,8 @@
                 const base = { index: +el.dataset.index, cost: num('.inv-cost'), price: num('.inv-price') };
                 if (a === 'skip') return { index: base.index, action: 'skip' };
                 if (a === 'create') return { ...base, action: 'create', name: el.querySelector('.inv-name').value.trim(),
-                    category_id: +el.querySelector('.inv-cat').value || null, description: el.querySelector('.inv-desc').value.trim() };
+                    category_id: +el.querySelector('.inv-cat').value || null, description: el.querySelector('.inv-desc').value.trim(),
+                    weight_grams: parseInt(el.querySelector('.inv-grams').value) || null, units_per_package: parseInt(el.querySelector('.inv-pieces').value) || null };
                 const rn = el.querySelector('.inv-rename');
                 const rename = rn.style.display !== 'none' && el.querySelector('.inv-rename-on').checked;
                 return { ...base, action: 'update', product_id: +a.slice(2), rename, name: rename ? el.querySelector('.inv-rename-name').value.trim() : null };
@@ -1870,7 +1889,9 @@
                 const wrap = document.getElementById('inv-review');
                 wrap.innerHTML = `<div style="background:#E8F5E9; border-radius:12px; padding:12px; margin-top:10px;">
                     <b>✓ נשמר.</b> עודכנו ${d.updated} מוצרים (${d.price_changes} שינויי מחיר${d.renamed ? ', ' + d.renamed + ' שמות עודכנו' : ''}), נוספו ${d.created} מוצרים חדשים.
-                    ${d.created_products.length ? '<p style="margin:8px 0 4px;">📷 מוצרים חדשים שצריך לצלם (לחיצה פותחת את המוצר באתר, ושם "החלפת תמונה"):</p><ul class="inv-new-list" style="margin:0;"></ul>' : ''}</div>`;
+                    ${d.photo_search ? `<p style="margin:8px 0 0;">🔍 מחפש ברקע תמונות לפי ברקוד ל-${d.photo_search} מוצרים בלי תמונה. מה שיימצא יופיע באתר תוך כמה דקות (ההתקדמות בכרטיס "תמונות אוטומטיות").</p>` : ''}
+                    ${d.created_products.length ? '<p style="margin:8px 0 4px;">📷 מוצרים חדשים (לחיצה פותחת את המוצר באתר; אם לא נמצאה תמונה, מצלמים שם ב"📸 צילום"):</p><ul class="inv-new-list" style="margin:0;"></ul>' : ''}</div>`;
+                if (d.photo_search) setTimeout(loadAutoImages, 500);
                 const ul = wrap.querySelector('.inv-new-list');
                 d.created_products.forEach(p => { const li = document.createElement('li'); const a = document.createElement('a');
                     a.href = `/#p=${p.id}`; a.target = '_blank'; a.textContent = p.name; li.appendChild(a); ul.appendChild(li); });
@@ -1878,6 +1899,28 @@
                 loadInvoiceHistory(); loadAuditLog();
             } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; btn.disabled = false; }
         }
+        let autoImgTimer = null;
+        async function loadAutoImages() {
+            const box = document.getElementById('auto-img-status'); if (!box) return;
+            try {
+                const res = await fetch(`${API}/api/admin/auto-images`, { headers: authHeaders() });
+                const d = await res.json(); if (!res.ok) throw new Error(d.detail || 'שגיאה');
+                let html = `${d.without_photo} מוצרים בלי תמונה, מתוכם ${d.without_photo_with_barcode} עם ברקוד.`;
+                if (d.running) html += `<br><b>🔍 מחפש: ${d.done}/${d.total} נבדקו, ${d.found} תמונות נמצאו...</b>`;
+                else if (d.total) html += `<br>✓ החיפוש האחרון: ${d.total} נבדקו, ${d.found} תמונות נמצאו וצורפו.`;
+                box.innerHTML = html;
+                document.getElementById('auto-img-btn').disabled = d.running || !d.without_photo_with_barcode;
+                clearTimeout(autoImgTimer);
+                if (d.running) autoImgTimer = setTimeout(loadAutoImages, 4000);
+            } catch (e) { box.textContent = e.message; }
+        }
+        window.startAutoImages = async function() {
+            if (!confirm('לחפש תמונות לכל המוצרים שיש להם ברקוד ואין להם תמונה? זה רץ ברקע ולוקח כשנייה למוצר.')) return;
+            const res = await fetch(`${API}/api/admin/auto-images`, { method: 'POST', headers: authHeaders() });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) { alert(d.detail || 'שגיאה'); return; }
+            loadAutoImages();
+        };
         async function loadInvoiceHistory() {
             const wrap = document.getElementById('inv-history');
             try {

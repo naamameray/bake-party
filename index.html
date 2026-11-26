@@ -62,6 +62,16 @@
         .search-box .s-clear { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); border: none; background: none;
             color: var(--muted); font-size: 1.2em; cursor: pointer; display: none; width: 32px; height: 32px; border-radius: 50%; }
         .search-box.has-text .s-clear { display: block; }
+        .search-box .s-cam { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); border: none; background: var(--brand-2, #E05276);
+            color: #fff; font-size: 1em; cursor: pointer; display: none; width: 34px; height: 34px; border-radius: 50%; }
+        .search-box.admin-cam .s-cam { display: block; }
+        .search-box.admin-cam .s-clear { left: 42px; }
+        .search-box.admin-cam input { padding-left: 80px; }
+        .pf-card { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 14px; padding: 8px; margin: 8px 0; background: #fff; }
+        .pf-card img { width: 64px; height: 64px; object-fit: contain; border-radius: 10px; background: #fff; flex-shrink: 0; }
+        .pf-card .pf-info { flex: 1; min-width: 0; }
+        .pf-card .pf-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+        .pf-card .pf-actions .btn { padding: 5px 10px; font-size: 0.85em; }
         #header-auth { display: flex; gap: 8px; align-items: center; }
         .ha-btn { border: 1.5px solid var(--line); background: #fff; color: var(--ink); border-radius: 999px; padding: 8px 14px;
             font-weight: 500; font-size: 0.9em; cursor: pointer; text-decoration: none; white-space: nowrap; }
@@ -582,6 +592,8 @@
                 <label for="search-input" class="sr-only">חיפוש מוצר</label>
                 <input type="search" id="search-input" placeholder="מה מחפשים? למשל: שוקולד, תבנית, בלונים" autocomplete="off" enterkeyhint="search">
                 <button class="s-clear" type="button" onclick="clearSearch()" aria-label="ניקוי חיפוש">×</button>
+                <button class="s-cam" type="button" onclick="photoFind()" aria-label="זיהוי מוצר מצילום" title="צילום מוצר: מוצא אותו באתר לפי הברקוד או לפי האריזה">📷</button>
+                <input type="file" id="pf-camera" accept="image/*" capture="environment" hidden>
             </div>
             <div id="header-auth"></div>
         </div>
@@ -951,6 +963,24 @@
                 <p class="switch">כבר רשום/ה? <a onclick="showAuthMode('login')">להתחברות</a></p>
             </form>
             <p class="msg" id="auth-msg"></p>
+        </div>
+    </div>
+
+    <!-- Find a product from a photo (admins) -->
+    <div class="modal-overlay" id="photo-find-modal">
+        <div class="modal">
+            <button class="close-x" type="button" onclick="document.getElementById('photo-find-modal').classList.remove('open')" aria-label="סגירה">×</button>
+            <h2>📷 זיהוי מוצר מצילום</h2>
+            <div style="display:flex; gap:10px; align-items:center;">
+                <img id="pf-preview" alt="" style="width:90px; height:90px; object-fit:cover; border-radius:12px; border:1px solid var(--line);">
+                <div id="pf-read" style="font-size:0.9em; color:var(--muted);"></div>
+            </div>
+            <div id="pf-results"></div>
+            <p id="pf-msg" style="font-weight:bold; margin:8px 0;"></p>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                <button class="btn" type="button" id="pf-new">➕ מוצר חדש עם הצילום</button>
+                <button class="btn btn-ghost" type="button" onclick="photoFind()">📷 צילום נוסף</button>
+            </div>
         </div>
     </div>
 
@@ -1353,6 +1383,7 @@
             } else {
                 ha.innerHTML = `<button class="ha-btn" type="button" onclick="openAuth('login')">כניסה</button><button class="ha-btn primary" type="button" onclick="openAuth('register')">הרשמה</button>`;
             }
+            document.getElementById('search-box').classList.toggle('admin-cam', !!(currentUser && currentUser.role === 'admin'));
             const cEdit = document.getElementById('contact-edit-btn');
             if (cEdit) cEdit.style.display = (currentUser && currentUser.role === 'admin') ? 'block' : 'none';
         }
@@ -1459,6 +1490,82 @@
             document.getElementById('add-sale-opts').style.display = 'none';
             document.getElementById('add-product-modal').classList.add('open');
         };
+        // ===================== Find a product from a photo (admins) =====================
+        // A photo of the product (best: with its barcode showing) -> the server reads the barcode, or the
+        // packaging with AI, and finds the product. From the result: open it, use the photo as its image,
+        // or start a new product with the photo, name and barcode already filled in.
+        let pfFile = null, pfRead = null;
+        window.photoFind = () => document.getElementById('pf-camera').click();
+        document.getElementById('pf-camera').addEventListener('change', async e => {
+            const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+            pfFile = f; pfRead = null;
+            document.getElementById('pf-preview').src = URL.createObjectURL(f);
+            document.getElementById('pf-read').textContent = '🔍 מזהה את המוצר...';
+            document.getElementById('pf-results').innerHTML = ''; document.getElementById('pf-msg').textContent = '';
+            document.getElementById('pf-new').disabled = true;
+            document.getElementById('photo-find-modal').classList.add('open');
+            try {
+                const fd = new FormData(); fd.append('file', f);
+                const res = await fetch(`${API}/api/admin/identify-photo`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token() }, body: fd });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.detail || 'שגיאה בזיהוי');
+                pfRead = d; renderPhotoFind(d);
+            } catch (err) { document.getElementById('pf-read').textContent = '⚠️ ' + err.message; }
+            document.getElementById('pf-new').disabled = false;
+        });
+        function pfCard(p, title) {
+            const el = document.createElement('div'); el.className = 'pf-card';
+            el.innerHTML = `<img alt="" src="${esc(imgUrl(p.image || PLACEHOLDER))}">
+                <div class="pf-info">${title ? `<div style="font-size:0.8em; color:var(--ok, #2e7d32); font-weight:700;">${title}</div>` : ''}
+                    <div style="font-weight:600;">${esc(p.name)}</div>
+                    <div style="font-size:0.85em; color:var(--muted);">${money(p.price)} · מק"ט ${p.id}${p.in_stock ? '' : ' · אזל'}${p.score ? ' · דמיון ' + Math.round(p.score * 100) + '%' : ''}</div>
+                    <div class="pf-actions"><button class="btn btn-ghost" type="button" data-act="open">פתיחה</button>
+                        <button class="btn btn-ghost" type="button" data-act="photo">📸 ${p.image ? 'להחליף לתמונה הזו' : 'לשים את הצילום כתמונה'}</button></div></div>`;
+            el.querySelector('[data-act=open]').onclick = () => { document.getElementById('photo-find-modal').classList.remove('open'); openProductDetail(p.id); };
+            el.querySelector('[data-act=photo]').onclick = async ev => {
+                const b = ev.target, msg = document.getElementById('pf-msg');
+                if (p.image && !confirm(`להחליף את התמונה של "${p.name}" בצילום?`)) return;
+                b.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = '✨ מסדר את התמונה ושומר...';
+                try {
+                    const url = await uploadImage(pfFile, true);
+                    const res = await fetch(`${API}/api/admin/products/${p.id}`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ image_url: url, image_credit: null }) });
+                    if (!res.ok) throw new Error('שגיאה בשמירת התמונה');
+                    el.querySelector('img').src = imgUrl(url); p.image = url;
+                    msg.style.color = 'var(--ok, #2e7d32)'; msg.textContent = '✓ התמונה נשמרה למוצר';
+                    refreshProducts();
+                } catch (err) { msg.style.color = '#d9534f'; msg.textContent = err.message; }
+                b.disabled = false;
+            };
+            return el;
+        }
+        function renderPhotoFind(d) {
+            const read = [];
+            if (d.barcode) read.push(`ברקוד: <b dir="ltr">${esc(d.barcode)}</b>`);
+            if (d.name) read.push(`זוהה: <b>${esc(d.name)}</b>`);
+            if (d.ai_error) read.push('⚠️ ' + esc(d.ai_error));
+            document.getElementById('pf-read').innerHTML = read.join('<br>') || 'לא הצלחתי לקרוא ברקוד או שם. אפשר לצלם שוב, קרוב יותר ועם הברקוד.';
+            const wrap = document.getElementById('pf-results');
+            if (d.match) wrap.appendChild(pfCard(d.match, d.source === 'barcode' ? '✓ נמצא לפי הברקוד' : '✓ כנראה זה'));
+            if (d.candidates && d.candidates.length) {
+                const h = document.createElement('div'); h.style.cssText = 'margin-top:8px; font-size:0.9em; color:var(--muted);';
+                h.textContent = d.match ? 'או אולי:' : 'אולי אחד מאלה:'; wrap.appendChild(h);
+                d.candidates.forEach(c => wrap.appendChild(pfCard(c)));
+            }
+            if (!d.match && !(d.candidates || []).length) {
+                const p = document.createElement('p'); p.style.color = 'var(--muted)';
+                p.textContent = d.barcode ? 'הברקוד הזה עוד לא שמור אצל אף מוצר באתר.' : 'לא נמצא מוצר מתאים באתר.';
+                wrap.appendChild(p);
+            }
+        }
+        document.getElementById('pf-new').addEventListener('click', () => {
+            if (!pfFile) return;
+            document.getElementById('photo-find-modal').classList.remove('open');
+            openAddProductModal();
+            if (pfRead && pfRead.name) document.getElementById('add-p-name').value = pfRead.name;
+            if (pfRead && pfRead.barcode) document.getElementById('add-p-barcode').value = pfRead.barcode;
+            addOnPhoto({ target: { files: [pfFile], value: '' } });
+        });
+
         // studio = true: the server cleans the photo up (white background, centred, straightened)
         async function uploadImage(file, studio) {
             const fd = new FormData(); fd.append('file', file);
@@ -1791,6 +1898,7 @@
                             <label class="ef-field"><span>משקל (גרם)</span><input type="number" min="0" id="edit-detail-weight" value="${esc(p.weight_grams || '')}"></label>
                             <label class="ef-field"><span>יחידות</span><input type="number" min="0" id="edit-detail-units" value="${esc(p.units_per_package || '')}"></label>
                         </div>
+                        <label class="ef-field"><span>ברקוד</span><input type="text" inputmode="numeric" dir="ltr" autocomplete="off" id="edit-detail-barcode" value="${esc(p.barcode || '')}" placeholder="המספר שמתחת לפסים"></label>
                         <div class="ef-field"><span>מלאי</span>
                             <label class="ef-switch"><input type="checkbox" id="edit-detail-stock" ${p.in_stock ? 'checked' : ''}><i></i><b class="on">במלאי</b><b class="off">אזל מהמלאי</b></label>
                         </div>
@@ -1988,6 +2096,7 @@
                 const body = { name: v('edit-detail-name').trim(), price: parseFloat(v('edit-detail-price')),
                     weight_grams: v('edit-detail-weight') ? parseInt(v('edit-detail-weight')) : null,
                     units_per_package: v('edit-detail-units') ? parseInt(v('edit-detail-units')) : null,
+                    barcode: v('edit-detail-barcode').trim() || null,
                     category_ids, notes: v('edit-detail-notes').trim() || null,
                     is_on_sale: v('edit-detail-sale') === '1', sale_label: v('edit-detail-sale-label').trim() || null,
                     stock_quantity: document.getElementById('edit-detail-stock').checked ? 100 : 0 };

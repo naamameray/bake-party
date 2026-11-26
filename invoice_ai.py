@@ -59,6 +59,8 @@ INVOICE_SCHEMA = {
                     "supplier_sku": _nullable("string"),
                     "quantity": _nullable("number"),
                     "units_per_pack": _nullable("integer"),
+                    "weight_grams": _nullable("integer"),
+                    "pieces_per_item": _nullable("integer"),
                     "unit_cost": _nullable("number"),
                     "line_discount_percent": _nullable("number"),
                     "line_total": _nullable("number"),
@@ -68,7 +70,7 @@ INVOICE_SCHEMA = {
                     "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                     "note": _nullable("string"),
                 },
-                "required": ["description", "barcode", "supplier_sku", "quantity", "units_per_pack", "unit_cost", "line_discount_percent",
+                "required": ["description", "barcode", "supplier_sku", "quantity", "units_per_pack", "weight_grams", "pieces_per_item", "unit_cost", "line_discount_percent",
                              "line_total", "suggested_name", "suggested_category_id", "suggested_description",
                              "confidence", "note"],
                 "additionalProperties": False,
@@ -98,6 +100,10 @@ For each product line:
 - supplier_sku: the supplier's item code if printed, otherwise null.
 - quantity: the quantity as written.
 - units_per_pack: if the line is a carton/pack and the number of single units inside is stated, that number; otherwise null.
+- weight_grams: the weight of ONE sold item in grams if the description states it (e.g. "1 ק\"ג" -> 1000,
+  "250 גר'" -> 250, "0.5 ק\"ג" -> 500), otherwise null. Not for liquids in ml, sizes in cm or balloon inches.
+- pieces_per_item: how many pieces are inside ONE sold item when the description states it (e.g. "נרות 24 יח'" -> 24,
+  "מארז 12 קפסולות" -> 12, "סט 3 חותכנים" -> 3), otherwise null. This is NOT the number of items in a carton.
 - unit_cost: the LIST price of ONE unit as printed in the price column (מחיר), WITHOUT VAT, BEFORE any
   discount. The shop prices from the list price, so do not take off the line discount or the invoice discount.
   Example: price 25.80, discount 5%, total 294.12, quantity 12 -> unit_cost 25.80.
@@ -171,6 +177,61 @@ def extract_invoice(data, kind, categories, api_key=None):
         raise RuntimeError("ה-AI סירב לקרוא את הקובץ")
     if msg.stop_reason == "max_tokens":
         raise RuntimeError("החשבונית ארוכה מדי לקריאה אחת. אפשר לפצל אותה לכמה קבצים.")
+    text = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "")
+    try:
+        return json.loads(text)
+    except ValueError:
+        raise RuntimeError("ה-AI החזיר תשובה לא תקינה. נסו שוב.")
+
+
+# --- Product photo identification ------------------------------------------------------------
+
+PHOTO_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "barcode": _nullable("string"),
+        "name": {"type": "string"},
+        "brand": _nullable("string"),
+        "size": _nullable("string"),
+    },
+    "required": ["barcode", "name", "brand", "size"],
+    "additionalProperties": False,
+}
+
+PHOTO_PROMPT = """This is a phone photo of one product in Bake & Party, a baking and party supply shop in Israel.
+Read it so the shop can find the product in its catalogue.
+- barcode: the barcode digits if the number printed under the bars is readable, exactly as printed
+  (keep leading zeros); null if it isn't visible or you can't read every digit. Never guess digits.
+- name: a short Hebrew product name as a shop would list it: product type + flavour/colour + size,
+  using the words on the packaging (e.g. "שוקולד מריר 60% 1 ק\"ג", "בלון מספר 5 זהב 32 אינץ'").
+- brand: the brand if visible, otherwise null.
+- size: weight/volume/size/count as printed (e.g. "1 ק\"ג", "18 אינץ'", "12 יח'"), otherwise null."""
+
+
+def identify_photo(data, api_key=None):
+    """Reads a product photo: barcode digits (if legible) and a catalogue-style name.
+    Raises RuntimeError with a Hebrew message on failure."""
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    try:
+        msg = client.beta.messages.create(
+            model=INVOICE_AI_MODEL,
+            max_tokens=4000,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": PHOTO_SCHEMA}},
+            messages=[{"role": "user", "content": [_image_block(data), {"type": "text", "text": PHOTO_PROMPT}]}],
+        )
+    except anthropic.AuthenticationError:
+        raise RuntimeError("מפתח ה-AI לא תקין (ANTHROPIC_API_KEY)")
+    except anthropic.RateLimitError:
+        raise RuntimeError("יותר מדי בקשות ל-AI כרגע. נסו שוב בעוד דקה.")
+    except anthropic.APIStatusError as e:
+        raise RuntimeError(f"שגיאה בשירות ה-AI ({e.status_code}). נסו שוב.")
+    except anthropic.APIConnectionError:
+        raise RuntimeError("אין חיבור לשירות ה-AI. נסו שוב.")
+    if msg.stop_reason == "refusal":
+        raise RuntimeError("ה-AI לא זיהה את התמונה")
     text = next((b.text for b in msg.content if getattr(b, "type", "") == "text"), "")
     try:
         return json.loads(text)
