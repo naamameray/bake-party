@@ -11,6 +11,7 @@
 <style>
 :root{--cream:#FFF9F5;--pink-light:#FFD1DC;--pink-main:#FF85A2;--pink-dark:#E05276;--text:#4A2E35;--muted:#9B7B82;--ok:#3B9E6A;--bad:#d9534f}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{font-family:'Rubik','Segoe UI',Tahoma,sans-serif;background:var(--cream);color:var(--text);margin:0}
 header{background:var(--pink-light);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 header h1{color:var(--pink-dark);margin:0;font-size:1.2em}
@@ -42,6 +43,13 @@ input:focus{outline:none;border-color:var(--pink-main)}
 .tag.proc{background:#FFF0D6;color:#9A5B00}.tag.used{background:#e6f5ec;color:var(--ok)}.tag.fail{background:#fde8e8;color:var(--bad)}
 .ph .acts{display:flex;gap:6px;justify-content:space-between;margin-top:auto}
 #progress{font-weight:700;margin:6px 0 0;min-height:1.2em}
+.miss{display:flex;align-items:center;gap:10px;justify-content:space-between;border-bottom:1px solid #f6e3e8;padding:8px 0}
+.miss .nm{flex:1;min-width:0}
+.miss .nm b{display:block}
+.note{font-size:.8em;border-radius:8px;padding:4px 6px;line-height:1.35}
+.note.for{background:#E6F0FF;color:#2456A6}.note.has{background:#e6f5ec;color:var(--ok)}.note.no{background:#FFF0D6;color:#9A5B00}
+.ph .acts .btn{flex:1}
+.btn.ok{background:var(--ok)}
 .err{color:var(--bad)}
 </style>
 </head>
@@ -73,9 +81,20 @@ input:focus{outline:none;border-color:var(--pink-main)}
     </div>
 
     <div class="card">
+      <h2>📋 מה עוד צריך לצלם</h2>
+      <p class="muted" style="margin-top:0">מוצרים באתר שאין להם תמונה. לוחצים "📸 צילום" ליד המוצר: התמונה נשמרת בשבילו ומחכה לאישור של המנהלת.</p>
+      <input type="search" id="mq" placeholder="חיפוש מוצר לפי שם או ברקוד" style="margin-bottom:6px">
+      <div class="muted" id="mcount"></div>
+      <div id="mlist"></div>
+      <button class="btn ghost small" type="button" id="mmore" hidden style="margin-top:8px">הצגת עוד</button>
+      <input type="file" id="mcam" accept="image/*" capture="environment" hidden>
+    </div>
+
+    <div class="card">
+      <h2>🖼️ התמונות במאגר</h2>
       <div class="bar">
         <input type="search" id="q" placeholder="חיפוש לפי שם או ברקוד">
-        <div class="seg"><button type="button" id="f-unused" class="on">לא בשימוש</button><button type="button" id="f-all">הכל</button></div>
+        <div class="seg"><button type="button" id="f-unused" class="on">לא בשימוש</button><button type="button" id="f-pending">מחכות לאישור</button><button type="button" id="f-all">הכל</button></div>
       </div>
       <div class="muted" id="counts" style="margin-bottom:8px"></div>
       <div class="grid" id="grid"></div>
@@ -89,7 +108,8 @@ const $ = id => document.getElementById(id);
 const token = () => { try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; } };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const img = u => (u && u.startsWith('/')) ? API + u : u;
-let me = null, unusedOnly = true, refreshTimer = null, searchTimer = null;
+let me = null, filter = 'unused', refreshTimer = null, searchTimer = null, mOffset = 0, mTimer = null, mTarget = null;
+const isAdmin = () => me && me.role === 'admin';
 
 async function api(path, opts = {}) {
   const res = await fetch(API + path, { ...opts, headers: { 'Authorization': 'Bearer ' + token(), ...(opts.json ? { 'Content-Type': 'application/json' } : {}) },
@@ -101,9 +121,10 @@ async function api(path, opts = {}) {
 }
 
 async function load() {
-  const p = new URLSearchParams({ unused: unusedOnly ? 'true' : 'false', q: $('q').value.trim() });
+  const p = new URLSearchParams({ unused: filter === 'unused' ? 'true' : 'false', pending: filter === 'pending' ? 'true' : 'false', q: $('q').value.trim() });
   const d = await api('/api/library/photos?' + p);
-  $('counts').textContent = `${d.unused} תמונות שעוד לא שובצו · ${d.total} בסך הכל` + (d.processing ? ` · ${d.processing} בעיבוד...` : '');
+  $('counts').textContent = `${d.unused} תמונות שעוד לא שובצו · ${d.total} בסך הכל` + (d.pending ? ` · ${d.pending} מחכות לאישור` : '') + (d.processing ? ` · ${d.processing} בעיבוד...` : '');
+  $('f-pending').textContent = 'מחכות לאישור' + (d.pending ? ` (${d.pending})` : '');
   const grid = $('grid'); grid.innerHTML = '';
   if (!d.photos.length) grid.innerHTML = '<p class="muted">אין תמונות להצגה.</p>';
   d.photos.forEach(ph => grid.appendChild(card(ph)));
@@ -121,9 +142,21 @@ function card(ph) {
       <div class="lbl ${ph.label ? '' : 'empty'}" title="לחיצה לעריכת השם">${esc(ph.label || '+ הוספת שם')}</div>
       ${ph.barcode ? `<div class="muted" dir="ltr" style="text-align:right">🏷️ ${esc(ph.barcode)}</div>` : ''}
       <div>${status}</div>
+      ${notes(ph)}
       <div class="muted">${esc(ph.uploaded_by || '')}</div>
-      <div class="acts"><button class="btn ghost small" type="button" data-act="del">🗑️ מחיקה</button></div>
+      <div class="acts">${adminActs(ph)}<button class="btn ghost small" type="button" data-act="del">🗑️</button></div>
     </div>`;
+  el.querySelectorAll('[data-use]').forEach(btn => btn.onclick = async () => {
+    const pid = +btn.dataset.use;
+    if (btn.dataset.replace && !confirm('למוצר כבר יש תמונה. להחליף אותה בתמונה הזו?')) return;
+    btn.disabled = true;
+    try { await api(`/api/library/photos/${ph.id}/use`, { method: 'POST', json: { product_id: pid } }); load(); loadMissing(true); }
+    catch (e) { alert(e.message); btn.disabled = false; }
+  });
+  const rej = el.querySelector('[data-act=reject]');
+  if (rej) rej.onclick = async () => {
+    try { await api(`/api/library/photos/${ph.id}/reject`, { method: 'POST' }); load(); loadMissing(true); } catch (e) { alert(e.message); }
+  };
   el.querySelector('.lbl').onclick = async () => {
     const v = prompt('שם המוצר בתמונה:', ph.label || '');
     if (v === null) return;
@@ -135,6 +168,56 @@ function card(ph) {
   };
   return el;
 }
+
+// What a photo is for / which product it shows
+function notes(ph) {
+  if (ph.used_product_id) return '';
+  let h = '';
+  if (ph.for_product_id) h += `<div class="note for">📸 צולם בשביל: <b>${esc(ph.for_product_name || '#' + ph.for_product_id)}</b>${ph.for_product_has_image ? '<br>(כבר יש לו תמונה; אישור יחליף אותה)' : ''}</div>`;
+  else if (ph.match_product_id) h += ph.match_product_has_image
+    ? `<div class="note has">🏷️ קיים באתר: <b>${esc(ph.match_product_name)}</b><br>✓ כבר יש לו תמונה</div>`
+    : `<div class="note no">🏷️ קיים באתר: <b>${esc(ph.match_product_name)}</b><br>⚠️ אין לו תמונה</div>`;
+  return h;
+}
+function adminActs(ph) {
+  if (!isAdmin() || ph.used_product_id || ph.status !== 'ready') return '';
+  if (ph.for_product_id) return `<button class="btn ok small" type="button" data-use="${ph.for_product_id}" ${ph.for_product_has_image ? 'data-replace="1"' : ''}>✓ אישור</button>
+    <button class="btn ghost small" type="button" data-act="reject" title="לא מתאים: התמונה נשארת במאגר בלי שיוך">✗</button>`;
+  if (ph.match_product_id) return `<button class="btn ok small" type="button" data-use="${ph.match_product_id}" ${ph.match_product_has_image ? 'data-replace="1"' : ''}>${ph.match_product_has_image ? 'להחליף' : '✓ לשבץ'}</button>`;
+  return '';
+}
+
+// "What still needs a photo"
+async function loadMissing(reset) {
+  if (reset) { mOffset = 0; $('mlist').innerHTML = ''; }
+  const p = new URLSearchParams({ q: $('mq').value.trim(), offset: mOffset, limit: 40 });
+  const d = await api('/api/library/missing?' + p);
+  $('mcount').textContent = d.total ? `${d.total} מוצרים בלי תמונה` : '✓ לכל המוצרים יש תמונה';
+  d.items.forEach(it => {
+    const row = document.createElement('div'); row.className = 'miss';
+    row.innerHTML = `<div class="nm"><b></b><span class="muted"></span></div>
+      ${it.photo_waiting ? '<span class="tag proc">⏳ מחכה לאישור</span>' : ''}
+      <button class="btn small" type="button">📸 ${it.photo_waiting ? 'שוב' : 'צילום'}</button>`;
+    row.querySelector('b').textContent = it.name;
+    row.querySelector('.muted').textContent = [it.category, it.barcode].filter(Boolean).join(' · ');
+    row.querySelector('button').onclick = () => { mTarget = { id: it.id, row }; $('mcam').click(); };
+    $('mlist').appendChild(row);
+  });
+  mOffset += d.items.length;
+  $('mmore').hidden = mOffset >= d.total;
+}
+$('mcam').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f || !mTarget) return;
+  const btn = mTarget.row.querySelector('button'); btn.disabled = true; btn.textContent = '⬆️ מעלה...';
+  try {
+    const fd = new FormData(); fd.append('file', f);
+    await api('/api/library/photos?product_id=' + mTarget.id, { method: 'POST', body: fd });
+    btn.textContent = '✓ צולם'; mTarget.row.style.opacity = '.6';
+    load();
+  } catch (err) { btn.disabled = false; btn.textContent = '📸 צילום'; alert(err.message); }
+};
+$('mq').oninput = () => { clearTimeout(mTimer); mTimer = setTimeout(() => loadMissing(true), 300); };
+$('mmore').onclick = () => loadMissing(false);
 
 // Upload one by one, so a weak connection only loses the photo that failed
 async function upload(files) {
@@ -152,16 +235,21 @@ async function upload(files) {
   prog.className = failed ? 'err' : '';
   prog.textContent = `✓ הועלו ${ok} תמונות` + (failed ? `, ${failed} נכשלו (אפשר לנסות אותן שוב)` : '') + '. הסידור האוטומטי רץ ברקע.';
   $('label').value = '';
-  unusedOnly = true; $('f-unused').classList.add('on'); $('f-all').classList.remove('on');
-  load();
+  setFilter('unused');
 }
 
 $('cam-btn').onclick = () => $('cam').click();
 $('gal-btn').onclick = () => $('gal').click();
 $('cam').onchange = e => { upload(e.target.files); e.target.value = ''; };
 $('gal').onchange = e => { upload(e.target.files); e.target.value = ''; };
-$('f-unused').onclick = () => { unusedOnly = true; $('f-unused').classList.add('on'); $('f-all').classList.remove('on'); load(); };
-$('f-all').onclick = () => { unusedOnly = false; $('f-all').classList.add('on'); $('f-unused').classList.remove('on'); load(); };
+function setFilter(f) {
+  filter = f;
+  [['f-unused', 'unused'], ['f-pending', 'pending'], ['f-all', 'all']].forEach(([id, v]) => $(id).classList.toggle('on', v === f));
+  load();
+}
+$('f-unused').onclick = () => setFilter('unused');
+$('f-pending').onclick = () => setFilter('pending');
+$('f-all').onclick = () => setFilter('all');
 $('q').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(load, 300); };
 
 (async () => {
@@ -172,7 +260,9 @@ $('q').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(loa
   } catch (e) {}
   if (!me || !['admin', 'employee'].includes(me.role)) { $('login-needed').hidden = false; return; }
   $('main').hidden = false;
-  load().catch(e => { $('counts').textContent = e.message; });
+  if (isAdmin() && new URLSearchParams(location.search).get('show') === 'pending') filter = 'pending';
+  setFilter(filter);
+  loadMissing(true).catch(e => { $('mcount').textContent = e.message; });
 })();
 </script>
 </body>
