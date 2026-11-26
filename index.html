@@ -1365,8 +1365,10 @@
                 if (currentUser.role === 'admin') {
                     html += `<button class="btn btn-sm btn-block" style="background:#3B7DD8;" onclick="openAddProductModal()">➕ הוספת מוצר חדש</button>`;
                     html += `<a href="admin.html" class="btn btn-sm btn-block">⚙️ ניהול החנות</a>`;
+                    html += `<a href="/photos" class="btn btn-sm btn-block btn-ghost">📚 מאגר תמונות</a>`;
                 } else if (currentUser.role === 'employee') {
                     html += `<a href="staff.html" class="btn btn-sm btn-block">אזור צוות</a>`;
+                    html += `<a href="/photos" class="btn btn-sm btn-block btn-ghost">📚 מאגר תמונות</a>`;
                 }
                 html += `<div id="notif-box"></div><button class="btn btn-sm btn-ghost btn-block" onclick="logout()">התנתקות</button>`;
                 area.innerHTML = html;
