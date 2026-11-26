@@ -1738,7 +1738,7 @@
             const f = document.getElementById('inv-file').files[0];
             const msg = document.getElementById('inv-msg'), btn = document.getElementById('inv-read');
             if (!f) { msg.style.color = '#d9534f'; msg.textContent = 'בחרי קובץ של חשבונית'; return; }
-            btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = '🤖 קורא את החשבונית... (עד דקה)';
+            btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = '🤖 קורא את החשבונית... חשבונית ארוכה יכולה לקחת כמה דקות. אפשר לסגור את המסך: היא תישמר ב"חשבוניות אחרונות".';
             document.getElementById('inv-review').innerHTML = '';
             try {
                 const fd = new FormData(); fd.append('file', f);
@@ -1748,7 +1748,15 @@
                 await loadInvoiceCats();
                 invoiceDoc = d; msg.textContent = '';
                 renderInvoice();
-            } catch (e) { msg.style.color = '#d9534f'; msg.textContent = e.message; }
+            } catch (e) {
+                msg.style.color = '#d9534f';
+                // A dropped connection (phone screen locked, network change) doesn't stop the server:
+                // the invoice is still read and saved as a draft under "recent invoices".
+                msg.textContent = e instanceof TypeError
+                    ? 'החיבור נותק, אבל הקריאה ממשיכה בשרת. בעוד כמה דקות פתחי "חשבוניות אחרונות" ולחצי על החשבונית.'
+                    : e.message;
+                setTimeout(loadInvoiceHistory, 1000);
+            }
             btn.disabled = false;
         };
         function invLineCard(ln) {
