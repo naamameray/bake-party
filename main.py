@@ -6582,6 +6582,28 @@ def analyze_wolt_menu(menu, cur):
                "to_check": comp_summary.get("similar", 0) + comp_summary.get("ambiguous", 0) + comp_summary.get("none", 0)}
     return checks, completion, summary
 
+def _wolt_duplicates(items):
+    """Wolt items that share a name, and SKUs used by more than one Wolt item.
+    Same name: only one of them can be on the site under that name (the others were skipped by the
+    import), so each needs its own site product and SKU, or is a duplicate to remove on Wolt.
+    Same SKU: one site product updates all of them together."""
+    by_name, by_sku = defaultdict(list), defaultdict(list)
+    for wid, it in items.items():
+        if it.get("name"):
+            by_name[_name_key(it["name"])].append((wid, it))
+        if it.get("pid") is not None:
+            by_sku[it["pid"]].append((wid, it))
+    out = []
+    for key, group in by_name.items():
+        if len(group) > 1:
+            for wid, it in group:
+                out.append({"kind": "name", "group": key, "wolt_id": wid, **it})
+    for pid, group in by_sku.items():
+        if len(group) > 1:
+            for wid, it in group:
+                out.append({"kind": "sku", "group": pid, "wolt_id": wid, **it})
+    return out
+
 def _wolt_menu_job_run(venue_id, user_id, previous=None):
     try:
         try:
@@ -6634,6 +6656,9 @@ def _wolt_menu_job_run(venue_id, user_id, previous=None):
                 "available": _wolt_item_available(it),
                 "inventory_mode": it.get("inventory_mode"), "enabled_raw": it.get("enabled"),
                 "categories": cats_of.get(it.get("id"), [])}
+        dups = _wolt_duplicates(details)
+        summary["dup_names"] = len({d["group"] for d in dups if d["kind"] == "name"})
+        summary["dup_skus"] = len({d["group"] for d in dups if d["kind"] == "sku"})
         summary["linked_sold_out"] = sum(1 for v in avail.values() if not v)
         summary["linked_available"] = sum(1 for v in avail.values() if v)
         _wolt_menu_job.update({"wolt_skus": skus, "wolt_names": names, "wolt_avail": avail, "wolt_items": details})
@@ -6713,6 +6738,26 @@ def wolt_menu_check_file(sess: dict = Depends(require_admin)):
             ws3.append([c["wolt_id"], c["name"], c["price"], c["sku"], c["site_name"], c["site_price"], ", ".join(c["problems"])])
             for cell in ws3[ws3.max_row]:
                 cell.fill = red
+    dups = _wolt_duplicates(j.get("wolt_items") or {})
+    if dups:
+        ws4 = wb.create_sheet("כפולים בוולט")
+        ws4.append(["סוג", "wolt_item_id", "שם בוולט", "מחיר בוולט", "זמין בוולט", "SKU בוולט", "מוצר באתר", "מה לעשות"])
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT id, name FROM Products WHERE id = ANY(%s);", ([d["pid"] for d in dups if d.get("pid") is not None],))
+        site_names = dict(cur.fetchall()); cur.close(); conn.close()
+        yellow = PatternFill("solid", fgColor="FFF3CD")
+        for d in sorted(dups, key=lambda x: (x["kind"], str(x["group"]))):
+            pid = d.get("pid")
+            site = f"#{pid} {site_names.get(pid, '(לא קיים באתר)')}" if pid is not None else "לא מקושר"
+            todo = ("אותו SKU על כמה פריטים: מוצר אחד באתר מעדכן את כולם. כפול? למחוק בוולט. מוצר אחר? מוצר נפרד באתר ו-SKU משלו"
+                    if d["kind"] == "sku" else
+                    ("לא מקושר לאתר: כפול? למחוק בוולט. מוצר אחר? ליצור באתר בשם שמבדיל ולתת לו SKU" if pid is None
+                     else "מקושר לאתר"))
+            ws4.append(["SKU כפול" if d["kind"] == "sku" else "שם כפול", d["wolt_id"], d.get("name"), d.get("price"),
+                        "כן" if d.get("available") else "לא", wolt_sku(pid) if pid is not None else None, site, todo])
+            if pid is None or d["kind"] == "sku":
+                for cell in ws4[ws4.max_row]:
+                    cell.fill = yellow
     for sheet in wb.worksheets:
         for c in sheet[1]:
             c.font = Font(bold=True)
