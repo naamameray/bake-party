@@ -2026,7 +2026,14 @@ def _auto_image_for(pid, src_url=None):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT barcode, COALESCE(image_url, '') FROM Products WHERE id = %s;", (pid,))
     r = cur.fetchone(); cur.close(); conn.close()
-    if not r or r[1] or (not src_url and not r[0]):
+    if not r:
+        return False
+    barcode, current = r
+    if current and not current.startswith("http"):
+        return False                     # already has its own photo on the site: never replaced
+    if current and not src_url:
+        return False                     # linked from elsewhere: only replaced by a known photo (Wolt's)
+    if not src_url and not barcode:
         return False
     if src_url:
         try:
@@ -2044,8 +2051,8 @@ def _auto_image_for(pid, src_url=None):
             print(f"[IMG] automatic photo for product {pid} failed: {e}")
             return False
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("UPDATE Products SET image_url = %s, image_credit = %s WHERE id = %s AND COALESCE(image_url, '') = '';",
-                (url, credit, pid))
+    cur.execute("""UPDATE Products SET image_url = %s, image_credit = %s
+                   WHERE id = %s AND (COALESCE(image_url, '') = '' OR image_url LIKE 'http%%');""", (url, credit, pid))
     ok = cur.rowcount == 1
     conn.commit(); cur.close(); conn.close()
     return ok
@@ -6575,6 +6582,28 @@ def analyze_wolt_menu(menu, cur):
                "to_check": comp_summary.get("similar", 0) + comp_summary.get("ambiguous", 0) + comp_summary.get("none", 0)}
     return checks, completion, summary
 
+def _wolt_duplicates(items):
+    """Wolt items that share a name, and SKUs used by more than one Wolt item.
+    Same name: only one of them can be on the site under that name (the others were skipped by the
+    import), so each needs its own site product and SKU, or is a duplicate to remove on Wolt.
+    Same SKU: one site product updates all of them together."""
+    by_name, by_sku = defaultdict(list), defaultdict(list)
+    for wid, it in items.items():
+        if it.get("name"):
+            by_name[_name_key(it["name"])].append((wid, it))
+        if it.get("pid") is not None:
+            by_sku[it["pid"]].append((wid, it))
+    out = []
+    for key, group in by_name.items():
+        if len(group) > 1:
+            for wid, it in group:
+                out.append({"kind": "name", "group": key, "wolt_id": wid, **it})
+    for pid, group in by_sku.items():
+        if len(group) > 1:
+            for wid, it in group:
+                out.append({"kind": "sku", "group": pid, "wolt_id": wid, **it})
+    return out
+
 def _wolt_menu_job_run(venue_id, user_id, previous=None):
     try:
         try:
@@ -6627,6 +6656,9 @@ def _wolt_menu_job_run(venue_id, user_id, previous=None):
                 "available": _wolt_item_available(it),
                 "inventory_mode": it.get("inventory_mode"), "enabled_raw": it.get("enabled"),
                 "categories": cats_of.get(it.get("id"), [])}
+        dups = _wolt_duplicates(details)
+        summary["dup_names"] = len({d["group"] for d in dups if d["kind"] == "name"})
+        summary["dup_skus"] = len({d["group"] for d in dups if d["kind"] == "sku"})
         summary["linked_sold_out"] = sum(1 for v in avail.values() if not v)
         summary["linked_available"] = sum(1 for v in avail.values() if v)
         _wolt_menu_job.update({"wolt_skus": skus, "wolt_names": names, "wolt_avail": avail, "wolt_items": details})
@@ -6706,6 +6738,26 @@ def wolt_menu_check_file(sess: dict = Depends(require_admin)):
             ws3.append([c["wolt_id"], c["name"], c["price"], c["sku"], c["site_name"], c["site_price"], ", ".join(c["problems"])])
             for cell in ws3[ws3.max_row]:
                 cell.fill = red
+    dups = _wolt_duplicates(j.get("wolt_items") or {})
+    if dups:
+        ws4 = wb.create_sheet("כפולים בוולט")
+        ws4.append(["סוג", "wolt_item_id", "שם בוולט", "מחיר בוולט", "זמין בוולט", "SKU בוולט", "מוצר באתר", "מה לעשות"])
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT id, name FROM Products WHERE id = ANY(%s);", ([d["pid"] for d in dups if d.get("pid") is not None],))
+        site_names = dict(cur.fetchall()); cur.close(); conn.close()
+        yellow = PatternFill("solid", fgColor="FFF3CD")
+        for d in sorted(dups, key=lambda x: (x["kind"], str(x["group"]))):
+            pid = d.get("pid")
+            site = f"#{pid} {site_names.get(pid, '(לא קיים באתר)')}" if pid is not None else "לא מקושר"
+            todo = ("אותו SKU על כמה פריטים: מוצר אחד באתר מעדכן את כולם. כפול? למחוק בוולט. מוצר אחר? מוצר נפרד באתר ו-SKU משלו"
+                    if d["kind"] == "sku" else
+                    ("לא מקושר לאתר: כפול? למחוק בוולט. מוצר אחר? ליצור באתר בשם שמבדיל ולתת לו SKU" if pid is None
+                     else "מקושר לאתר"))
+            ws4.append(["SKU כפול" if d["kind"] == "sku" else "שם כפול", d["wolt_id"], d.get("name"), d.get("price"),
+                        "כן" if d.get("available") else "לא", wolt_sku(pid) if pid is not None else None, site, todo])
+            if pid is None or d["kind"] == "sku":
+                for cell in ws4[ws4.max_row]:
+                    cell.fill = yellow
     for sheet in wb.worksheets:
         for c in sheet[1]:
             c.font = Font(bold=True)
@@ -6760,9 +6812,11 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
         if pid in wolt_skus or _name_key(name) in wolt_names:
             continue                                   # already on Wolt
         if cat_id not in chains:
-            chains[cat_id] = " > ".join(n for _, n in _category_chain(cur, cat_id)) if cat_id else ""
+            chain = [n for _, n in _category_chain(cur, cat_id)] if cat_id else []
+            chains[cat_id] = (chain[-1] if chain else "", " > ".join(chain))
         rows.append({"sku": wolt_sku(pid), "name": name, "price": float(price), "in_stock": (stock or 0) > 0, "notes": notes,
-                     "barcode": barcode, "weight": weight, "units": units, "image": image, "category": chains[cat_id],
+                     "barcode": barcode, "weight": weight, "units": units, "image": image,
+                     "category": chains[cat_id][0], "category_path": chains[cat_id][1],
                      "created": created})
     cur.close(); conn.close()
     if not rows:
@@ -6771,9 +6825,9 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
     zbuf = io.BytesIO()
     no_image = 0
     with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
-        wb = Workbook(); ws = wb.active; ws.title = "new_products"
-        ws.append(["sku", "name", "description", "price", "category", "gtin", "weight_in_grams", "number_of_units",
-                   "image_file", "in_stock"])
+        # Exactly Wolt's template for new items (columns and order as in the file Wolt sent)
+        wb = Workbook(); ws = wb.active; ws.title = "Sheet1"; ws.sheet_view.rightToLeft = True
+        ws.append(["מק״ט", "שם קטגוריה", "שם פריט", "תיאור פריט", "מחיר פריט", "משקל פריט", "נפח פריט", "אחוזי אלכוהול", "הערות"])
         for r in rows:
             img_file = None
             path = str(r["image"] or "")
@@ -6787,8 +6841,20 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
                     z.write(src, f"images/{img_file}")
             if not img_file:
                 no_image += 1
-            ws.append([r["sku"], r["name"], r["notes"], invoice_ai.wolt_price_from_site(r["price"]) if r["price"] > 0 else None,
-                       r["category"], r["barcode"], r["weight"], r["units"], img_file, "כן" if r["in_stock"] else "לא"])
+            notes = []
+            if img_file:
+                notes.append(f"תמונה: images/{img_file}")
+            if r["barcode"]:
+                notes.append(f"ברקוד: {r['barcode']}")
+            if r["units"]:
+                notes.append(f"יחידות באריזה: {r['units']}")
+            if r["category_path"] and r["category_path"] != r["category"]:
+                notes.append(f"קטגוריה באתר: {r['category_path']}")
+            if not r["in_stock"]:
+                notes.append("כרגע אזל מהמלאי")
+            ws.append([r["sku"], r["category"], r["name"], r["notes"] or None,
+                       invoice_ai.wolt_price_from_site(r["price"]) if r["price"] > 0 else None,
+                       r["weight"], None, None, " · ".join(notes) or None])
         for c in ws[1]:
             c.font = Font(bold=True)
         for col in ws.columns:
@@ -6809,7 +6875,8 @@ def wolt_copy_images(sess: dict = Depends(require_admin)):
     if j.get("state") != "ready" or "wolt_items" not in j:
         raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, COALESCE(barcode, '') FROM Products WHERE COALESCE(image_url, '') = '';")
+    # No photo, or only a link to a photo elsewhere (an earlier import kept Wolt's link): save a copy on the site
+    cur.execute("SELECT id, COALESCE(barcode, '') FROM Products WHERE COALESCE(image_url, '') = '' OR image_url LIKE 'http%';")
     rows = cur.fetchall(); cur.close(); conn.close()
     missing = {r[0] for r in rows}
     by_barcode = {}
@@ -6936,13 +7003,14 @@ def wolt_item_check(product: str, sess: dict = Depends(require_admin)):
     pid = int(digits) if len(digits) <= 7 else None
     conn = get_conn(); cur = conn.cursor()
     if pid is not None:
-        cur.execute("SELECT id, name, stock_quantity, barcode, price FROM Products WHERE id = %s;", (pid,))
+        cur.execute("SELECT id, name, stock_quantity, barcode, price, image_url FROM Products WHERE id = %s;", (pid,))
     else:
-        cur.execute("SELECT id, name, stock_quantity, barcode, price FROM Products WHERE ltrim(barcode, '0') = ltrim(%s, '0') LIMIT 1;", (digits,))
+        cur.execute("SELECT id, name, stock_quantity, barcode, price, image_url FROM Products WHERE ltrim(barcode, '0') = ltrim(%s, '0') LIMIT 1;", (digits,))
     r = cur.fetchone(); cur.close(); conn.close()
     if not r:
         raise HTTPException(status_code=404, detail="המוצר לא נמצא באתר")
-    site = {"id": r[0], "name": r[1], "in_stock": (r[2] or 0) > 0, "barcode": r[3], "price": float(r[4]), "sku": wolt_sku(r[0])}
+    site = {"id": r[0], "name": r[1], "in_stock": (r[2] or 0) > 0, "barcode": r[3], "price": float(r[4]), "sku": wolt_sku(r[0]),
+            "image": r[5] or None}
     j = _wolt_menu()
     if j.get("state") != "ready" or "wolt_items" not in j:
         return {"site": site, "wolt": None, "checked_at": None}
@@ -6985,14 +7053,14 @@ def wolt_import_missing_products(sess: dict = Depends(require_admin)):
                                              image_url, notes, barcode, created_at)
                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW()) RETURNING id;""",
                     (d["name"][:500], cat_id, price, 100 if d["available"] else 0, d["weight"], d["units"],
-                     d["image"], d["description"] or None, d["gtin"]))
+                     None, d["description"] or None, d["gtin"]))
         pid = cur.fetchone()[0]
         if cat_id:
             cur.execute("INSERT INTO product_categories (product_id, category_id) VALUES (%s,%s) ON CONFLICT DO NOTHING;", (pid, cat_id))
         else:
             no_category.append({"id": pid, "name": d["name"]})
         existing.add(_name_key(d["name"]))
-        created.append({"id": pid, "name": d["name"], "sku": wolt_sku(pid), "price": price})
+        created.append({"id": pid, "name": d["name"], "sku": wolt_sku(pid), "price": price, "image": d.get("image")})
     if not created:
         cur.close(); conn.close()
         raise HTTPException(status_code=400, detail="✓ כל המוצרים האלה כבר קיימים באתר")
@@ -7000,14 +7068,27 @@ def wolt_import_missing_products(sess: dict = Depends(require_admin)):
         # They match Wolt already: don't send them back (that would change Wolt's prices by the rounding)
         cur.execute("DELETE FROM wolt_sync_queue WHERE product_id = ANY(%s);", ([c["id"] for c in created],))
     conn.commit(); cur.close(); conn.close()
-    summary = {"created": len(created), "without_category": len(no_category)}
+    # Photos: a copy is saved on the site (a link to Wolt's image could stop working)
+    photos = {c["id"]: c["image"] for c in created if c.get("image")}
+    if photos:
+        queue_auto_images(list(photos), photos)
+    summary = {"created": len(created), "without_category": len(no_category), "photos": len(photos)}
     _audit(sess, "wolt_import_missing_products", "wolt", None, summary)
     return {**summary, "products": created, "no_category": no_category}
 
+class ImportAvailabilityBody(BaseModel):
+    overwrite_site: bool = False
+
 @app.post("/api/admin/wolt/import-availability")
-def wolt_import_availability(sess: dict = Depends(require_admin)):
+def wolt_import_availability(sess: dict = Depends(require_admin), body: Optional[ImportAvailabilityBody] = None):
     """Copies in-stock / sold-out from Wolt to the site, for every product linked by SKU, using the last
-    menu check. Meant for going live, while Wolt holds the up-to-date stock. Afterwards the site leads."""
+    menu check. Meant for going live, while Wolt holds the up-to-date stock. Afterwards the site leads:
+    once it does, this overwrites stock set by hand on the site, so it needs an explicit confirmation."""
+    conn = get_conn(); cur = conn.cursor()
+    locked = _setting_get(cur, "wolt_site_is_source") == "1"
+    cur.close(); conn.close()
+    if locked and not (body and body.overwrite_site):
+        raise HTTPException(status_code=409, detail="האתר הוא כבר המקור למלאי. קליטה מוולט תדרוס את המלאי שעדכנת באתר, ולכן היא נעולה.")
     j = _wolt_menu()
     if j.get("state") != "ready" or "wolt_avail" not in j:
         raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")

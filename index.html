@@ -281,6 +281,21 @@
         .detail-grid { display: grid; grid-template-columns: 1fr 1fr; }
         .detail-img-wrap { background: #fff; display: flex; align-items: center; justify-content: center; padding: 28px; border-left: 1px solid var(--line); }
         .detail-img-wrap img { width: 100%; max-height: 340px; object-fit: contain; }
+        .detail-img-wrap { position: relative; }
+        .detail-img-wrap #detail-img { cursor: zoom-in; }
+        .img-zoom-btn { position: absolute; top: 10px; left: 10px; z-index: 2; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line);
+            background: rgba(255,255,255,.92); font-size: 1.05em; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+        /* Full-screen view of the product photo: only for looking, the photo itself isn't changed */
+        #img-zoom { position: fixed; inset: 0; z-index: 3000; background: #fff; display: none; overflow: hidden; touch-action: none; }
+        #img-zoom.open { display: block; }
+        #img-zoom img { position: absolute; top: 50%; left: 50%; max-width: 96vw; max-height: 92vh; transform-origin: center center;
+            user-select: none; -webkit-user-drag: none; cursor: zoom-in; }
+        #img-zoom.zoomed img { cursor: grab; }
+        #img-zoom .iz-bar { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: center; z-index: 2; pointer-events: none; }
+        #img-zoom .iz-bar > * { pointer-events: auto; }
+        #img-zoom button { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); background: rgba(255,255,255,.95); font-size: 1.3em; cursor: pointer; }
+        #img-zoom .iz-hint { background: rgba(255,255,255,.9); border-radius: 999px; padding: 6px 12px; font-size: .85em; color: var(--muted); }
+        #img-zoom .iz-ctrls { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; z-index: 2; }
         .detail-info { padding: 26px; position: relative; }
         .detail-info h2 { text-align: right; margin: 8px 0 4px; font-size: 1.35em; line-height: 1.3; padding-left: 36px; }
         .detail-price { font-size: 1.6em; color: var(--brand); font-weight: 700; margin: 10px 0; }
@@ -966,6 +981,13 @@
         </div>
     </div>
 
+    <!-- Product photo, full screen (zoom and pan; nothing is changed) -->
+    <div id="img-zoom" role="dialog" aria-label="תמונת המוצר בהגדלה">
+        <div class="iz-bar"><span class="iz-hint">לחיצה כפולה, צביטה או + להגדלה · גרירה להזזה</span><button type="button" onclick="closeImgZoom()" aria-label="סגירה">×</button></div>
+        <img alt="">
+        <div class="iz-ctrls"><button type="button" onclick="zoomBy(1/1.6)" aria-label="הקטנה">−</button><button type="button" onclick="zoomReset()" aria-label="גודל רגיל">⟲</button><button type="button" onclick="zoomBy(1.6)" aria-label="הגדלה">+</button></div>
+    </div>
+
     <!-- Find a product from a photo (admins) -->
     <div class="modal-overlay" id="photo-find-modal">
         <div class="modal">
@@ -1039,7 +1061,7 @@
     <div class="modal-overlay" id="detail-modal">
         <div class="modal detail-modal" role="dialog" aria-labelledby="detail-name">
             <div class="detail-grid">
-                <div class="detail-img-wrap"><img id="detail-img" src="" alt=""></div>
+                <div class="detail-img-wrap"><img id="detail-img" src="" alt=""><button type="button" class="img-zoom-btn" onclick="openImgZoom()" aria-label="הגדלת התמונה" title="הגדלת התמונה">🔍</button></div>
                 <div class="detail-info">
                     <button class="close-x" type="button" onclick="closeDetail()" aria-label="סגירה">×</button>
                     <div id="detail-badge"></div>
@@ -1494,6 +1516,50 @@
             document.getElementById('add-sale-opts').style.display = 'none';
             document.getElementById('add-product-modal').classList.add('open');
         };
+        // ===================== Product photo zoom =====================
+        // Opens whatever photo is shown in the product window (also a new photo not saved yet).
+        // Zoom: double-tap/click, mouse wheel, pinch, or the +/− buttons; drag to move. Only a view.
+        const iz = { scale: 1, x: 0, y: 0, pts: new Map(), pinch: null, drag: null };
+        function izApply() {
+            const img = document.querySelector('#img-zoom img');
+            img.style.transform = `translate(calc(-50% + ${iz.x}px), calc(-50% + ${iz.y}px)) scale(${iz.scale})`;
+            document.getElementById('img-zoom').classList.toggle('zoomed', iz.scale > 1.01);
+        }
+        window.zoomBy = f => { iz.scale = Math.min(8, Math.max(1, iz.scale * f)); if (iz.scale === 1) { iz.x = 0; iz.y = 0; } izApply(); };
+        window.zoomReset = () => { iz.scale = 1; iz.x = 0; iz.y = 0; izApply(); };
+        window.openImgZoom = () => {
+            const src = document.getElementById('detail-img').src;
+            if (!src || src.startsWith('data:image/svg')) return;
+            document.querySelector('#img-zoom img').src = src;
+            zoomReset();
+            document.getElementById('img-zoom').classList.add('open');
+        };
+        window.closeImgZoom = () => document.getElementById('img-zoom').classList.remove('open');
+        document.getElementById('detail-img').addEventListener('click', () => openImgZoom());
+        (() => {
+            const box = document.getElementById('img-zoom');
+            // (pointer capture makes the container the target of the double click, so check it isn't a button)
+            box.addEventListener('dblclick', e => { if (!e.target.closest('button')) { iz.scale > 1.01 ? zoomReset() : zoomBy(2.5); } });
+            box.addEventListener('wheel', e => { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: false });
+            box.addEventListener('pointerdown', e => {
+                if (e.target.tagName !== 'IMG') return;
+                box.setPointerCapture(e.pointerId); iz.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+                if (iz.pts.size === 2) { const [a, b] = [...iz.pts.values()]; iz.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s: iz.scale }; iz.drag = null; }
+                else iz.drag = { x: e.clientX - iz.x, y: e.clientY - iz.y };
+            });
+            box.addEventListener('pointermove', e => {
+                if (!iz.pts.has(e.pointerId)) return;
+                iz.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+                if (iz.pinch && iz.pts.size === 2) {
+                    const [a, b] = [...iz.pts.values()];
+                    iz.scale = Math.min(8, Math.max(1, iz.pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / iz.pinch.d)); izApply();
+                } else if (iz.drag && iz.scale > 1.01) { iz.x = e.clientX - iz.drag.x; iz.y = e.clientY - iz.drag.y; izApply(); }
+            });
+            const up = e => { iz.pts.delete(e.pointerId); if (iz.pts.size < 2) iz.pinch = null; if (!iz.pts.size) { iz.drag = null; if (iz.scale <= 1.01) zoomReset(); } };
+            box.addEventListener('pointerup', up); box.addEventListener('pointercancel', up);
+            document.addEventListener('keydown', e => { if (e.key === 'Escape' && box.classList.contains('open')) { e.stopImmediatePropagation(); closeImgZoom(); } }, true);
+        })();
+
         // ===================== Find a product from a photo (admins) =====================
         // A photo of the product (best: with its barcode showing) -> the server reads the barcode, or the
         // packaging with AI, and finds the product. From the result: open it, use the photo as its image,
