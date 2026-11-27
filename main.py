@@ -6812,9 +6812,11 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
         if pid in wolt_skus or _name_key(name) in wolt_names:
             continue                                   # already on Wolt
         if cat_id not in chains:
-            chains[cat_id] = " > ".join(n for _, n in _category_chain(cur, cat_id)) if cat_id else ""
+            chain = [n for _, n in _category_chain(cur, cat_id)] if cat_id else []
+            chains[cat_id] = (chain[-1] if chain else "", " > ".join(chain))
         rows.append({"sku": wolt_sku(pid), "name": name, "price": float(price), "in_stock": (stock or 0) > 0, "notes": notes,
-                     "barcode": barcode, "weight": weight, "units": units, "image": image, "category": chains[cat_id],
+                     "barcode": barcode, "weight": weight, "units": units, "image": image,
+                     "category": chains[cat_id][0], "category_path": chains[cat_id][1],
                      "created": created})
     cur.close(); conn.close()
     if not rows:
@@ -6823,9 +6825,9 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
     zbuf = io.BytesIO()
     no_image = 0
     with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
-        wb = Workbook(); ws = wb.active; ws.title = "new_products"
-        ws.append(["sku", "name", "description", "price", "category", "gtin", "weight_in_grams", "number_of_units",
-                   "image_file", "in_stock"])
+        # Exactly Wolt's template for new items (columns and order as in the file Wolt sent)
+        wb = Workbook(); ws = wb.active; ws.title = "Sheet1"; ws.sheet_view.rightToLeft = True
+        ws.append(["מק״ט", "שם קטגוריה", "שם פריט", "תיאור פריט", "מחיר פריט", "משקל פריט", "נפח פריט", "אחוזי אלכוהול", "הערות"])
         for r in rows:
             img_file = None
             path = str(r["image"] or "")
@@ -6839,8 +6841,20 @@ async def wolt_new_products_export(file: Optional[UploadFile] = File(None), sess
                     z.write(src, f"images/{img_file}")
             if not img_file:
                 no_image += 1
-            ws.append([r["sku"], r["name"], r["notes"], invoice_ai.wolt_price_from_site(r["price"]) if r["price"] > 0 else None,
-                       r["category"], r["barcode"], r["weight"], r["units"], img_file, "כן" if r["in_stock"] else "לא"])
+            notes = []
+            if img_file:
+                notes.append(f"תמונה: images/{img_file}")
+            if r["barcode"]:
+                notes.append(f"ברקוד: {r['barcode']}")
+            if r["units"]:
+                notes.append(f"יחידות באריזה: {r['units']}")
+            if r["category_path"] and r["category_path"] != r["category"]:
+                notes.append(f"קטגוריה באתר: {r['category_path']}")
+            if not r["in_stock"]:
+                notes.append("כרגע אזל מהמלאי")
+            ws.append([r["sku"], r["category"], r["name"], r["notes"] or None,
+                       invoice_ai.wolt_price_from_site(r["price"]) if r["price"] > 0 else None,
+                       r["weight"], None, None, " · ".join(notes) or None])
         for c in ws[1]:
             c.font = Font(bold=True)
         for col in ws.columns:

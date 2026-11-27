@@ -2179,7 +2179,7 @@
                         const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob());
                         a.download = 'bake-party-new-products-for-wolt.zip'; document.body.appendChild(a); a.click(); a.remove();
                         msg.style.color = 'var(--ok)';
-                        msg.textContent = `✓ הקובץ ירד: ${sum.products} מוצרים שאין בוולט, ${sum.with_image} עם תמונה` + (sum.without_image ? ` (${sum.without_image} בלי תמונה)` : '');
+                        msg.textContent = `✓ הקובץ ירד (בתבנית של וולט): ${sum.products} מוצרים שאין בוולט, ${sum.with_image} עם תמונה` + (sum.without_image ? ` (${sum.without_image} בלי תמונה)` : '');
                     } catch (e) { msg.style.color = e.message.startsWith('✓') ? 'var(--ok)' : '#c62828'; msg.textContent = e.message; }
                 };
                 wrap.querySelector('.w-sku-btn').onclick = async () => {
