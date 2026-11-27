@@ -7076,10 +7076,19 @@ def wolt_import_missing_products(sess: dict = Depends(require_admin)):
     _audit(sess, "wolt_import_missing_products", "wolt", None, summary)
     return {**summary, "products": created, "no_category": no_category}
 
+class ImportAvailabilityBody(BaseModel):
+    overwrite_site: bool = False
+
 @app.post("/api/admin/wolt/import-availability")
-def wolt_import_availability(sess: dict = Depends(require_admin)):
+def wolt_import_availability(sess: dict = Depends(require_admin), body: Optional[ImportAvailabilityBody] = None):
     """Copies in-stock / sold-out from Wolt to the site, for every product linked by SKU, using the last
-    menu check. Meant for going live, while Wolt holds the up-to-date stock. Afterwards the site leads."""
+    menu check. Meant for going live, while Wolt holds the up-to-date stock. Afterwards the site leads:
+    once it does, this overwrites stock set by hand on the site, so it needs an explicit confirmation."""
+    conn = get_conn(); cur = conn.cursor()
+    locked = _setting_get(cur, "wolt_site_is_source") == "1"
+    cur.close(); conn.close()
+    if locked and not (body and body.overwrite_site):
+        raise HTTPException(status_code=409, detail="האתר הוא כבר המקור למלאי. קליטה מוולט תדרוס את המלאי שעדכנת באתר, ולכן היא נעולה.")
     j = _wolt_menu()
     if j.get("state") != "ready" or "wolt_avail" not in j:
         raise HTTPException(status_code=400, detail="קודם מריצים \"בדיקת התפריט בוולט\"")

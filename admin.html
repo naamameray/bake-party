@@ -1712,11 +1712,19 @@
                 if (d.paused) h += '<br><b style="color:#c62828;">⏸️ העדכונים לוולט עצורים.</b> שינויים נשמרים בתור ויישלחו כשממשיכים.';
                 h += `<br><button class="btn w-pause" type="button" style="margin-top:6px; padding:6px 12px; background:${d.paused ? 'var(--ok, #3B9E6A)' : '#c62828'};">${d.paused ? '▶️ להמשיך את העדכונים לוולט' : '⏸️ עצירת העדכונים לוולט'}</button>`;
                 h += '<br><button class="btn w-sync-all" type="button" style="margin-top:6px; padding:6px 12px;">שליחת זמינות כל המוצרים לוולט</button>';
-                h += ' <button class="btn w-import-avail" type="button" style="margin-top:6px; padding:6px 12px; background:#999;">קליטת זמינות מוולט לאתר</button>';
+                h += d.site_is_source
+                    ? ' <button class="btn w-import-avail" type="button" style="margin-top:6px; padding:6px 12px; background:#ccc; color:#555;" title="נעול: האתר הוא המקור למלאי">🔒 קליטת זמינות מוולט לאתר (נעול)</button>'
+                    : ' <button class="btn w-import-avail" type="button" style="margin-top:6px; padding:6px 12px; background:#999;">קליטת זמינות מוולט לאתר</button>';
                 box.innerHTML = h;
                 box.querySelector('.w-import-avail').onclick = async () => {
-                    if (!confirm('להעתיק מוולט לאתר מה במלאי ומה אזל, לכל המוצרים שיש להם SKU? (לפי "בדיקת התפריט" האחרונה)')) return;
-                    const rr = await fetch(`${API}/api/admin/wolt/import-availability`, { method: 'POST', headers: authHeaders() });
+                    let body = {};
+                    if (d.site_is_source) {
+                        // The site leads: importing would overwrite stock set by hand on the site
+                        const typed = prompt('⚠️ האתר הוא המקור למלאי. קליטה מוולט תדרוס את כל מה שסימנת באתר (במלאי / אזל) לפי וולט.\nאם את בטוחה, כתבי: לדרוס');
+                        if ((typed || '').trim() !== 'לדרוס') return;
+                        body = { overwrite_site: true };
+                    } else if (!confirm('להעתיק מוולט לאתר מה במלאי ומה אזל, לכל המוצרים שיש להם SKU? (לפי "בדיקת התפריט" האחרונה)')) return;
+                    const rr = await fetch(`${API}/api/admin/wolt/import-availability`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
                     const dd = await rr.json().catch(() => ({}));
                     alert(rr.ok ? `✓ עודכן: ${dd.sold_out} סומנו "אזל", ${dd.back_in_stock} חזרו למלאי (מתוך ${dd.linked} מוצרים מקושרים). מעכשיו האתר הוא המקור.` : (dd.detail || 'שגיאה'));
                     loadWoltSync(box, fmt);
